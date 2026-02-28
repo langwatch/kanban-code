@@ -41,11 +41,13 @@ public enum AssignColumn {
             case .needsAttention:
                 return .requiresAttention
             case .idleWaiting:
-                return hasWorktree ? .inProgress : .allSessions
+                if hasWorktree { return .inProgress }
+                // No worktree: fall through to recency check below
             case .ended:
-                return hasWorktree ? .requiresAttention : .allSessions
+                if hasWorktree { return .requiresAttention }
+                // No worktree: fall through to recency check below
             case .stale:
-                return .allSessions
+                break // No hook data: fall through to recency check below
             }
         }
 

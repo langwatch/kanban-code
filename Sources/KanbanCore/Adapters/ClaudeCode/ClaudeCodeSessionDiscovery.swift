@@ -60,6 +60,11 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
                     session.modifiedTime = mtime
                     session.messageCount = metadata.messageCount
 
+                    // custom-title from /rename takes priority
+                    if let customTitle = metadata.customTitle {
+                        session.name = customTitle
+                    }
+
                     // .jsonl data fills in blanks, doesn't overwrite index data
                     if session.firstPrompt == nil {
                         session.firstPrompt = metadata.firstPrompt

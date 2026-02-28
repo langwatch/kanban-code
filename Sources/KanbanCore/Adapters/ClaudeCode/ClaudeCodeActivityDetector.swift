@@ -18,21 +18,9 @@ public actor ClaudeCodeActivityDetector: ActivityDetector {
     public func handleHookEvent(_ event: HookEvent) async {
         lastEvents[event.sessionId] = event
 
-        switch event.eventName {
-        case "UserPromptSubmit", "SessionStart":
-            // Clear any pending stop — user sent a new prompt
+        // Clear pending stops on any new activity
+        if event.eventName == "UserPromptSubmit" || event.eventName == "SessionStart" {
             pendingStops.removeValue(forKey: event.sessionId)
-
-        case "Stop":
-            // Mark stop as pending — wait for potential follow-up prompt
-            pendingStops[event.sessionId] = event.timestamp
-
-        case "SessionEnd":
-            // Session ended definitively — no delay needed
-            pendingStops.removeValue(forKey: event.sessionId)
-
-        default:
-            break
         }
     }
 
@@ -81,22 +69,11 @@ public actor ClaudeCodeActivityDetector: ActivityDetector {
             return .stale
         }
 
-        // Check if there's a pending stop that has expired
-        if let stopTime = pendingStops[sessionId] {
-            let elapsed = Date.now.timeIntervalSince(stopTime)
-            if elapsed >= stopDelay {
-                // Stop confirmed — no follow-up prompt arrived
-                return .needsAttention
-            } else {
-                // Still within the delay window
-                return .activelyWorking
-            }
-        }
-
         switch lastEvent.eventName {
         case "UserPromptSubmit", "SessionStart":
             return .activelyWorking
         case "Stop":
+            // Stop is the definitive signal — immediately needs attention
             return .needsAttention
         case "SessionEnd":
             return .ended

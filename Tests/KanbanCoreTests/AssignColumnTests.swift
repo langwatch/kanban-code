@@ -62,9 +62,16 @@ struct AssignColumnTests {
         #expect(col == .inProgress)
     }
 
-    @Test("Idle without worktree → allSessions")
-    func idleNoWorktree() {
-        let link = Link(sessionId: "s1")
+    @Test("Idle without worktree, recent → requiresAttention")
+    func idleNoWorktreeRecent() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-3600))
+        let col = AssignColumn.assign(link: link, activityState: .idleWaiting)
+        #expect(col == .requiresAttention)
+    }
+
+    @Test("Idle without worktree, old → allSessions")
+    func idleNoWorktreeOld() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-90000))
         let col = AssignColumn.assign(link: link, activityState: .idleWaiting)
         #expect(col == .allSessions)
     }
@@ -76,10 +83,31 @@ struct AssignColumnTests {
         #expect(col == .requiresAttention)
     }
 
-    @Test("Stale → allSessions")
-    func stale() {
-        let link = Link(sessionId: "s1")
+    @Test("Stale + recent → requiresAttention (falls through to recency check)")
+    func staleRecent() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-3600))
         let col = AssignColumn.assign(link: link, activityState: .stale)
+        #expect(col == .requiresAttention)
+    }
+
+    @Test("Stale + old → allSessions")
+    func staleOld() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-90000))
+        let col = AssignColumn.assign(link: link, activityState: .stale)
+        #expect(col == .allSessions)
+    }
+
+    @Test("Ended without worktree, recent → requiresAttention")
+    func endedNoWorktreeRecent() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-3600))
+        let col = AssignColumn.assign(link: link, activityState: .ended)
+        #expect(col == .requiresAttention)
+    }
+
+    @Test("Ended without worktree, old → allSessions")
+    func endedNoWorktreeOld() {
+        let link = Link(sessionId: "s1", lastActivity: Date.now.addingTimeInterval(-90000))
+        let col = AssignColumn.assign(link: link, activityState: .ended)
         #expect(col == .allSessions)
     }
 

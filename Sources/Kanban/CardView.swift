@@ -53,6 +53,13 @@ struct CardView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topTrailing) {
+            if card.isActivelyWorking {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(6)
+            }
+        }
         .background {
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
@@ -90,35 +97,29 @@ struct CardView: View {
     private var statusIcon: some View {
         switch card.link.column {
         case .inProgress:
-            if card.isActivelyWorking {
-                ProgressView()
-                    .controlSize(.mini)
-                    .scaleEffect(0.8)
-            } else {
-                Image(systemName: "play.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            }
+            Circle()
+                .fill(.green)
+                .frame(width: 8, height: 8)
         case .requiresAttention:
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.orange)
-                .font(.caption)
+            Circle()
+                .fill(.orange)
+                .frame(width: 8, height: 8)
         case .inReview:
-            Image(systemName: "eye.circle.fill")
-                .foregroundStyle(.blue)
-                .font(.caption)
+            Circle()
+                .fill(.blue)
+                .frame(width: 8, height: 8)
         case .done:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.caption)
+            Circle()
+                .fill(.green.opacity(0.6))
+                .frame(width: 8, height: 8)
         case .backlog:
-            Image(systemName: "tray.circle.fill")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            Circle()
+                .fill(.secondary.opacity(0.5))
+                .frame(width: 8, height: 8)
         case .allSessions:
-            Image(systemName: "circle")
-                .foregroundStyle(.tertiary)
-                .font(.caption)
+            Circle()
+                .fill(.tertiary)
+                .frame(width: 6, height: 6)
         }
     }
 }

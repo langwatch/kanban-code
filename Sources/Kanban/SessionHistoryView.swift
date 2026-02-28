@@ -33,15 +33,27 @@ struct SessionHistoryView: View {
                             TurnView(turn: turn)
                                 .id(turn.index)
                         }
+                        // Bottom anchor for reliable scroll-to-bottom
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom-anchor")
                     }
                     .padding(16)
                 }
                 .onAppear {
-                    // Scroll to latest turn
-                    if let last = turns.last {
-                        proxy.scrollTo(last.index, anchor: .bottom)
-                    }
+                    scrollToBottom(proxy: proxy)
                 }
+                .onChange(of: turns.count) {
+                    scrollToBottom(proxy: proxy)
+                }
+            }
+        }
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(.none) {
+                proxy.scrollTo("bottom-anchor", anchor: .bottom)
             }
         }
     }

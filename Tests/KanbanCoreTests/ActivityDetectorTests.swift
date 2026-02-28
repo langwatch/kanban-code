@@ -14,29 +14,23 @@ struct ActivityDetectorTests {
         #expect(state == .activelyWorking)
     }
 
-    @Test("Stop → needsAttention after delay")
-    func stopAfterDelay() async {
-        let detector = ClaudeCodeActivityDetector(stopDelay: 0.05)
+    @Test("Stop → immediate needsAttention")
+    func stopImmediate() async {
+        let detector = ClaudeCodeActivityDetector()
         let event = HookEvent(sessionId: "s1", eventName: "Stop")
         await detector.handleHookEvent(event)
 
-        // Within delay window → still activelyWorking
-        let immediate = await detector.activityState(for: "s1")
-        #expect(immediate == .activelyWorking)
-
-        // After delay → needsAttention
-        try? await Task.sleep(for: .milliseconds(60))
-        let delayed = await detector.activityState(for: "s1")
-        #expect(delayed == .needsAttention)
+        // Stop is immediate — no delay
+        let state = await detector.activityState(for: "s1")
+        #expect(state == .needsAttention)
     }
 
-    @Test("Stop + follow-up prompt → stays activelyWorking")
+    @Test("Stop + follow-up prompt → activelyWorking")
     func stopThenPrompt() async {
-        let detector = ClaudeCodeActivityDetector(stopDelay: 0.05)
+        let detector = ClaudeCodeActivityDetector()
         await detector.handleHookEvent(HookEvent(sessionId: "s1", eventName: "Stop"))
         await detector.handleHookEvent(HookEvent(sessionId: "s1", eventName: "UserPromptSubmit"))
 
-        try? await Task.sleep(for: .milliseconds(60))
         let state = await detector.activityState(for: "s1")
         #expect(state == .activelyWorking)
     }
@@ -64,17 +58,15 @@ struct ActivityDetectorTests {
         #expect(state == .needsAttention)
     }
 
-    @Test("Resolve pending stops returns expired sessions")
+    @Test("Resolve pending stops returns empty (Stop is immediate)")
     func resolvePendingStops() async {
-        let detector = ClaudeCodeActivityDetector(stopDelay: 0.01)
+        let detector = ClaudeCodeActivityDetector()
         await detector.handleHookEvent(HookEvent(sessionId: "s1", eventName: "Stop"))
         await detector.handleHookEvent(HookEvent(sessionId: "s2", eventName: "Stop"))
 
-        try? await Task.sleep(for: .milliseconds(20))
+        // Stop no longer creates pending stops — they resolve immediately
         let resolved = await detector.resolvePendingStops()
-        #expect(resolved.count == 2)
-        #expect(resolved.contains("s1"))
-        #expect(resolved.contains("s2"))
+        #expect(resolved.count == 0)
     }
 
     @Test("Poll activity detects recent modification as activelyWorking")

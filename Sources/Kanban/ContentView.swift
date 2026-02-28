@@ -27,16 +27,46 @@ struct ContentView: View {
             coordinationStore: coordination,
             activityDetector: activityDetector
         )
+
+        // Load Pushover config if available
+        let notifier: PushoverClient? = Self.loadPushoverConfig()
+
         let orch = BackgroundOrchestrator(
             discovery: discovery,
             coordinationStore: coordination,
             activityDetector: activityDetector,
-            tmux: TmuxAdapter()
+            tmux: TmuxAdapter(),
+            notifier: notifier
         )
 
         _boardState = State(initialValue: state)
         _orchestrator = State(initialValue: orch)
         self.coordinationStore = coordination
+    }
+
+    private static func loadPushoverConfig() -> PushoverClient? {
+        let configPath = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".config/claude-pushover/config")
+        guard let contents = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return nil
+        }
+
+        var token: String?
+        var user: String?
+        for line in contents.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") || trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("PUSHOVER_TOKEN=") {
+                token = trimmed.replacingOccurrences(of: "PUSHOVER_TOKEN=", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            } else if trimmed.hasPrefix("PUSHOVER_USER=") {
+                user = trimmed.replacingOccurrences(of: "PUSHOVER_USER=", with: "")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            }
+        }
+
+        guard let t = token, let u = user, !t.isEmpty, !u.isEmpty else { return nil }
+        return PushoverClient(token: t, userKey: u)
     }
 
     var body: some View {

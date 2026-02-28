@@ -10,7 +10,17 @@ struct CardDetailView: View {
 
     @State private var turns: [ConversationTurn] = []
     @State private var isLoadingHistory = false
-    @State private var selectedTab = 0
+    @State private var selectedTab: Int
+
+    init(card: KanbanCard, onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onFork: @escaping () -> Void = {}, onDismiss: @escaping () -> Void = {}) {
+        self.card = card
+        self.onResume = onResume
+        self.onRename = onRename
+        self.onFork = onFork
+        self.onDismiss = onDismiss
+        // Default to history tab when no terminal session
+        _selectedTab = State(initialValue: card.link.tmuxSession == nil ? 1 : 0)
+    }
     @State private var showRenameSheet = false
     @State private var renameText = ""
 

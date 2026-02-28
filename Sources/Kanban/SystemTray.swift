@@ -15,9 +15,14 @@ final class SystemTray: @unchecked Sendable {
         self.boardState = boardState
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        // Use clawd icon (same as cc-amphetamine) as template image
-        if let iconURL = Bundle.module.url(forResource: "clawd", withExtension: "png", subdirectory: "Resources"),
+        // Use clawd icon as template image — load @2x for retina sharpness
+        if let iconURL = Bundle.module.url(forResource: "clawd@2x", withExtension: "png", subdirectory: "Resources"),
            let image = NSImage(contentsOf: iconURL) {
+            image.isTemplate = true
+            image.size = NSSize(width: 18, height: 18) // logical size; 44px renders sharp on retina
+            statusItem?.button?.image = image
+        } else if let iconURL = Bundle.module.url(forResource: "clawd", withExtension: "png", subdirectory: "Resources"),
+                  let image = NSImage(contentsOf: iconURL) {
             image.isTemplate = true
             image.size = NSSize(width: 18, height: 18)
             statusItem?.button?.image = image
