@@ -7,7 +7,6 @@ public enum JsonlParser {
     /// Metadata extracted from a session .jsonl file.
     public struct SessionMetadata: Sendable {
         public let sessionId: String
-        public var customTitle: String?
         public var firstPrompt: String?
         public var projectPath: String?
         public var gitBranch: String?
@@ -15,14 +14,12 @@ public enum JsonlParser {
 
         public init(
             sessionId: String,
-            customTitle: String? = nil,
             firstPrompt: String? = nil,
             projectPath: String? = nil,
             gitBranch: String? = nil,
             messageCount: Int = 0
         ) {
             self.sessionId = sessionId
-            self.customTitle = customTitle
             self.firstPrompt = firstPrompt
             self.projectPath = projectPath
             self.gitBranch = gitBranch
@@ -63,11 +60,6 @@ public enum JsonlParser {
                 metadata.projectPath = cwd
             }
 
-            // Extract custom title (from /rename command)
-            if type == "custom-title", let title = obj["customTitle"] as? String {
-                metadata.customTitle = title
-            }
-
             if type == "user" || type == "assistant" {
                 metadata.messageCount += 1
             }
@@ -76,6 +68,11 @@ public enum JsonlParser {
             if type == "user" && !foundFirstUserMessage {
                 foundFirstUserMessage = true
                 metadata.firstPrompt = extractTextContent(from: obj)
+            }
+
+            // Stop early — we only need first prompt + enough messages to confirm non-empty
+            if metadata.messageCount >= 5 && foundFirstUserMessage {
+                break
             }
         }
 
