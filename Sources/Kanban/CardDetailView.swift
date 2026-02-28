@@ -9,6 +9,7 @@ struct CardDetailView: View {
     @State private var turns: [ConversationTurn] = []
     @State private var isLoadingHistory = false
     @State private var selectedTab = 0
+    @State private var showTerminal = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,8 +52,9 @@ struct CardDetailView: View {
 
             // Tab bar
             Picker("Tab", selection: $selectedTab) {
-                Text("History").tag(0)
-                Text("Actions").tag(1)
+                Text("Terminal").tag(0)
+                Text("History").tag(1)
+                Text("Actions").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
@@ -61,8 +63,10 @@ struct CardDetailView: View {
             // Content
             switch selectedTab {
             case 0:
-                SessionHistoryView(turns: turns, isLoading: isLoadingHistory)
+                terminalView
             case 1:
+                SessionHistoryView(turns: turns, isLoading: isLoadingHistory)
+            case 2:
                 actionsView
             default:
                 EmptyView()
@@ -72,6 +76,28 @@ struct CardDetailView: View {
         .background(Color(.windowBackgroundColor))
         .task {
             await loadHistory()
+        }
+    }
+
+    @ViewBuilder
+    private var terminalView: some View {
+        if let tmuxSession = card.link.tmuxSession {
+            TerminalRepresentable.tmuxAttach(sessionName: tmuxSession)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.tertiary)
+                Text("No tmux session attached")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                Button(action: onResume) {
+                    Label("Launch Terminal", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

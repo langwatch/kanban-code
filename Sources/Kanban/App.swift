@@ -12,6 +12,25 @@ struct KanbanApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1200, height: 700)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Task") {
+                    NotificationCenter.default.post(name: .kanbanNewTask, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+
+            CommandGroup(after: .toolbar) {
+                Button("Search Sessions") {
+                    NotificationCenter.default.post(name: .kanbanToggleSearch, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
+            }
+        }
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 
@@ -21,4 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first?.makeKeyAndOrderFront(nil)
     }
+}
+
+extension Notification.Name {
+    static let kanbanNewTask = Notification.Name("kanbanNewTask")
+    static let kanbanToggleSearch = Notification.Name("kanbanToggleSearch")
 }

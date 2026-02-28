@@ -5,6 +5,10 @@ struct CardView: View {
     let card: KanbanCard
     let isSelected: Bool
     var onSelect: () -> Void = {}
+    var onResume: () -> Void = {}
+    var onFork: () -> Void = {}
+    var onCopyResumeCmd: () -> Void = {}
+    var onArchive: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -55,6 +59,27 @@ struct CardView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
+        .contextMenu {
+            Button(action: onResume) {
+                Label("Resume Session", systemImage: "play.fill")
+            }
+            Button(action: onFork) {
+                Label("Fork Session", systemImage: "arrow.branch")
+            }
+            Button(action: onCopyResumeCmd) {
+                Label("Copy Resume Command", systemImage: "doc.on.doc")
+            }
+            Divider()
+            if let pr = card.link.githubPR {
+                Button(action: {}) {
+                    Label("Open PR #\(pr)", systemImage: "arrow.up.right.square")
+                }
+            }
+            Divider()
+            Button(action: onArchive) {
+                Label("Archive", systemImage: "archivebox")
+            }
+        }
     }
 
     @ViewBuilder
