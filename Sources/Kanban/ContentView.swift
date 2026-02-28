@@ -3,12 +3,24 @@ import KanbanCore
 
 struct ContentView: View {
     @State private var boardState: BoardState
+    @State private var orchestrator: BackgroundOrchestrator
     @State private var showSearch = false
+    @State private var showNewTask = false
+    private let coordinationStore: CoordinationStore
 
     init() {
         let discovery = ClaudeCodeSessionDiscovery()
         let coordination = CoordinationStore()
-        _boardState = State(initialValue: BoardState(discovery: discovery, coordinationStore: coordination))
+        let state = BoardState(discovery: discovery, coordinationStore: coordination)
+        let orch = BackgroundOrchestrator(
+            discovery: discovery,
+            coordinationStore: coordination,
+            tmux: TmuxAdapter()
+        )
+
+        _boardState = State(initialValue: state)
+        _orchestrator = State(initialValue: orch)
+        self.coordinationStore = coordination
     }
 
     var body: some View {
@@ -16,7 +28,6 @@ struct ContentView: View {
             BoardView(state: boardState)
 
             if showSearch {
-                // Blurred background
                 Color.black.opacity(0.3)
                     .ignoresSafeArea()
                     .onTapGesture { showSearch = false }
@@ -33,8 +44,14 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: showSearch)
+        .sheet(isPresented: $showNewTask) {
+            NewTaskDialog(isPresented: $showNewTask) { title, description, projectPath in
+                createManualTask(title: title, description: description, projectPath: projectPath)
+            }
+        }
         .task {
             await boardState.refresh()
+            orchestrator.start()
         }
         .task(id: "refresh-timer") {
             while !Task.isCancelled {
@@ -43,11 +60,30 @@ struct ContentView: View {
                 await boardState.refresh()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .kanbanToggleSearch)) { _ in
+            showSearch.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .kanbanNewTask)) { _ in
+            showNewTask = true
+        }
         .background {
-            // Hidden button to capture Cmd+K
             Button("") { showSearch.toggle() }
                 .keyboardShortcut("k", modifiers: .command)
                 .hidden()
+        }
+    }
+
+    private func createManualTask(title: String, description: String, projectPath: String?) {
+        let link = Link(
+            sessionId: UUID().uuidString,
+            projectPath: projectPath,
+            column: .backlog,
+            name: title,
+            source: .manual
+        )
+        Task {
+            try? await coordinationStore.upsertLink(link)
+            await boardState.refresh()
         }
     }
 }
