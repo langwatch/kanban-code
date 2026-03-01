@@ -4,8 +4,18 @@ import Foundation
 public final class TmuxAdapter: TmuxManagerPort, @unchecked Sendable {
     private let tmuxPath: String
 
-    public init(tmuxPath: String = "/opt/homebrew/bin/tmux") {
-        self.tmuxPath = tmuxPath
+    public init(tmuxPath: String? = nil) {
+        self.tmuxPath = tmuxPath ?? Self.findTmux()
+    }
+
+    /// Resolve tmux path: check common locations, fall back to bare "tmux" for PATH lookup.
+    private static func findTmux() -> String {
+        for candidate in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return "tmux" // Let the shell resolve it via PATH
     }
 
     public func listSessions() async throws -> [TmuxSession] {
