@@ -169,11 +169,15 @@ final class TerminalContainerNSView: NSView {
 
     /// Show only the terminal for `sessionName`, hide all others.
     func showTerminal(for sessionName: String) {
-        guard activeSession != sessionName else { return }
         activeSession = sessionName
         for name in managedSessions {
             let terminal = TerminalCache.shared.terminal(for: name, frame: bounds)
-            terminal.isHidden = (name != sessionName)
+            let isActive = (name == sessionName)
+            terminal.isHidden = !isActive
+            if isActive {
+                // Grab keyboard focus so the user can type immediately
+                window?.makeFirstResponder(terminal)
+            }
         }
     }
 

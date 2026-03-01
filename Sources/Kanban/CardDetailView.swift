@@ -295,6 +295,7 @@ struct CardDetailView: View {
         }
         .onChange(of: selectedTab) {
             if selectedTab == .history {
+                Task { await loadHistory() }
                 startHistoryWatcher()
             } else {
                 stopHistoryWatcher()
