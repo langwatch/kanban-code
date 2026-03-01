@@ -85,8 +85,8 @@ jobs:
             cp -R ".build/${ARCH}-apple-macosx/release/KanbanCode_KanbanCode.bundle" "$BUNDLE_DIR/"
           fi
 
-          # Sign Contents only (exclude root-level resource bundle from seal)
-          codesign --force --sign - "$BUNDLE_DIR/Contents/MacOS/KanbanCode"
+          # No codesign — ad-hoc signing not possible with root-level SPM resource bundle
+          # Users will right-click > Open to bypass Gatekeeper (same as any unsigned app)
 
           cd build
           zip -ry "KanbanCode-${VERSION}-macos.zip" KanbanCode.app
