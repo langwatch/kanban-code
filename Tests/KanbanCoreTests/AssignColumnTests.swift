@@ -70,25 +70,25 @@ struct AssignColumnTests {
         #expect(col == .waiting)
     }
 
-    @Test("Idle with worktree → inProgress")
+    @Test("Idle with worktree → waiting (Claude idle, not actively working)")
     func idleWithWorktree() {
         let link = Link(sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .idleWaiting, hasWorktree: true)
-        #expect(col == .inProgress)
+        #expect(col == .waiting)
     }
 
-    @Test("Idle without worktree, recent → waiting")
+    @Test("Idle without worktree → waiting")
     func idleNoWorktreeRecent() {
         let link = Link(lastActivity: Date.now.addingTimeInterval(-3600), sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .idleWaiting)
         #expect(col == .waiting)
     }
 
-    @Test("Idle without worktree, old → allSessions")
+    @Test("Idle without worktree, old → waiting (idleWaiting always means waiting)")
     func idleNoWorktreeOld() {
         let link = Link(lastActivity: Date.now.addingTimeInterval(-90000), sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .idleWaiting)
-        #expect(col == .allSessions)
+        #expect(col == .waiting)
     }
 
     @Test("Ended with worktree → waiting")

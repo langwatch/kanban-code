@@ -47,8 +47,9 @@ public enum AssignColumn {
             case .needsAttention:
                 return .waiting
             case .idleWaiting:
-                if hasWorktree { return .inProgress }
-                // No worktree: fall through to recency check below
+                // Claude is idle/waiting for user — that's Waiting, not In Progress.
+                // Only .activelyWorking should keep a card in In Progress.
+                return .waiting
             case .ended:
                 if hasWorktree { return .waiting }
                 // No worktree: fall through to recency check below

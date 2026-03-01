@@ -50,9 +50,13 @@ final class TerminalCache {
 
         terminal.autoresizingMask = [.width, .height]
         terminal.isHidden = true
+        // Wait for the tmux session to exist before attaching.
+        // The .createTmuxSession effect runs async — the session may not
+        // exist yet when the UI renders the terminal tab.
+        let escaped = sessionName.replacingOccurrences(of: "'", with: "'\\''")
         terminal.startProcess(
-            executable: "/opt/homebrew/bin/tmux",
-            args: ["attach-session", "-t", sessionName],
+            executable: "/bin/sh",
+            args: ["-c", "for i in $(seq 1 50); do tmux has-session -t '\(escaped)' 2>/dev/null && break; sleep 0.1; done; exec tmux attach-session -t '\(escaped)'"],
             environment: nil,
             execName: nil,
             currentDirectory: nil
