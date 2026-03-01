@@ -131,6 +131,10 @@ These unlock additional features. Kanban Code works without them — it's all pr
 | [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) | Prevent Mac sleep while agents are working |
 | [Pushover](https://pushover.net/) | Push notifications to phone and Apple Watch |
 
+### Download
+
+Grab the latest `.app` from [**Releases**](https://github.com/langwatch/kanban-code/releases/latest), unzip, and drag to Applications.
+
 ### Build from Source
 
 ```bash
