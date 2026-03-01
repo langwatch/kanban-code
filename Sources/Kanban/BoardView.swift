@@ -9,6 +9,8 @@ struct BoardView: View {
     var onCopyResumeCmd: (String) -> Void = { _ in }
     var onCleanupWorktree: (String) -> Void = { _ in }
     var onDeleteCard: (String) -> Void = { _ in }
+    var availableProjects: [(name: String, path: String)] = []
+    var onMoveToProject: (String, String) -> Void = { _, _ in }
     var onRefreshBacklog: () -> Void = {}
 
     var onNewTask: () -> Void = {}
@@ -45,6 +47,8 @@ struct BoardView: View {
                             onCopyResumeCmd: onCopyResumeCmd,
                             onCleanupWorktree: onCleanupWorktree,
                             onDeleteCard: onDeleteCard,
+                            availableProjects: availableProjects,
+                            onMoveToProject: onMoveToProject,
                             onRefreshBacklog: column == .backlog ? onRefreshBacklog : nil
                         )
                         .id(column)

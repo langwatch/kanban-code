@@ -73,6 +73,13 @@ public enum AssignColumn {
             return .backlog
         }
 
+        // Live tmux session → at least waiting (never allSessions)
+        // A card with an active tmux session is still in-flight, even if
+        // we haven't received hook data yet.
+        if hasWorktree {
+            return .waiting
+        }
+
         // Recently active (within 24h) → waiting
         // These sessions are recent but not confirmed active by hooks/polling.
         // In Progress is reserved for hook-confirmed actively working sessions.

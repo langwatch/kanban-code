@@ -130,6 +130,10 @@ struct ContentView: View {
             },
             onCleanupWorktree: { cardId in Task { await cleanupWorktree(cardId: cardId) } },
             onDeleteCard: { cardId in pendingDeleteCardId = cardId },
+            availableProjects: projectList,
+            onMoveToProject: { cardId, projectPath in
+                store.dispatch(.moveCardToProject(cardId: cardId, projectPath: projectPath))
+            },
             onRefreshBacklog: { Task { await store.refreshBacklog() } },
             onNewTask: { showNewTask = true }
         )
@@ -301,7 +305,6 @@ struct ContentView: View {
                     }
                     pendingDeleteCardId = nil
                 }
-                .keyboardShortcut(.defaultAction)
             } message: {
                 Text("This will permanently delete this card and its data.")
             }
@@ -344,6 +347,11 @@ struct ContentView: View {
                     await store.reconcile()
                     systemTray.update()
                 }
+            }
+            .onAppear { installKeyMonitor() }
+            .onDisappear {
+                if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+                keyMonitor = nil
             }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanToggleSearch)) { _ in
                 showSearch.toggle()
@@ -471,7 +479,7 @@ struct ContentView: View {
                     .keyboardShortcut("9", modifiers: .command)
                     .hidden()
 
-                // Board navigation
+                // Board navigation (non-arrow keys only — arrows handled via onKeyPress on BoardView)
                 Button("") { store.dispatch(.selectCard(cardId: nil)) }
                     .keyboardShortcut(.escape, modifiers: [])
                     .hidden()
@@ -480,18 +488,6 @@ struct ContentView: View {
                     .hidden()
                 Button("") { deleteSelectedCard() }
                     .keyboardShortcut(.deleteForward, modifiers: [])
-                    .hidden()
-                Button("") { navigateCard(.down) }
-                    .keyboardShortcut(.downArrow, modifiers: [])
-                    .hidden()
-                Button("") { navigateCard(.up) }
-                    .keyboardShortcut(.upArrow, modifiers: [])
-                    .hidden()
-                Button("") { navigateCard(.right) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-                    .hidden()
-                Button("") { navigateCard(.left) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
                     .hidden()
             }
         } // NavigationStack
@@ -656,6 +652,22 @@ struct ContentView: View {
             ?? (path as NSString).lastPathComponent
     }
 
+    private var projectList: [(name: String, path: String)] {
+        var seen = Set<String>()
+        var result: [(name: String, path: String)] = []
+        // Configured projects first
+        for project in store.state.configuredProjects {
+            guard seen.insert(project.path).inserted else { continue }
+            result.append((name: project.name, path: project.path))
+        }
+        // Then discovered project paths
+        for path in store.state.discoveredProjectPaths {
+            guard seen.insert(path).inserted else { continue }
+            result.append((name: (path as NSString).lastPathComponent, path: path))
+        }
+        return result
+    }
+
     private var currentProjectHasRemote: Bool {
         guard let path = store.state.selectedProjectPath else {
             return store.state.configuredProjects.contains { $0.remoteConfig != nil }
@@ -796,6 +808,49 @@ struct ContentView: View {
     }
 
     // MARK: - Keyboard Navigation
+
+    /// Installs an NSEvent local monitor for arrow keys + Enter.
+    /// Skips handling when a terminal view (LocalProcessTerminalView) is the first responder,
+    /// so typing in the Claude Code terminal works normally.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Don't intercept if a terminal, text field, or text view has focus
+            if let responder = event.window?.firstResponder {
+                let responderType = String(describing: type(of: responder))
+                if responderType.contains("Terminal")
+                    || responder is NSTextView
+                    || responder is NSTextField {
+                    return event
+                }
+            }
+
+            switch event.specialKey {
+            case .upArrow:
+                navigateCard(.up); return nil
+            case .downArrow:
+                navigateCard(.down); return nil
+            case .leftArrow:
+                navigateCard(.left); return nil
+            case .rightArrow:
+                navigateCard(.right); return nil
+            case .carriageReturn, .newline, .enter:
+                // Confirm pending delete alert via Enter
+                if let cardId = pendingDeleteCardId {
+                    let nextId = cardIdAfterDeletion(cardId)
+                    store.dispatch(.deleteCard(cardId: cardId))
+                    if let nextId {
+                        store.dispatch(.selectCard(cardId: nextId))
+                    }
+                    pendingDeleteCardId = nil
+                    return nil
+                }
+                return event
+            default:
+                return event
+            }
+        }
+    }
 
     private enum NavDirection { case up, down, left, right, open }
 
@@ -1145,6 +1200,7 @@ struct ContentView: View {
 
     @State private var pendingWorktreeCleanup: WorktreeCleanupInfo?
     @State private var pendingDeleteCardId: String?
+    @State private var keyMonitor: Any?
 
     struct WorktreeCleanupInfo: Identifiable {
         let id = UUID()

@@ -14,6 +14,8 @@ struct CardView: View {
     var onCleanupWorktree: () -> Void = {}
     var onArchive: () -> Void = {}
     var onDelete: () -> Void = {}
+    var availableProjects: [(name: String, path: String)] = []
+    var onMoveToProject: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -185,6 +187,22 @@ struct CardView: View {
                 Divider()
                 Button(role: .destructive, action: onCleanupWorktree) {
                     Label("Cleanup Worktree", systemImage: "trash")
+                }
+            }
+            if !availableProjects.isEmpty {
+                let currentPath = card.link.projectPath
+                let otherProjects = availableProjects.filter { $0.path != currentPath }
+                if !otherProjects.isEmpty {
+                    Divider()
+                    Menu {
+                        ForEach(otherProjects, id: \.path) { project in
+                            Button(project.name) {
+                                onMoveToProject(project.path)
+                            }
+                        }
+                    } label: {
+                        Label("Move to Project", systemImage: "folder.badge.arrow.forward")
+                    }
                 }
             }
             Divider()

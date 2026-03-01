@@ -27,6 +27,13 @@ public struct AppState: Sendable {
     /// Whether a GitHub issue refresh is currently running.
     public var isRefreshingBacklog = false
 
+    /// Session IDs that were deliberately deleted by the user.
+    /// Prevents the reconciler from recreating cards for these sessions.
+    public var deletedSessionIds: Set<String> = []
+
+    /// Global remote execution settings (from Settings.remote).
+    public var globalRemoteSettings: RemoteSettings?
+
     // MARK: - Derived
 
     /// All cards, built from links + sessions + activity.
@@ -115,6 +122,7 @@ public enum Action: Sendable {
     case killTerminal(cardId: String, sessionName: String)
     case addBranchToCard(cardId: String, branch: String)
     case addIssueLinkToCard(cardId: String, issueNumber: Int)
+    case moveCardToProject(cardId: String, projectPath: String)
 
     // Async completions
     case launchCompleted(cardId: String, tmuxName: String, sessionLink: SessionLink?, isRemote: Bool)
@@ -183,6 +191,7 @@ public enum Effect: Sendable {
     case cleanupTerminalCache(sessionNames: [String])
     case refreshDiscovery
     case updateSessionIndex(sessionId: String, name: String)
+    case moveSessionFile(cardId: String, sessionId: String, oldPath: String, newProjectPath: String)
 }
 
 // MARK: - Reducer
@@ -283,12 +292,24 @@ public enum Reducer {
             link.manuallyArchived = true
             link.column = .allSessions
             link.updatedAt = .now
+            // Kill tmux sessions on archive — user expects cleanup
+            var effects: [Effect] = []
+            if let tmux = link.tmuxLink {
+                effects.append(.killTmuxSessions(tmux.allSessionNames))
+                effects.append(.cleanupTerminalCache(sessionNames: tmux.allSessionNames))
+                link.tmuxLink = nil
+            }
             state.links[cardId] = link
-            return [.upsertLink(link)]
+            effects.insert(.upsertLink(link), at: 0)
+            return effects
 
         case .deleteCard(let cardId):
             guard let link = state.links.removeValue(forKey: cardId) else { return [] }
             if state.selectedCardId == cardId { state.selectedCardId = nil }
+            // Remember deleted session IDs so reconciler doesn't recreate cards for them
+            if let sessionId = link.sessionLink?.sessionId {
+                state.deletedSessionIds.insert(sessionId)
+            }
             var effects: [Effect] = [.removeLink(cardId)]
             if let tmux = link.tmuxLink {
                 effects.append(.killTmuxSessions(tmux.allSessionNames))
@@ -353,13 +374,48 @@ public enum Reducer {
             state.links[cardId] = link
             return [.upsertLink(link)]
 
+        case .moveCardToProject(let cardId, let projectPath):
+            guard var link = state.links[cardId] else { return [] }
+            let oldProjectPath = link.projectPath
+            link.projectPath = projectPath
+            // Clear repo-specific links — different project means different repo
+            link.worktreeLink = nil
+            link.prLinks = []
+            link.discoveredBranches = nil
+            link.discoveredRepos = nil
+            // Kill tmux sessions — they're running in the old project
+            var effects: [Effect] = []
+            if let tmux = link.tmuxLink {
+                effects.append(.killTmuxSessions(tmux.allSessionNames))
+                effects.append(.cleanupTerminalCache(sessionNames: tmux.allSessionNames))
+                link.tmuxLink = nil
+            }
+            link.updatedAt = .now
+            state.links[cardId] = link
+            effects.insert(.upsertLink(link), at: 0)
+            // Move the .jsonl file to the new project folder
+            if let sessionId = link.sessionLink?.sessionId,
+               let oldPath = link.sessionLink?.sessionPath,
+               oldProjectPath != projectPath {
+                effects.append(.moveSessionFile(
+                    cardId: cardId,
+                    sessionId: sessionId,
+                    oldPath: oldPath,
+                    newProjectPath: projectPath
+                ))
+            }
+            KanbanLog.info("store", "MoveToProject: card=\(cardId.prefix(12)) → \(projectPath)")
+            return effects
+
         // MARK: Async Completions
 
         case .launchCompleted(let cardId, let tmuxName, let sessionLink, let isRemote):
             guard var link = state.links[cardId] else { return [] }
             link.tmuxLink = TmuxLink(sessionName: tmuxName)
             if let sl = sessionLink { link.sessionLink = sl }
-            link.isLaunching = nil
+            // Keep isLaunching = true until reconciliation confirms activity.
+            // Clearing it here causes a column bounce: the next reconciliation
+            // has no activity hook data yet and assigns .allSessions.
             link.isRemote = isRemote
             link.updatedAt = .now
             state.links[cardId] = link
@@ -377,7 +433,7 @@ public enum Reducer {
         case .resumeCompleted(let cardId, let tmuxName):
             guard var link = state.links[cardId] else { return [] }
             link.tmuxLink = TmuxLink(sessionName: tmuxName)
-            link.isLaunching = nil
+            // Keep isLaunching until reconciliation confirms activity
             link.updatedAt = .now
             state.links[cardId] = link
             return [.upsertLink(link)]
@@ -429,13 +485,32 @@ public enum Reducer {
             var mergedLinks = state.links
             var preservedIds: Set<String> = []
             for link in result.links {
+                // Skip cards whose session was deliberately deleted
+                if let sessionId = link.sessionLink?.sessionId, state.deletedSessionIds.contains(sessionId) {
+                    continue
+                }
                 if let existing = mergedLinks[link.id] {
-                    // Stale launch timeout: clear isLaunching after 30s (crash recovery)
-                    if existing.isLaunching == true, Date.now.timeIntervalSince(existing.updatedAt) > 30 {
-                        var cleared = link
-                        cleared.isLaunching = nil
-                        mergedLinks[link.id] = cleared
-                        KanbanLog.info("store", "Cleared stale isLaunching on card=\(link.id.prefix(12))")
+                    if existing.isLaunching == true {
+                        // Check if activity hook has confirmed the session is running
+                        let activity = result.activityMap[existing.sessionLink?.sessionId ?? ""]
+                        if activity != nil {
+                            // Activity detected — clear isLaunching, let column recomputation run
+                            var cleared = existing
+                            cleared.isLaunching = nil
+                            mergedLinks[link.id] = cleared
+                            KanbanLog.info("store", "Cleared isLaunching on card=\(link.id.prefix(12)) (activity=\(activity!))")
+                            continue
+                        }
+                        // Stale launch timeout: clear isLaunching after 30s (crash recovery)
+                        if Date.now.timeIntervalSince(existing.updatedAt) > 30 {
+                            var cleared = link
+                            cleared.isLaunching = nil
+                            mergedLinks[link.id] = cleared
+                            KanbanLog.info("store", "Cleared stale isLaunching on card=\(link.id.prefix(12))")
+                            continue
+                        }
+                        // Still launching, no activity yet — preserve
+                        preservedIds.insert(link.id)
                         continue
                     }
                     // In-memory state is newer → preserve it, skip stale reconciled data.
@@ -651,7 +726,9 @@ public final class BoardStore: @unchecked Sendable {
                 }
             }
 
-            let sessions = try await discovery.discoverSessions()
+            let allSessions = try await discovery.discoverSessions()
+            // Filter out sessions the user deliberately deleted
+            let sessions = allSessions.filter { !state.deletedSessionIds.contains($0.id) }
             // Use in-memory state as source of truth — NOT disk.
             // Disk reads race with async effect writes, causing duplicates.
             let existingLinks = Array(state.links.values)

@@ -69,6 +69,23 @@ public actor EffectHandler {
 
         case .updateSessionIndex(let sessionId, let name):
             try? SessionIndexReader.updateSummary(sessionId: sessionId, summary: name)
+
+        case .moveSessionFile(let cardId, let sessionId, let oldPath, let newProjectPath):
+            do {
+                let newPath = try SessionFileMover.moveSession(
+                    sessionId: sessionId,
+                    fromPath: oldPath,
+                    toProjectPath: newProjectPath
+                )
+                // Update the link's sessionPath to the new location
+                try await coordinationStore.updateLink(id: cardId) { link in
+                    link.sessionLink?.sessionPath = newPath
+                }
+                KanbanLog.info("effect", "Moved session \(sessionId.prefix(8)) → \(newPath)")
+            } catch {
+                KanbanLog.warn("effect", "moveSessionFile failed: \(error)")
+                await dispatch(.setError("Move failed: \(error.localizedDescription)"))
+            }
         }
     }
 }

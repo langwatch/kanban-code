@@ -156,8 +156,8 @@ struct ReducerTests {
         #expect(state.links["card_r2"]?.isLaunching == true)
     }
 
-    @Test("resumeCompleted clears isLaunching")
-    func resumeCompletedClearsLock() {
+    @Test("resumeCompleted keeps isLaunching until reconciliation confirms activity")
+    func resumeCompletedKeepsLaunching() {
         let link = makeLink(
             id: "card_r3",
             column: .inProgress,
@@ -171,7 +171,8 @@ struct ReducerTests {
             cardId: "card_r3", tmuxName: "claude-sess_abc"
         ))
 
-        #expect(state.links["card_r3"]?.isLaunching == nil)
+        // isLaunching stays true — cleared by reconciliation when activity is confirmed
+        #expect(state.links["card_r3"]?.isLaunching == true)
         #expect(state.links["card_r3"]?.column == .inProgress)
     }
 

@@ -31,6 +31,8 @@ struct DroppableColumnView: View {
     var onCopyResumeCmd: (String) -> Void = { _ in }
     var onCleanupWorktree: (String) -> Void = { _ in }
     var onDeleteCard: (String) -> Void = { _ in }
+    var availableProjects: [(name: String, path: String)] = []
+    var onMoveToProject: (String, String) -> Void = { _, _ in }   // (cardId, projectPath)
     var onRefreshBacklog: (() -> Void)?
 
     @State private var isTargeted = false
@@ -55,7 +57,9 @@ struct DroppableColumnView: View {
                         onCopyResumeCmd: { onCopyResumeCmd(card.id) },
                         onCleanupWorktree: { onCleanupWorktree(card.id) },
                         onArchive: { onArchiveCard(card.id) },
-                        onDelete: { onDeleteCard(card.id) }
+                        onDelete: { onDeleteCard(card.id) },
+                        availableProjects: availableProjects,
+                        onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) }
                     )
                     .draggable(CardDragData(cardId: card.id, sourceColumn: column.rawValue))
                     .sheet(isPresented: Binding(
