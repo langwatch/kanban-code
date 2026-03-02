@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/langwatch/kanban-code/compare/v0.1.1...v0.2.0) (2026-03-02)
+
+
+### Features
+
+* dynamic editor discovery, pull-to-load history, and button hover feedback ([c21e616](https://github.com/langwatch/kanban-code/commit/c21e616bc6cbbb32e98397273926581eeb510cf9))
+
+
+### Bug Fixes
+
+* clear isLaunching immediately on launch/resume completion ([d677c2f](https://github.com/langwatch/kanban-code/commit/d677c2ff3262211d45dff6b4323af5ca1d12338a))
+
 ## 0.1.1 (2026-03-02)
 
 ### Bug Fixes
