@@ -444,9 +444,11 @@ public enum Reducer {
             link.tmuxLink = TmuxLink(sessionName: tmuxName)
             if let sl = sessionLink { link.sessionLink = sl }
             if let wl = worktreeLink, link.worktreeLink == nil { link.worktreeLink = wl }
-            // Keep isLaunching = true until reconciliation confirms activity.
-            // Clearing it here causes a column bounce: the next reconciliation
-            // has no activity hook data yet and assigns .allSessions.
+            // Clear isLaunching immediately so the terminal shows without waiting
+            // for reconciliation (5s). Setting lastActivity prevents column bounce
+            // to .allSessions — card lands in .waiting until hooks confirm .inProgress.
+            link.isLaunching = nil
+            link.lastActivity = .now
             link.isRemote = isRemote
             link.updatedAt = .now
             state.links[cardId] = link
@@ -464,7 +466,8 @@ public enum Reducer {
         case .resumeCompleted(let cardId, let tmuxName):
             guard var link = state.links[cardId] else { return [] }
             link.tmuxLink = TmuxLink(sessionName: tmuxName)
-            // Keep isLaunching until reconciliation confirms activity
+            link.isLaunching = nil
+            link.lastActivity = .now
             link.updatedAt = .now
             state.links[cardId] = link
             return [.upsertLink(link)]
