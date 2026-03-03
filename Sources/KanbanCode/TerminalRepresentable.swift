@@ -38,6 +38,168 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         pendingData.removeAll(keepingCapacity: true)
         feed(byteArray: batch[...])
     }
+
+    // MARK: - Cmd+hover URL detection
+
+    private static let urlRegex: NSRegularExpression? = {
+        try? NSRegularExpression(
+            pattern: #"https?://[^\s<>\"'\])\}]+"#,
+            options: []
+        )
+    }()
+
+    /// Currently highlighted URL range for underline drawing.
+    private var highlightedURL: (screenRow: Int, colStart: Int, colEnd: Int, url: String)?
+    private var urlHighlightLayer: CAShapeLayer?
+    private var isCommandHeld = false
+    private var urlEventMonitor: Any?
+
+    func installURLMonitor() {
+        guard urlEventMonitor == nil else { return }
+        urlEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.flagsChanged, .mouseMoved, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self,
+                  !self.isHidden,
+                  self.window == event.window else { return event }
+            // For mouse events, check the mouse is actually over this view
+            if event.type != .flagsChanged {
+                let point = self.convert(event.locationInWindow, from: nil)
+                guard self.bounds.contains(point) else {
+                    // Mouse left this terminal — clear any highlight
+                    if self.highlightedURL != nil { self.clearURLHighlight() }
+                    return event
+                }
+            }
+            return self.handleURLEvent(event)
+        }
+    }
+
+    func removeURLMonitor() {
+        if let monitor = urlEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            urlEventMonitor = nil
+        }
+        clearURLHighlight()
+    }
+
+    private func handleURLEvent(_ event: NSEvent) -> NSEvent? {
+        switch event.type {
+        case .flagsChanged:
+            isCommandHeld = event.modifierFlags.contains(.command)
+            if isCommandHeld {
+                let pos = screenPosition(from: event)
+                updateURLHighlight(col: pos.col, screenRow: pos.screenRow)
+            } else {
+                clearURLHighlight()
+            }
+            return event
+
+        case .mouseMoved:
+            if isCommandHeld {
+                let pos = screenPosition(from: event)
+                updateURLHighlight(col: pos.col, screenRow: pos.screenRow)
+            }
+            return event
+
+        case .leftMouseUp:
+            if event.modifierFlags.contains(.command) {
+                let pos = screenPosition(from: event)
+                if let detected = detectURL(col: pos.col, screenRow: pos.screenRow),
+                   let url = URL(string: detected.url) {
+                    clearURLHighlight()
+                    NSWorkspace.shared.open(url)
+                    return nil // consume the event
+                }
+            }
+            return event
+
+        default:
+            return event
+        }
+    }
+
+    /// Cell dimensions matching SwiftTerm's internal calculation.
+    private var cellSize: CGSize {
+        let f = font
+        let glyph = f.glyph(withName: "W")
+        let cw = f.advancement(forGlyph: glyph).width
+        let ch = ceil(CTFontGetAscent(f) + CTFontGetDescent(f) + CTFontGetLeading(f))
+        return CGSize(width: max(1, cw), height: max(1, ch))
+    }
+
+    /// Compute screen row (0-based from top) and col from mouse event.
+    private func screenPosition(from event: NSEvent) -> (col: Int, screenRow: Int) {
+        let point = convert(event.locationInWindow, from: nil)
+        let cols = terminal.cols
+        let rows = terminal.rows
+        guard cols > 0, rows > 0 else { return (0, 0) }
+        let cs = cellSize
+        let col = min(max(0, Int(point.x / cs.width)), cols - 1)
+        let screenRow = min(max(0, Int((bounds.height - point.y) / cs.height)), rows - 1)
+        return (col, screenRow)
+    }
+
+    /// Extract the URL under the cursor at the given screen position, if any.
+    private func detectURL(col: Int, screenRow: Int) -> (url: String, colStart: Int, colEnd: Int)? {
+        guard let regex = Self.urlRegex,
+              let line = terminal.getLine(row: screenRow) else { return nil }
+        let text = line.translateToString()
+        let nsText = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        for match in matches {
+            let range = match.range
+            if col >= range.location && col < range.location + range.length {
+                let url = nsText.substring(with: range)
+                return (url, range.location, range.location + range.length - 1)
+            }
+        }
+        return nil
+    }
+
+    private func updateURLHighlight(col: Int, screenRow: Int) {
+        if let detected = detectURL(col: col, screenRow: screenRow) {
+            if highlightedURL?.screenRow == screenRow,
+               highlightedURL?.colStart == detected.colStart,
+               highlightedURL?.colEnd == detected.colEnd { return }
+            highlightedURL = (screenRow, detected.colStart, detected.colEnd, detected.url)
+            drawURLHighlight(screenRow: screenRow, colStart: detected.colStart, colEnd: detected.colEnd)
+            NSCursor.pointingHand.set()
+        } else {
+            clearURLHighlight()
+        }
+    }
+
+    private func drawURLHighlight(screenRow: Int, colStart: Int, colEnd: Int) {
+        urlHighlightLayer?.removeFromSuperlayer()
+        let cs = cellSize
+        let x = CGFloat(colStart) * cs.width
+        // macOS origin is bottom-left; screenRow 0 = top of terminal
+        let y = bounds.height - CGFloat(screenRow + 1) * cs.height
+        let w = CGFloat(colEnd - colStart + 1) * cs.width
+
+        let layer = CAShapeLayer()
+        let underlineY = y + 1.0
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: x, y: underlineY))
+        path.addLine(to: CGPoint(x: x + w, y: underlineY))
+        layer.path = path
+        layer.strokeColor = NSColor.linkColor.cgColor
+        layer.lineWidth = 1
+        layer.fillColor = nil
+
+        self.wantsLayer = true
+        self.layer?.addSublayer(layer)
+        urlHighlightLayer = layer
+    }
+
+    private func clearURLHighlight() {
+        guard highlightedURL != nil else { return }
+        highlightedURL = nil
+        urlHighlightLayer?.removeFromSuperlayer()
+        urlHighlightLayer = nil
+        NSCursor.arrow.set()
+    }
 }
 
 // MARK: - Terminal process cache
@@ -233,6 +395,7 @@ final class TerminalCache {
         // to avoid intermediate sizes triggering tmux redraws during animations.
         terminal.autoresizingMask = []
         terminal.isHidden = true
+        terminal.installURLMonitor()
         terminals[sessionName] = terminal
         return terminal
     }
@@ -260,6 +423,7 @@ final class TerminalCache {
     func remove(_ sessionName: String) {
         startedSessions.remove(sessionName)
         if let terminal = terminals.removeValue(forKey: sessionName) {
+            terminal.removeURLMonitor()
             terminal.removeFromSuperview()
             terminal.terminate()
         }
