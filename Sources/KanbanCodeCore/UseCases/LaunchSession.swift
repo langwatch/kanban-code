@@ -46,11 +46,14 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
             cmd = built
         }
 
+        // Prepend cd to ensure we're in the right directory even if zshrc changes it
+        let fullCmd = "cd \(shellEscape(projectPath)) && \(cmd)"
+
         // Kill any stale session with the same name before launching.
         // This handles disconnected cards where the old tmux session lingers.
         try? await tmux.killSession(name: sessionName)
 
-        try await tmux.createSession(name: sessionName, path: projectPath, command: cmd)
+        try await tmux.createSession(name: sessionName, path: projectPath, command: fullCmd)
         return sessionName
     }
 
@@ -84,7 +87,10 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
             cmd = built
         }
 
-        try await tmux.createSession(name: sessionName, path: projectPath, command: cmd)
+        // Prepend cd to ensure we're in the right directory even if zshrc changes it
+        let fullCmd = "cd \(shellEscape(projectPath)) && \(cmd)"
+
+        try await tmux.createSession(name: sessionName, path: projectPath, command: fullCmd)
         return sessionName
     }
 
