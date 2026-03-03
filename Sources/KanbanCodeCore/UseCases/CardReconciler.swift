@@ -160,6 +160,9 @@ public enum CardReconciler {
                 if baseName == "main" || baseName == "master" { continue }
                 if let cardId = cardIdBySessionId[session.id],
                    !(cardIdsByBranch[baseName]?.contains(cardId) ?? false) {
+                    // Skip cards that explicitly have no worktree (e.g. fork from root) —
+                    // the session's baked-in gitBranch belongs to the parent, not this card.
+                    if linksById[cardId]?.manualOverrides.worktreePath == true { continue }
                     cardIdsByBranch[baseName, default: []].append(cardId)
                 }
             }

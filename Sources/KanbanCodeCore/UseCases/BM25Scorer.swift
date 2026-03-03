@@ -67,13 +67,13 @@ public enum BM25Scorer {
     }
 
     /// Calculate recency boost based on file modification time.
-    /// Recent files get a higher boost (up to 2x for today, decaying over 30 days).
+    /// Recent files get a stronger boost (up to 3x for today, decaying over 30 days).
     public static func recencyBoost(modifiedTime: Date) -> Double {
         let daysAgo = Date.now.timeIntervalSince(modifiedTime) / 86400
-        if daysAgo <= 0 { return 2.0 }
+        if daysAgo <= 0 { return 3.0 }
         if daysAgo >= 30 { return 1.0 }
-        // Linear decay from 2.0 to 1.0 over 30 days
-        return 2.0 - (daysAgo / 30.0)
+        // Linear decay from 3.0 to 1.0 over 30 days
+        return 3.0 - (2.0 * daysAgo / 30.0)
     }
 
     /// Tokenize text into lowercase words.

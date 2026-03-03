@@ -905,6 +905,57 @@ struct CardReconcilerTests {
         #expect(result[0].worktreeLink?.path == "/project/.worktrees/feat-z", "Path should be updated to the live worktree path")
     }
 
+    @Test("Forked card (project root) does NOT get PR from session gitBranch")
+    func forkedCardNoPRFromSessionBranch() {
+        // A forked card with manualOverrides.worktreePath = true should NOT
+        // be indexed by the session's baked-in gitBranch. The gitBranch belongs
+        // to the parent card's worktree, not this fork.
+        var forkedCard = Link(
+            projectPath: "/project",
+            column: .waiting,
+            source: .discovered,
+            sessionLink: SessionLink(sessionId: "forked-s1", sessionPath: "/p/forked.jsonl")
+            // no worktreeLink — user chose "project root"
+        )
+        forkedCard.manualOverrides.worktreePath = true
+
+        let originalCard = Link(
+            projectPath: "/project",
+            column: .inProgress,
+            source: .discovered,
+            sessionLink: SessionLink(sessionId: "original-s1", sessionPath: "/p/original.jsonl"),
+            worktreeLink: WorktreeLink(path: "/project/.claude/worktrees/feat-x", branch: "feat-x")
+        )
+
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [
+                Session(id: "original-s1", projectPath: "/project/.claude/worktrees/feat-x",
+                        gitBranch: "feat-x", messageCount: 10, modifiedTime: .now,
+                        jsonlPath: "/p/original.jsonl"),
+                // Forked session still has the old gitBranch baked in from the parent
+                Session(id: "forked-s1", projectPath: "/project",
+                        gitBranch: "feat-x", messageCount: 10, modifiedTime: .now,
+                        jsonlPath: "/p/forked.jsonl"),
+            ],
+            worktrees: ["/project": [
+                Worktree(path: "/project/.claude/worktrees/feat-x", branch: "feat-x", isBare: false)
+            ]],
+            pullRequests: ["feat-x": PullRequest(number: 42, title: "Add feat X", state: "open", url: "https://example.com/pr/42", headRefName: "feat-x")]
+        )
+
+        let result = CardReconciler.reconcile(existing: [originalCard, forkedCard], snapshot: snapshot)
+        let forked = result.first(where: { $0.id == forkedCard.id })!
+        let original = result.first(where: { $0.id == originalCard.id })!
+
+        // Fork should NOT get the PR
+        #expect(forked.prLinks.isEmpty, "Forked card with worktreePath override should not inherit parent's PR")
+        #expect(forked.worktreeLink == nil, "Forked card should still have no worktreeLink")
+
+        // Original card should get the PR
+        #expect(original.prLinks.count == 1)
+        #expect(original.prLinks[0].number == 42)
+    }
+
     @Test("Project path filled from session when card has none")
     func projectPathFilledFromSession() {
         // Card has tmuxLink + matching project path context (same project)

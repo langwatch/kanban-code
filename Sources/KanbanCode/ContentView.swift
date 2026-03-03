@@ -1889,6 +1889,7 @@ struct ContentView: View {
                 }
                 store.dispatch(.createManualTask(newLink))
                 store.dispatch(.selectCard(cardId: newLink.id))
+                shouldFocusTerminal = true
             } catch {
                 KanbanCodeLog.error("fork", "Fork failed: \(error)")
             }

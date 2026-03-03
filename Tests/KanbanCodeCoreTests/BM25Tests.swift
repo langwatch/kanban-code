@@ -101,8 +101,8 @@ struct BM25Tests {
     @Test("Recency boost decays linearly")
     func recencyBoostDecay() {
         let boost15d = BM25Scorer.recencyBoost(modifiedTime: Date.now.addingTimeInterval(-86400 * 15))
-        #expect(boost15d > 1.0 && boost15d < 2.0)
-        #expect(abs(boost15d - 1.5) < 0.1) // ~1.5 at 15 days
+        #expect(boost15d > 1.0 && boost15d < 3.0)
+        #expect(abs(boost15d - 2.0) < 0.1) // ~2.0 at 15 days (3x decay over 30 days)
     }
 
     @Test("Multi-term query scores higher when all terms present")
