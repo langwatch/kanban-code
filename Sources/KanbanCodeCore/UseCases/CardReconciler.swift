@@ -237,6 +237,7 @@ public enum CardReconciler {
                    newBranch != oldBranch {
                     var updated = link
                     updated.worktreeLink?.branch = newBranch
+                    updated.prLinks = []  // PR was matched via old branch — clear stale link
                     linksById[link.id] = updated
                     // Update branch index
                     cardIdsByBranch[oldBranch]?.removeAll { $0 == link.id }

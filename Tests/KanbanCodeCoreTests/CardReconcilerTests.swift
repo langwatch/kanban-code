@@ -466,7 +466,8 @@ struct CardReconcilerTests {
             Link(
                 column: .inProgress,
                 sessionLink: SessionLink(sessionId: "s1"),
-                worktreeLink: WorktreeLink(path: "/project/.worktrees/feat-original", branch: "feat-original")
+                worktreeLink: WorktreeLink(path: "/project/.worktrees/feat-original", branch: "feat-original"),
+                prLinks: [PRLink(number: 42, url: "https://github.com/test/pr/42", status: .reviewNeeded, title: "Old PR")]
             )
         ]
         let snapshot = CardReconciler.DiscoverySnapshot(
@@ -483,6 +484,7 @@ struct CardReconcilerTests {
         #expect(result.count == 1)
         #expect(result[0].worktreeLink?.path == "/project/.worktrees/feat-original")
         #expect(result[0].worktreeLink?.branch == "feat-renamed")
+        #expect(result[0].prLinks.isEmpty, "Stale PR from old branch should be cleared")
     }
 
     // MARK: - PR matching
