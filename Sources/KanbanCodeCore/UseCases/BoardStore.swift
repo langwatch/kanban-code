@@ -1082,8 +1082,8 @@ public final class BoardStore: @unchecked Sendable {
             }
 
             // Fetch PR data via targeted GraphQL — concurrent across repos (max 5)
-            // Throttle: every 30s when active, every 5min when backgrounded.
-            let ghInterval: Duration = appIsActive ? .seconds(30) : .seconds(300)
+            // Throttle: every reconcile cycle when active, every 5min when backgrounded/hidden.
+            let ghInterval: Duration = appIsActive ? .seconds(0) : .seconds(300)
             let shouldFetchPRs = ContinuousClock.now - lastGHLookup >= ghInterval
             var pullRequests: [String: PullRequest] = [:]  // branch → PR for reconciler
             var prsByRepoAndNumber: [String: [Int: PullRequest]] = [:]  // repo → number → PR
