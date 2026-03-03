@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     branches: [main]
+  release:
+    types: [created]
 
 permissions:
   contents: write
@@ -10,20 +12,15 @@ permissions:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: googleapis/release-please-action@v4
-        id: release
         with:
           token: ${{ secrets.RELEASE_PAT }}
 
   build:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: github.event_name == 'release'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +28,10 @@ jobs:
       - name: Resolve version and tag
         id: meta
         run: |
-          echo "tag=${{ needs.release-please.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          echo "version=${{ needs.release-please.outputs.version }}" >> "$GITHUB_OUTPUT"
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary
         run: swift build -c release
