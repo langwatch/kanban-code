@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     branches: [main]
-  release:
-    types: [created]
 
 permissions:
   contents: write
@@ -12,7 +10,6 @@ permissions:
 
 jobs:
   release-please:
-    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -26,11 +23,7 @@ jobs:
 
   build:
     needs: release-please
-    if: >-
-      always() && (
-        (github.event_name == 'release') ||
-        (needs.release-please.outputs.release_created == 'true')
-      )
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -38,13 +31,8 @@ jobs:
       - name: Resolve version and tag
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${{ needs.release-please.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
-            echo "version=${{ needs.release-please.outputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "tag=${{ needs.release-please.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          echo "version=${{ needs.release-please.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary
         run: swift build -c release
