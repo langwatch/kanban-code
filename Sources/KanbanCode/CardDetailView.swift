@@ -224,6 +224,13 @@ struct CardDetailView: View {
                             icon: "arrow.triangle.branch", label: "Branch", value: branch,
                             onUnlink: { onUnlink(.worktree) }
                         )
+                    } else if let discovered = card.link.discoveredBranches?.first {
+                        // Show latest discovered branch (from JSONL scanning) when no worktreeLink.
+                        // Dismissing sets watermark + clears discoveredBranches via .worktree unlink.
+                        linkPropertyRow(
+                            icon: "arrow.triangle.branch", label: "Branch", value: discovered,
+                            onUnlink: { onUnlink(.worktree) }
+                        )
                     }
                     if let worktreePath = card.link.worktreeLink?.path, !worktreePath.isEmpty {
                         copyableRow(icon: "folder", text: worktreePath)

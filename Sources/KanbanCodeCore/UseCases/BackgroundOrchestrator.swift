@@ -59,13 +59,18 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
 
     /// Force re-scan a card's conversation for pushed branches and re-fetch PRs.
     /// Used by the UI "Discover" button to manually trigger discovery for older cards.
-    public func discoverBranchesForCard(cardId: String) async {
+    /// Returns the updated Link so callers can sync it to in-memory state.
+    @discardableResult
+    public func discoverBranchesForCard(cardId: String) async -> Link? {
         do {
             var links = try await coordinationStore.readLinks()
             guard let idx = links.firstIndex(where: { $0.id == cardId }),
-                  let sessionPath = links[idx].sessionLink?.sessionPath else { return }
+                  let sessionPath = links[idx].sessionLink?.sessionPath else { return nil }
 
-            // Force rescan by clearing cached value
+            // Explicit discovery: clear watermark, legacy flags, and PR override for full rescan
+            links[idx].manualOverrides.branchWatermark = nil
+            links[idx].manualOverrides.worktreePath = false
+            links[idx].manualOverrides.prLink = false
             links[idx].discoveredBranches = nil
             links[idx].discoveredRepos = nil
             let scanned = (try? await JsonlParser.extractPushedBranches(from: sessionPath)) ?? []
@@ -124,8 +129,10 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
 
             links[idx].updatedAt = .now
             try await coordinationStore.writeLinks(links)
+            return links[idx]
         } catch {
             // Best-effort
+            return nil
         }
     }
 
