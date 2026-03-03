@@ -3,6 +3,43 @@ import AppKit
 import SwiftTerm
 import KanbanCodeCore
 
+// MARK: - Batched terminal view
+
+/// Subclass that batches incoming pty data before feeding it to the terminal.
+/// SwiftTerm's default path feeds each pty read (often tiny chunks) individually,
+/// triggering a display update per chunk. This batches all data arriving within
+/// a short window into a single feed, dramatically reducing redraws during
+/// tmux resize/repaint and making scrolling feel instant like Warp.
+///
+/// LocalProcess dispatches each read via dispatchQueue.sync, so plain
+/// DispatchQueue.main.async runs between chunks (FIFO). We use asyncAfter
+/// with a short delay so multiple chunks accumulate before flushing.
+final class BatchedTerminalView: LocalProcessTerminalView {
+    private var pendingData: [UInt8] = []
+    private var flushScheduled = false
+    /// Batch window: 16ms ≈ 1 frame at 60fps.
+    /// Long enough to coalesce a tmux full-screen redraw,
+    /// short enough to feel instant for interactive typing.
+    private static let batchDelay: TimeInterval = 0.016
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        pendingData.append(contentsOf: slice)
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.batchDelay) { [weak self] in
+            self?.flushPendingData()
+        }
+    }
+
+    private func flushPendingData() {
+        flushScheduled = false
+        guard !pendingData.isEmpty else { return }
+        let batch = pendingData
+        pendingData.removeAll(keepingCapacity: true)
+        feed(byteArray: batch[...])
+    }
+}
+
 // MARK: - Terminal process cache
 
 /// Caches tmux terminal views across drawer close/open cycles.
@@ -12,7 +49,7 @@ import KanbanCodeCore
 @MainActor
 final class TerminalCache {
     static let shared = TerminalCache()
-    private var terminals: [String: LocalProcessTerminalView] = [:]
+    private var terminals: [String: BatchedTerminalView] = [:]
     private var shiftEnterMonitor: Any?
     private var scrollWheelMonitor: Any?
 
@@ -38,30 +75,29 @@ final class TerminalCache {
                 return nil
             }
 
+            guard let self else { return event }
+
+            // Find the session for this terminal
+            var view: NSView? = terminal
+            while let v = view, !(v is TerminalContainerNSView) {
+                view = v.superview
+            }
+            guard let container = view as? TerminalContainerNSView,
+                  let session = container.activeSession else { return event }
+
             // If in copy-mode, exit it on any non-modifier keypress.
-            // We must consume the event and re-send the key via tmux send-keys
-            // so that the "q" (exit copy-mode) arrives before the actual key.
-            if let self {
-                var view: NSView? = terminal
-                while let v = view, !(v is TerminalContainerNSView) {
-                    view = v.superview
-                }
-                if let container = view as? TerminalContainerNSView,
-                   let session = container.activeSession,
-                   self.copyModeSessions.contains(session) {
-                    self.copyModeSessions.remove(session)
-                    self.copyModeExitTime[session] = .now
-                    let chars = event.characters ?? ""
-                    Task.detached {
-                        // Exit copy-mode first
-                        _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "q"])
-                        // Then send the actual key to the shell
-                        if !chars.isEmpty {
-                            _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, chars])
-                        }
+            // Uses -X cancel (copy-mode command) — no-op if already exited, never leaks.
+            if self.copyModeSessions.contains(session) {
+                self.copyModeSessions.remove(session)
+                self.copyModeExitTime[session] = .now
+                let chars = event.characters ?? ""
+                Task.detached {
+                    _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "cancel"])
+                    if !chars.isEmpty {
+                        _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, chars])
                     }
-                    return nil // consume — key is re-sent via tmux above
                 }
+                return nil // consume — key is re-sent via tmux above
             }
 
             return event // let the key through to the terminal
@@ -95,45 +131,49 @@ final class TerminalCache {
 
             let inCopyMode = self?.copyModeSessions.contains(session) ?? false
 
-            // After exiting copy-mode, ignore scroll events for 300ms
+            // After exiting copy-mode, ignore scroll events for 500ms
             // to prevent residual trackpad momentum from re-entering.
             if let exitTime = self?.copyModeExitTime[session],
-               exitTime.duration(to: .now) < .milliseconds(300) {
+               exitTime.duration(to: .now) < .milliseconds(500) {
                 return nil // consume during cooldown
             }
 
             if event.deltaY > 0 {
-                // Scroll UP — enter copy-mode if needed, then send Up keys
+                // Scroll UP — enter copy-mode if needed, then scroll.
+                // All scroll commands use -X (copy-mode commands) so they're
+                // no-ops if copy-mode has already been exited by another task.
+                let lines = max(1, Int(abs(event.deltaY)))
                 if !inCopyMode {
                     self?.copyModeSessions.insert(session)
                     Task.detached {
                         _ = try? await ShellCommand.run(tmux, arguments: ["copy-mode", "-t", session])
+                        _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "-N", "\(lines)", "cursor-up"])
+                    }
+                } else {
+                    Task.detached {
+                        _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "-N", "\(lines)", "cursor-up"])
                     }
                 }
-                let lines = max(1, Int(abs(event.deltaY)))
-                Task.detached {
-                    let keys = Array(repeating: "Up", count: lines)
-                    _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session] + keys)
-                }
             } else if inCopyMode {
-                // Scroll DOWN in copy-mode — send Down keys.
+                // Scroll DOWN in copy-mode.
+                // -X cursor-down is a copy-mode command: no-op if copy-mode already exited.
+                // No literal keys ever reach the shell, regardless of concurrent task timing.
                 let lines = max(1, Int(abs(event.deltaY)))
                 Task.detached {
-                    let keys = Array(repeating: "Down", count: lines)
-                    _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session] + keys)
-                    // Brief pause so tmux processes the Down keys before we check
+                    _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "-N", "\(lines)", "cursor-down"])
                     try? await Task.sleep(for: .milliseconds(50))
-                    // Check scroll position — tmux does NOT auto-exit copy-mode
-                    // at position 0, so we must explicitly exit.
                     let result = try? await ShellCommand.run(
                         tmux, arguments: ["display-message", "-p", "-t", session, "#{scroll_position}"]
                     )
                     if result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
-                        // At the bottom — exit copy-mode
-                        _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "q"])
-                        await MainActor.run {
-                            TerminalCache.shared.copyModeSessions.remove(session)
+                        // Only the first task to reach here proceeds (remove returns nil for duplicates).
+                        let shouldExit = await MainActor.run {
+                            guard TerminalCache.shared.copyModeSessions.remove(session) != nil else { return false }
                             TerminalCache.shared.copyModeExitTime[session] = .now
+                            return true
+                        }
+                        if shouldExit {
+                            _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "cancel"])
                         }
                     }
                 }
@@ -152,11 +192,11 @@ final class TerminalCache {
     /// Get or create a terminal view for the given tmux session name.
     /// The process is NOT started here — call `startProcessIfNeeded` after layout
     /// so the terminal has a non-zero frame (avoids tmux SIGWINCH clear on resize from 0x0).
-    func terminal(for sessionName: String, frame: NSRect) -> LocalProcessTerminalView {
+    func terminal(for sessionName: String, frame: NSRect) -> BatchedTerminalView {
         if let existing = terminals[sessionName] {
             return existing
         }
-        let terminal = LocalProcessTerminalView(frame: frame)
+        let terminal = BatchedTerminalView(frame: frame)
 
         // Dark terminal colors matching a real terminal
         terminal.nativeBackgroundColor = NSColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1.0)
@@ -189,7 +229,9 @@ final class TerminalCache {
         // Slightly smaller font than the default
         terminal.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 
-        terminal.autoresizingMask = [.width, .height]
+        // Do NOT set autoresizingMask — we manage frame explicitly in layout()
+        // to avoid intermediate sizes triggering tmux redraws during animations.
+        terminal.autoresizingMask = []
         terminal.isHidden = true
         terminals[sessionName] = terminal
         return terminal
@@ -296,19 +338,13 @@ final class TerminalContainerNSView: NSView {
     func ensureTerminal(for sessionName: String) {
         guard !managedSessions.contains(sessionName) else { return }
         let terminal = TerminalCache.shared.terminal(for: sessionName, frame: bounds)
-        // Reparent: remove from any previous superview and add to this container
         if terminal.superview !== self {
             terminal.removeFromSuperview()
             addSubview(terminal)
         }
-        // Only set frame if bounds are non-zero. For cached terminals with a
-        // running tmux process, setting frame to .zero triggers SIGWINCH which
-        // causes tmux to re-render at 0 columns (single vertical line).
-        // layout() will set the correct frame once SwiftUI provides real bounds.
-        if bounds.width > 0 && bounds.height > 0 {
-            let inset = bounds.insetBy(dx: Self.terminalPadding, dy: Self.terminalPadding)
-            terminal.frame = inset
-        }
+        // Show immediately with old content — no hiding/alpha tricks.
+        // Combined with BatchedTerminalView, any tmux redraw lands as
+        // one batched update instead of visible scrolling.
         terminal.isHidden = true
         managedSessions.append(sessionName)
     }
@@ -319,13 +355,12 @@ final class TerminalContainerNSView: NSView {
         for name in managedSessions {
             let terminal = TerminalCache.shared.terminal(for: name, frame: bounds)
             let isActive = (name == sessionName)
-            terminal.isHidden = !isActive
+            if terminal.isHidden != !isActive {
+                terminal.isHidden = !isActive
+            }
             if isActive {
-                // Hide the scrollbar — we handle scrolling via tmux copy-mode
                 disableScrollbar(on: terminal)
                 if grabFocus {
-                    // Defer focus grab — at makeNSView time the view may not
-                    // be in the window hierarchy yet, so window is nil.
                     DispatchQueue.main.async { [weak self] in
                         self?.window?.makeFirstResponder(terminal)
                     }
@@ -335,8 +370,6 @@ final class TerminalContainerNSView: NSView {
     }
 
     /// Hide SwiftTerm's built-in NSScroller.
-    /// SwiftTerm adds a private `NSScroller` as a direct subview of TerminalView.
-    /// We handle scrollback via tmux copy-mode, so the native scroller is misleading.
     private func disableScrollbar(on terminal: NSView) {
         for subview in terminal.subviews {
             if let scroller = subview as? NSScroller {
@@ -346,7 +379,6 @@ final class TerminalContainerNSView: NSView {
     }
 
     /// Remove terminals whose session names are not in `keep`.
-    /// This is called when sessions are killed — terminals are fully terminated.
     func removeTerminalsNotIn(_ keep: Set<String>) {
         let toRemove = managedSessions.filter { !keep.contains($0) }
         for name in toRemove {
@@ -356,7 +388,6 @@ final class TerminalContainerNSView: NSView {
     }
 
     /// Detach all terminals from this container without terminating them.
-    /// Called when the drawer closes — terminals survive in TerminalCache.
     func detachAll() {
         for sub in subviews {
             sub.removeFromSuperview()
@@ -368,12 +399,14 @@ final class TerminalContainerNSView: NSView {
     override func layout() {
         super.layout()
         let inset = bounds.insetBy(dx: Self.terminalPadding, dy: Self.terminalPadding)
+        guard inset.width > 0, inset.height > 0 else { return }
+
         for sub in subviews {
-            sub.frame = inset
+            if sub.frame != inset {
+                sub.frame = inset
+            }
         }
-        // Start tmux attach for any terminals that were waiting for non-zero bounds.
-        // This ensures tmux sees the correct terminal size on first attach,
-        // avoiding a 0x0 → real-size SIGWINCH that clears the pane.
+
         for name in managedSessions {
             TerminalCache.shared.startProcessIfNeeded(for: name)
         }
