@@ -43,7 +43,7 @@ final class BatchedTerminalView: LocalProcessTerminalView {
 
     private static let urlRegex: NSRegularExpression? = {
         try? NSRegularExpression(
-            pattern: #"https?://[^\s<>\"'\])\}]+"#,
+            pattern: #"https?://[^\s\x00<>\"'\])\}]+"#,
             options: []
         )
     }()
@@ -144,7 +144,7 @@ final class BatchedTerminalView: LocalProcessTerminalView {
     private func detectURL(col: Int, screenRow: Int) -> (url: String, colStart: Int, colEnd: Int)? {
         guard let regex = Self.urlRegex,
               let line = terminal.getLine(row: screenRow) else { return nil }
-        let text = line.translateToString()
+        let text = line.translateToString(trimRight: true)
         let nsText = text as NSString
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
         for match in matches {
