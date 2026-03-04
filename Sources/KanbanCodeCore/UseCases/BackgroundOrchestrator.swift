@@ -113,7 +113,8 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
                                 number: pr.number, url: pr.url,
                                 status: pr.status, title: pr.title,
                                 approvalCount: pr.approvalCount > 0 ? pr.approvalCount : nil,
-                                checkRuns: pr.checkRuns.isEmpty ? nil : pr.checkRuns
+                                checkRuns: pr.checkRuns.isEmpty ? nil : pr.checkRuns,
+                                firstUnresolvedThreadURL: pr.firstUnresolvedThreadURL
                             ))
                         }
                     }

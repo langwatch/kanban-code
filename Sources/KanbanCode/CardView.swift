@@ -73,21 +73,12 @@ struct CardView: View {
 
                 // PR badge(s) — worst status across all PRs
                 if let primary = card.link.prLink {
-                    PRBadge(status: card.link.worstPRStatus, prNumber: primary.number)
+                    let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
+                    PRBadge(status: card.link.worstPRStatus, prNumber: primary.number, unresolvedThreads: totalThreads)
                     if card.link.prLinks.count > 1 {
                         Text(verbatim: "+\(card.link.prLinks.count - 1)")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
-                    }
-                    let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
-                    if totalThreads > 0 {
-                        HStack(spacing: 1) {
-                            Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
-                                .font(.system(size: 8))
-                            Text(verbatim: "\(totalThreads)")
-                                .font(.system(size: 9, weight: .medium))
-                        }
-                        .foregroundStyle(.orange)
                     }
                 }
 

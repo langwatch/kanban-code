@@ -6,15 +6,25 @@ import KanbanCodeCore
 struct PRBadge: View {
     let status: PRStatus?
     let prNumber: Int
+    var unresolvedThreads: Int = 0
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 3) {
             if status == .approved {
                 Image(systemName: "checkmark")
                     .font(.system(size: 8, weight: .bold))
             }
             Text(verbatim: "#\(prNumber)")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
+            if unresolvedThreads > 0 {
+                HStack(spacing: 1) {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 7))
+                    Text(verbatim: "\(unresolvedThreads)")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundStyle(.orange)
+            }
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 2)

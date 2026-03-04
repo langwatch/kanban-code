@@ -501,6 +501,9 @@ public final class BoardState: @unchecked Sendable {
                             mergedLinks[entry.index].prLinks[entry.prIndex].status = pr.status
                             mergedLinks[entry.index].prLinks[entry.prIndex].title = pr.title
                             mergedLinks[entry.index].prLinks[entry.prIndex].url = pr.url
+                            if pr.approvalCount > 0 {
+                                mergedLinks[entry.index].prLinks[entry.prIndex].approvalCount = pr.approvalCount
+                            }
                             KanbanCodeLog.info("refresh", "Refreshed PR #\(entry.number) → \(pr.status)")
                         }
                     }

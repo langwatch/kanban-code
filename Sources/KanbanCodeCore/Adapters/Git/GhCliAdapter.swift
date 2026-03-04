@@ -76,7 +76,7 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             \(alias): pullRequest(number: \(pr.number)) {
               body
               reviewDecision
-              reviewThreads(first: 100) { nodes { isResolved } }
+              reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { url } } } }
               reviews(states: APPROVED) { totalCount }
               commits(last: 1) { nodes { commit { statusCheckRollup {
                 state
@@ -148,10 +148,19 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
                 pr.approvalCount = totalCount
             }
 
-            // Unresolved threads
+            // Unresolved threads + first unresolved comment URL
             if let threads = prData["reviewThreads"] as? [String: Any],
                let nodes = threads["nodes"] as? [[String: Any]] {
-                pr.unresolvedThreads = nodes.filter { ($0["isResolved"] as? Bool) == false }.count
+                let unresolved = nodes.filter { ($0["isResolved"] as? Bool) == false }
+                pr.unresolvedThreads = unresolved.count
+                // Grab URL of the first unresolved thread's first comment
+                if let firstThread = unresolved.first,
+                   let comments = firstThread["comments"] as? [String: Any],
+                   let commentNodes = comments["nodes"] as? [[String: Any]],
+                   let firstComment = commentNodes.first,
+                   let url = firstComment["url"] as? String {
+                    pr.firstUnresolvedThreadURL = url
+                }
             }
 
             // CI status + individual check runs

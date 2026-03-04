@@ -157,6 +157,17 @@ struct CardDetailView: View {
 
                     // Action pills
                     HStack(spacing: 8) {
+                        // PR summary pill
+                        if let primary = card.link.prLink {
+                            prSummaryPill(primary: primary)
+                        }
+
+                        // Merge button (approved PRs only)
+                        if let primary = card.link.prLink,
+                           primary.status == .approved {
+                            mergeButton(pr: primary)
+                        }
+
                         if card.link.tmuxLink == nil {
                             let hasSession = card.link.sessionLink != nil
                             let isStart = card.column == .backlog || !hasSession
@@ -1058,6 +1069,72 @@ struct CardDetailView: View {
             KanbanCodeLog.error("detail", "PR #\(pr.number) body failed: \(error)")
         }
         isLoadingPRBody = false
+    }
+
+    @ViewBuilder
+    private func prSummaryPill(primary: PRLink) -> some View {
+        let totalApprovals = card.link.prLinks.compactMap(\.approvalCount).reduce(0, +)
+        let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
+        let targetURL = totalThreads > 0
+            ? (primary.firstUnresolvedThreadURL ?? primary.url)
+            : primary.url
+
+        if totalApprovals > 0 || totalThreads > 0 {
+            Button {
+                if let urlStr = targetURL, let url = URL(string: urlStr) {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if totalApprovals > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                            Text(verbatim: "\(totalApprovals)")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.green)
+                    }
+                    if totalThreads > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "bubble.left")
+                                .font(.system(size: 10))
+                            Text(verbatim: "\(totalThreads)")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.orange)
+                    }
+                }
+                .frame(height: 36)
+                .padding(.horizontal, 10)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular, in: .capsule)
+            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+            .modifier(HoverBrightness())
+            .help(totalThreads > 0 ? "Open unresolved comment" : "Open pull request")
+        }
+    }
+
+    @ViewBuilder
+    private func mergeButton(pr: PRLink) -> some View {
+        Button {
+            if let urlStr = pr.url, let url = URL(string: urlStr) {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            Label("Merge", systemImage: "arrow.triangle.merge")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.green.opacity(0.8))
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(Color.green.opacity(0.08), in: Capsule())
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+        .buttonStyle(HoverFeedbackStyle())
+        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .help("Merge pull request")
     }
 
     private var actionsMenuButton: some View {
