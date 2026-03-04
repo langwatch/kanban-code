@@ -15,7 +15,7 @@ public struct PullRequest: Identifiable, Sendable {
     public var approvalCount: Int
     public var checkRuns: [CheckRun]
     public var firstUnresolvedThreadURL: String?
-    public var mergeStateStatus: String? // MERGEABLE, BLOCKED, DIRTY, BEHIND, DRAFT, UNSTABLE, HAS_HOOKS, UNKNOWN
+    public var mergeStateStatus: String? // CLEAN, BLOCKED, DIRTY, BEHIND, DRAFT, UNSTABLE, HAS_HOOKS, UNKNOWN
 
     public init(
         number: Int,

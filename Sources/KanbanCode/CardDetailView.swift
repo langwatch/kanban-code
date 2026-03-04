@@ -150,6 +150,7 @@ struct CardDetailView: View {
                         .font(.headline)
                         .textCase(nil)
                         .lineLimit(2)
+                        .layoutPriority(0)
 
                     if card.link.cardLabel == .session {
                         Text(card.relativeTime)
@@ -157,7 +158,7 @@ struct CardDetailView: View {
                             .foregroundStyle(.tertiary)
                     }
 
-                    Spacer()
+                    Spacer(minLength: 8)
 
                     // Action pills
                     HStack(spacing: 8) {
@@ -212,6 +213,7 @@ struct CardDetailView: View {
                             .modifier(HoverBrightness())
                             .help("More actions")
                     }
+                    .fixedSize()
                 }
 
                 // Badge row (only when not a session — sessions show clawd icon on the ID row)
@@ -1124,7 +1126,7 @@ struct CardDetailView: View {
 
     private var isMergeable: Bool {
         guard let ms = card.link.prLink?.mergeStateStatus?.uppercased() else { return false }
-        return ms == "MERGEABLE" || ms == "UNSTABLE" || ms == "HAS_HOOKS"
+        return ms == "CLEAN" || ms == "UNSTABLE" || ms == "HAS_HOOKS"
     }
 
     private var isMergeLoading: Bool {
