@@ -112,18 +112,25 @@ public enum RemoteShellManager {
         fi
     }
 
+    # Run a command with a timeout (macOS-compatible, no GNU coreutils needed)
+    # Usage: run_with_timeout <seconds> <command...>
+    run_with_timeout() {
+        local secs="$1"; shift
+        /usr/bin/perl -e 'alarm shift @ARGV; exec @ARGV' "$secs" "$@"
+    }
+
     # Check if remote is reachable (fast check with hard timeout)
     is_remote_available() {
         # First check if control socket exists but is stale
         local socket="/tmp/ssh-kanban-code-${REMOTE_HOST}:22"
         if [[ -S "$socket" ]]; then
             # Test if socket is alive, remove if stale
-            if ! timeout 1 /usr/bin/ssh -o ControlPath="$socket" -O check "$REMOTE_HOST" 2>/dev/null; then
+            if ! run_with_timeout 1 /usr/bin/ssh -o ControlPath="$socket" -O check "$REMOTE_HOST" 2>/dev/null; then
                 /bin/rm -f "$socket" 2>/dev/null
             fi
         fi
         # Plain SSH check without ControlMaster (ControlMaster=auto can hang when creating socket)
-        timeout 5 /usr/bin/ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_HOST" "exit 0" 2>/dev/null
+        run_with_timeout 5 /usr/bin/ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_HOST" "exit 0" 2>/dev/null
     }
 
     # Parse flags - Claude Code sends: -c -l "command"
