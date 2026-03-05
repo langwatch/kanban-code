@@ -361,14 +361,14 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
 
     /// Fetch GitHub issues matching a filter query.
     public func fetchIssues(repoRoot: String, filter: String) async throws -> [GitHubIssue] {
+        let filterArgs = filter.split(separator: " ").map(String.init)
         let result = try await ShellCommand.run(
             ghPath,
             arguments: [
                 "search", "issues", "--match", "title,body",
                 "--json", "number,title,body,url,labels",
                 "--limit", "25",
-                filter,
-            ],
+            ] + filterArgs,
             currentDirectory: repoRoot
         )
 
