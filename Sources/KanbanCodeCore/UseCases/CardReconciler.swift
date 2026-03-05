@@ -390,16 +390,23 @@ public enum CardReconciler {
         }
 
         // 2. Match by worktree branch (session has gitBranch matching a card's worktreeLink)
+        //    Must also match project path to avoid cross-project matches on common branches like "main"
         if let branch = session.gitBranch {
             let baseName = branch.replacingOccurrences(of: "refs/heads/", with: "")
             if let cardIds = cardIdsByBranch[baseName] {
+                let sameProject = cardIds.filter { cardId in
+                    guard let link = linksById[cardId] else { return false }
+                    guard let sessionPath = session.projectPath else { return true }
+                    return link.projectPath == sessionPath
+                        || isWorktreeUnder(sessionPath: sessionPath, projectRoot: link.projectPath)
+                }
                 // Prefer cards that don't already have a session (pending cards)
-                let pendingCards = cardIds.filter { linksById[$0]?.sessionLink == nil }
+                let pendingCards = sameProject.filter { linksById[$0]?.sessionLink == nil }
                 if let cardId = pendingCards.first {
                     KanbanCodeLog.info("reconciler", "findCard: session=\(session.id.prefix(8)) matched by branch=\(baseName) → card=\(cardId.prefix(12))")
                     return cardId
                 }
-                if let cardId = cardIds.first {
+                if let cardId = sameProject.first {
                     KanbanCodeLog.info("reconciler", "findCard: session=\(session.id.prefix(8)) matched by branch=\(baseName) (existing) → card=\(cardId.prefix(12))")
                     return cardId
                 }
