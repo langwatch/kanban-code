@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.16](https://github.com/langwatch/kanban-code/compare/v0.1.15...v0.1.16) (2026-03-05)
+
+
+### Features
+
+* add pushoverEnabled toggle to disable Pushover without deleting keys ([93083e8](https://github.com/langwatch/kanban-code/commit/93083e80de03a978ce68c559eb099eae4f5b121e))
+* improve search relevance with word-start scoring, fuzzy initials, and recency boost ([2695a18](https://github.com/langwatch/kanban-code/commit/2695a185e91fd346a902b96220ecc6bf9fd07b1a))
+
+
+### Bug Fixes
+
+* relocate session file on resume when worktree was cleaned up ([9a33395](https://github.com/langwatch/kanban-code/commit/9a333952f9f4b1783ceb9555a43cd0c43f6398bc))
+
 ## [0.1.15](https://github.com/langwatch/kanban-code/compare/v0.1.14...v0.1.15) (2026-03-05)
 
 
