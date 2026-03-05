@@ -8,6 +8,7 @@ struct OnboardingWizard: View {
     @State private var currentStep = 0
     @State private var status: DependencyChecker.Status?
     @State private var hookError: String?
+    @State private var pushoverEnabled = false
     @State private var pushoverToken = ""
     @State private var pushoverUserKey = ""
     @State private var testSending = false
@@ -360,53 +361,51 @@ struct OnboardingWizard: View {
 
                 statusCheckRow("macOS Notifications", done: true)
 
-                Text("Pushover (optional — for mobile push notifications)")
-                    .font(.app(.callout))
-                    .fontWeight(.medium)
-                    .padding(.top, 4)
+                Toggle("Enable Pushover (mobile push notifications)", isOn: $pushoverEnabled)
 
-                TextField("App Token", text: $pushoverToken)
-                    .textFieldStyle(.roundedBorder)
-                TextField("User Key", text: $pushoverUserKey)
-                    .textFieldStyle(.roundedBorder)
+                if pushoverEnabled {
+                    TextField("App Token", text: $pushoverToken)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("User Key", text: $pushoverUserKey)
+                        .textFieldStyle(.roundedBorder)
 
-                HStack {
-                    Button {
-                        testPushover()
-                    } label: {
-                        HStack(spacing: 4) {
-                            if testSending {
-                                ProgressView().controlSize(.mini)
-                            } else {
-                                Image(systemName: "play.circle")
+                    HStack {
+                        Button {
+                            testPushover()
+                        } label: {
+                            HStack(spacing: 4) {
+                                if testSending {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    Image(systemName: "play.circle")
+                                }
+                                Text("Send Test")
                             }
-                            Text("Send Test")
+                        }
+                        .controlSize(.small)
+                        .disabled(pushoverToken.isEmpty || pushoverUserKey.isEmpty || testSending)
+
+                        if let testResult {
+                            Text(testResult)
+                                .font(.app(.caption))
+                                .foregroundStyle(testResult.contains("Sent") ? .green : .red)
                         }
                     }
-                    .controlSize(.small)
-                    .disabled(pushoverToken.isEmpty || pushoverUserKey.isEmpty || testSending)
 
-                    if let testResult {
-                        Text(testResult)
-                            .font(.app(.caption))
-                            .foregroundStyle(testResult.contains("Sent") ? .green : .red)
-                    }
-                }
-
-                Text("Skip this step to use macOS notifications only.")
-                    .font(.app(.caption))
-                    .foregroundStyle(.tertiary)
-
-                Divider()
-                    .padding(.vertical, 4)
-
-                Toggle("Render full output as markdown image", isOn: $renderMarkdownImage)
-                    .disabled(pushoverToken.isEmpty || pushoverUserKey.isEmpty)
-
-                if pushoverToken.isEmpty || pushoverUserKey.isEmpty {
-                    Text("Enter Pushover credentials above to enable this option.")
+                    Text("Get your keys at pushover.net")
                         .font(.app(.caption))
                         .foregroundStyle(.tertiary)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Toggle("Render full output as markdown image", isOn: $renderMarkdownImage)
+                        .disabled(pushoverToken.isEmpty || pushoverUserKey.isEmpty)
+
+                    if pushoverToken.isEmpty || pushoverUserKey.isEmpty {
+                        Text("Enter Pushover credentials above to enable this option.")
+                            .font(.app(.caption))
+                            .foregroundStyle(.tertiary)
                 } else if renderMarkdownImage {
                     Group {
                         statusCheckRow("pandoc", done: status?.pandocAvailable ?? false)
@@ -433,11 +432,13 @@ struct OnboardingWizard: View {
 
                     recheckButton
                 }
+                } // end if pushoverEnabled
             }
             .padding(24)
         }
         .task {
             if let settings = try? await settingsStore.read() {
+                pushoverEnabled = settings.notifications.pushoverEnabled
                 pushoverToken = settings.notifications.pushoverToken ?? ""
                 pushoverUserKey = settings.notifications.pushoverUserKey ?? ""
                 renderMarkdownImage = settings.notifications.renderMarkdownImage
@@ -446,6 +447,7 @@ struct OnboardingWizard: View {
         .onDisappear {
             Task {
                 var settings = (try? await settingsStore.read()) ?? Settings()
+                settings.notifications.pushoverEnabled = pushoverEnabled
                 settings.notifications.pushoverToken = pushoverToken.isEmpty ? nil : pushoverToken
                 settings.notifications.pushoverUserKey = pushoverUserKey.isEmpty ? nil : pushoverUserKey
                 settings.notifications.renderMarkdownImage = renderMarkdownImage

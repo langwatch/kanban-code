@@ -378,6 +378,7 @@ struct AmphetamineSettingsView: View {
 // MARK: - Notifications
 
 struct NotificationSettingsView: View {
+    @State private var pushoverEnabled = false
     @State private var pushoverToken = ""
     @State private var pushoverUserKey = ""
     @State private var renderMarkdownImage = false
@@ -391,17 +392,22 @@ struct NotificationSettingsView: View {
     private let settingsStore = SettingsStore()
 
     private var pushoverConfigured: Bool {
-        !pushoverToken.isEmpty && !pushoverUserKey.isEmpty
+        pushoverEnabled && !pushoverToken.isEmpty && !pushoverUserKey.isEmpty
     }
 
     var body: some View {
         Form {
             Section("Pushover") {
+                Toggle("Enable Pushover notifications", isOn: $pushoverEnabled)
+                    .onChange(of: pushoverEnabled) { scheduleSave() }
+
                 TextField("App Token", text: $pushoverToken)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(!pushoverEnabled)
                     .onChange(of: pushoverToken) { scheduleSave() }
                 TextField("User Key", text: $pushoverUserKey)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(!pushoverEnabled)
                     .onChange(of: pushoverUserKey) { scheduleSave() }
 
                 HStack {
@@ -501,6 +507,7 @@ struct NotificationSettingsView: View {
     private func loadSettings() async {
         do {
             let settings = try await settingsStore.read()
+            pushoverEnabled = settings.notifications.pushoverEnabled
             pushoverToken = settings.notifications.pushoverToken ?? ""
             pushoverUserKey = settings.notifications.pushoverUserKey ?? ""
             renderMarkdownImage = settings.notifications.renderMarkdownImage
@@ -516,6 +523,7 @@ struct NotificationSettingsView: View {
             guard !Task.isCancelled else { return }
             do {
                 var settings = try await settingsStore.read()
+                settings.notifications.pushoverEnabled = pushoverEnabled
                 settings.notifications.pushoverToken = pushoverToken.isEmpty ? nil : pushoverToken
                 settings.notifications.pushoverUserKey = pushoverUserKey.isEmpty ? nil : pushoverUserKey
                 settings.notifications.renderMarkdownImage = renderMarkdownImage

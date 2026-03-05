@@ -137,7 +137,8 @@ struct ContentView: View {
             return nil
         }
 
-        guard let token = settings.notifications.pushoverToken,
+        guard settings.notifications.pushoverEnabled,
+              let token = settings.notifications.pushoverToken,
               let user = settings.notifications.pushoverUserKey,
               !token.isEmpty, !user.isEmpty else {
             return nil

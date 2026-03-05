@@ -47,7 +47,7 @@ public enum DependencyChecker {
         if let settings = try? await settingsStore.read() {
             let token = settings.notifications.pushoverToken ?? ""
             let user = settings.notifications.pushoverUserKey ?? ""
-            pushover = !token.isEmpty && !user.isEmpty
+            pushover = settings.notifications.pushoverEnabled && !token.isEmpty && !user.isEmpty
         } else {
             pushover = false
         }

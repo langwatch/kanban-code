@@ -107,11 +107,13 @@ public struct GitHubSettings: Codable, Sendable {
 }
 
 public struct NotificationSettings: Codable, Sendable {
+    public var pushoverEnabled: Bool
     public var pushoverToken: String?
     public var pushoverUserKey: String?
     public var renderMarkdownImage: Bool
 
-    public init(pushoverToken: String? = nil, pushoverUserKey: String? = nil, renderMarkdownImage: Bool = false) {
+    public init(pushoverEnabled: Bool = false, pushoverToken: String? = nil, pushoverUserKey: String? = nil, renderMarkdownImage: Bool = false) {
+        self.pushoverEnabled = pushoverEnabled
         self.pushoverToken = pushoverToken
         self.pushoverUserKey = pushoverUserKey
         self.renderMarkdownImage = renderMarkdownImage
@@ -119,6 +121,7 @@ public struct NotificationSettings: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        pushoverEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? false
         pushoverToken = try c.decodeIfPresent(String.self, forKey: .pushoverToken)
         pushoverUserKey = try c.decodeIfPresent(String.self, forKey: .pushoverUserKey)
         renderMarkdownImage = try c.decodeIfPresent(Bool.self, forKey: .renderMarkdownImage) ?? false
