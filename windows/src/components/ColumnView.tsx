@@ -60,12 +60,7 @@ export default function ColumnView({ column }: { column: KanbanColumn }) {
       >
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => (
-            <div
-              key={card.id}
-              style={{ transition: "transform 0.2s ease, opacity 0.2s ease" }}
-            >
-              <CardView card={card} />
-            </div>
+            <CardView key={card.id} card={card} />
           ))}
         </SortableContext>
 

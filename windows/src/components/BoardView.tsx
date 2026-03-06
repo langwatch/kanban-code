@@ -3,6 +3,7 @@ import {
   PointerSensor, useSensor, useSensors, closestCenter,
   type DropAnimation, defaultDropAnimationSideEffects,
 } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import { useState } from "react";
 import { useBoardStore } from "../store/boardStore";
 import { COLUMNS, type CardDto, type KanbanColumn } from "../types";
@@ -19,7 +20,7 @@ const dropAnimation: DropAnimation = {
 };
 
 export default function BoardView() {
-  const { moveCard, isLoading, cards, setNewTaskOpen } = useBoardStore();
+  const { moveCard, reorderCards, isLoading, cards, setNewTaskOpen } = useBoardStore();
   const [draggingCard, setDraggingCard] = useState<CardDto | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
@@ -36,9 +37,43 @@ export default function BoardView() {
     setDraggingCard(null);
     const { active, over } = event;
     if (!over) return;
-    const card = active.data.current as CardDto;
-    if (card.link.column !== over.id) {
-      moveCard(active.id as string, over.id as KanbanColumn);
+
+    const activeCard = active.data.current as CardDto;
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    if (activeId === overId) return;
+
+    // Dropped on a column droppable → cross-column move
+    if (COLUMNS.includes(overId as KanbanColumn)) {
+      const targetColumn = overId as KanbanColumn;
+      if (activeCard.link.column !== targetColumn) {
+        moveCard(activeId, targetColumn);
+      }
+      return;
+    }
+
+    // Dropped on another card
+    const overCard = over.data.current as CardDto;
+    if (!overCard) return;
+
+    if (activeCard.link.column === overCard.link.column) {
+      // Same column → reorder
+      const column = activeCard.link.column;
+      const columnCards = useBoardStore.getState().cardsInColumn(column);
+      const oldIndex = columnCards.findIndex((c) => c.id === activeId);
+      const newIndex = columnCards.findIndex((c) => c.id === overId);
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const newOrder = arrayMove(
+          columnCards.map((c) => c.id),
+          oldIndex,
+          newIndex
+        );
+        reorderCards(column, newOrder);
+      }
+    } else {
+      // Cross-column: move to the target card's column
+      moveCard(activeId, overCard.link.column);
     }
   };
 

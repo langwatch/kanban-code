@@ -1,4 +1,4 @@
-import { useDraggable } from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
 import { useBoardStore } from "../store/boardStore";
@@ -16,12 +16,19 @@ export default function CardView({ card, isDragging = false }: Props) {
   const { theme } = useTheme();
   const c = t(theme);
 
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging: isSortDragging,
+  } = useSortable({
     id: card.id,
     data: card,
   });
 
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isSortDragging ? 0.4 : undefined,
+    zIndex: isSortDragging ? 50 : undefined,
+  };
 
   const isSelected = selectedCardId === card.id;
   const hasPR = card.link.prLinks.length > 0;
