@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capabilities for Kanban Code","local":true,"windows":["main"],"permissions":["core:default","core:tray:allow-new","core:tray:allow-set-icon","core:tray:allow-set-menu","core:tray:allow-set-visible","core:tray:allow-set-tooltip","core:menu:allow-new","core:menu:allow-append","notification:default","notification:allow-request-permission","notification:allow-notify","notification:allow-show","shell:default","shell:allow-open"]}}
