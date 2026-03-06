@@ -6,6 +6,11 @@ import SearchOverlay from "./components/SearchOverlay";
 import SettingsView from "./components/SettingsView";
 import { initBoardEventListener, useBoardStore } from "./store/boardStore";
 
+// Detect macOS for keyboard shortcut display
+const isMac =
+  typeof navigator !== "undefined" &&
+  /mac/i.test(navigator.platform || navigator.userAgent);
+
 export default function App() {
   const {
     selectedCardId,
@@ -61,7 +66,7 @@ export default function App() {
               <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <span>Search</span>
-            <kbd className="ml-1 px-1 py-0.5 rounded bg-[#2a2a32] text-[10px] text-zinc-500">⌘K</kbd>
+            <kbd className="ml-1 px-1 py-0.5 rounded bg-[#2a2a32] text-[10px] text-zinc-500">{isMac ? "⌘K" : "Ctrl+K"}</kbd>
           </button>
           <button
             onClick={() => setSettingsOpen(!settingsOpen)}

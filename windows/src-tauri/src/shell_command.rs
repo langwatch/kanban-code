@@ -9,14 +9,26 @@ pub fn is_wsl() -> bool {
 
 /// Launch a brand-new Claude CLI session for a prompt in a given project dir.
 ///
-/// The command run is: `cd <project> && claude '<prompt>'`
-/// The card's `is_launching` flag should be set before calling this so the
-/// spinner shows while the session is starting.
+/// On WSL/Linux: `cd '<project>' && claude '<prompt>'` via bash
+/// On Windows:   `cd /d "C:\project" && claude "prompt"` via cmd.exe
 pub async fn launch_new_claude_session(prompt: &str, project: &str) -> Result<()> {
-    // Escape single quotes in prompt for shell safety
-    let safe_prompt = prompt.replace('\'', "'\\''");
-    let command = format!("cd '{}' && claude '{}'", project, safe_prompt);
-    launch_terminal_command(&command).await
+    #[cfg(target_os = "windows")]
+    {
+        // cmd.exe syntax: double-quote the path and prompt, escape internal quotes
+        let safe_project = project.replace('"', "\"\"");
+        let safe_prompt = prompt.replace('"', "\"\"");
+        let command = format!("cd /d \"{}\" && claude \"{}\"", safe_project, safe_prompt);
+        return launch_terminal_command(&command).await;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // bash syntax: single-quote the path and prompt
+        let safe_project = project.replace('\'', "'\\''");
+        let safe_prompt = prompt.replace('\'', "'\\''");
+        let command = format!("cd '{}' && claude '{}'", safe_project, safe_prompt);
+        launch_terminal_command(&command).await
+    }
 }
 
 /// Launch a Claude CLI session resume in a new terminal window.

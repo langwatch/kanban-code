@@ -20,9 +20,28 @@ pub struct Issue {
     pub body: Option<String>,
 }
 
+/// Resolve the `gh` binary name. On WSL, fall back to `gh.exe` if `gh` is not
+/// available in the WSL PATH (common when gh is installed on the Windows side only).
+fn gh_bin() -> &'static str {
+    #[cfg(not(target_os = "windows"))]
+    if crate::shell_command::is_wsl() {
+        // Check if `gh` exists in WSL PATH; if not, use `gh.exe`
+        if std::process::Command::new("which")
+            .arg("gh")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return "gh";
+        }
+        return "gh.exe";
+    }
+    "gh"
+}
+
 /// Fetch open pull requests for the given repo root using `gh pr list`.
 pub async fn fetch_prs(repo_root: &str) -> Result<Vec<PullRequest>> {
-    let output = tokio::process::Command::new("gh")
+    let output = tokio::process::Command::new(gh_bin())
         .args([
             "pr",
             "list",
@@ -59,7 +78,7 @@ pub async fn fetch_prs(repo_root: &str) -> Result<Vec<PullRequest>> {
 
 /// Fetch issues matching a filter using `gh issue list`.
 pub async fn fetch_issues(repo_root: &str, filter: &str) -> Result<Vec<Issue>> {
-    let output = tokio::process::Command::new("gh")
+    let output = tokio::process::Command::new(gh_bin())
         .args([
             "issue",
             "list",

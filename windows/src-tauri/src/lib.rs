@@ -330,7 +330,6 @@ fn start_pr_polling(app: tauri::AppHandle) {
                                         *existing = pr_link;
                                     } else {
                                         link.pr_links.push(pr_link);
-                                        changed = true;
                                     }
                                     changed = true;
                                 }

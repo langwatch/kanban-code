@@ -23,6 +23,7 @@ export const COLUMNS: KanbanColumn[] = [
   "requires_attention",
   "in_review",
   "done",
+  "all_sessions",
 ];
 
 export interface SessionLink {

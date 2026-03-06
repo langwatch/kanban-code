@@ -1,6 +1,6 @@
-use crate::coordination_store::{IssueLink, Link, SessionLink, WorktreeLink};
+use crate::coordination_store::{Link, SessionLink, WorktreeLink};
 use crate::session_discovery::Session;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Port of CardReconciler.swift.
