@@ -702,9 +702,19 @@ struct ProjectsSettingsView: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 } else {
-                    ForEach(projects) { project in
-                        projectRow(project)
+                    List {
+                        ForEach(projects) { project in
+                            projectRow(project)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                        }
+                        .onMove { source, destination in
+                            projects.move(fromOffsets: source, toOffset: destination)
+                            Task { try? await settingsStore.reorderProjects(projects) }
+                        }
                     }
+                    .listStyle(.plain)
+                    .scrollDisabled(true)
+                    .frame(maxHeight: .infinity)
                 }
 
                 Button("Add Project...") {

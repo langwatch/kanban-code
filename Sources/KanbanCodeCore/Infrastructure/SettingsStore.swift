@@ -227,6 +227,13 @@ public actor SettingsStore {
         settings.projects.removeAll { $0.path == path }
         try write(settings)
     }
+
+    /// Save the reordered projects list.
+    public func reorderProjects(_ projects: [Project]) throws {
+        var settings = try read()
+        settings.projects = projects
+        try write(settings)
+    }
 }
 
 public enum SettingsError: LocalizedError {
