@@ -21,11 +21,13 @@ interface BoardStore {
   lastRefresh: string | null;
   error: string | null;
   selectedProjectPath: string | null;
+  columnOrder: Record<string, string[]>;
 
   // Actions
   refresh: () => Promise<void>;
   selectCard: (id: string | null) => void;
   moveCard: (cardId: string, column: KanbanColumn) => Promise<void>;
+  reorderCards: (column: KanbanColumn, orderedIds: string[]) => void;
   deleteCard: (cardId: string) => Promise<void>;
   archiveCard: (cardId: string) => Promise<void>;
   renameCard: (cardId: string, name: string) => Promise<void>;
@@ -56,6 +58,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   lastRefresh: null,
   error: null,
   selectedProjectPath: null,
+  columnOrder: {},
 
   refresh: async () => {
     set({ isLoading: true, error: null });
@@ -86,6 +89,12 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
       set({ error: String(e) });
       get().refresh();
     }
+  },
+
+  reorderCards: (column, orderedIds) => {
+    set((state) => ({
+      columnOrder: { ...state.columnOrder, [column]: orderedIds },
+    }));
   },
 
   deleteCard: async (cardId) => {
@@ -146,8 +155,8 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   clearError: () => set({ error: null }),
 
   cardsInColumn: (column) => {
-    const { cards, selectedProjectPath } = get();
-    return cards
+    const { cards, selectedProjectPath, columnOrder } = get();
+    const filtered = cards
       .filter((c) => c.link.column === column)
       .filter((c) => {
         if (!selectedProjectPath) return true;
@@ -158,12 +167,30 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
           cardPath.startsWith(selectedProjectPath + "/") ||
           cardPath.startsWith(selectedProjectPath + "\\")
         );
-      })
-      .sort((a, b) => {
+      });
+
+    const order = columnOrder[column];
+    if (order && order.length > 0) {
+      const orderMap = new Map(order.map((id, idx) => [id, idx]));
+      return filtered.sort((a, b) => {
+        const ia = orderMap.get(a.id);
+        const ib = orderMap.get(b.id);
+        // Cards with stored order come first, in their stored positions
+        if (ia !== undefined && ib !== undefined) return ia - ib;
+        if (ia !== undefined) return -1;
+        if (ib !== undefined) return 1;
+        // Fallback: newest first
         const ta = a.link.lastActivity ?? a.link.updatedAt;
         const tb = b.link.lastActivity ?? b.link.updatedAt;
         return tb.localeCompare(ta);
       });
+    }
+
+    return filtered.sort((a, b) => {
+      const ta = a.link.lastActivity ?? a.link.updatedAt;
+      const tb = b.link.lastActivity ?? b.link.updatedAt;
+      return tb.localeCompare(ta);
+    });
   },
 
   selectedCard: () => {
