@@ -27,16 +27,16 @@ pub async fn launch_new_claude_session(prompt: &str, project: &str) -> Result<()
             let linux_path = unc_to_linux_path(project);
             let safe_project = linux_path.replace('\'', "'\\''");
             let safe_prompt = prompt.replace('\'', "'\\''");
-            let wsl_cmd = format!("cd '{}' && claude '{}'", safe_project, safe_prompt);
+            let wsl_cmd = format!("source ~/.bashrc 2>/dev/null; cd '{}' && claude '{}'", safe_project, safe_prompt);
 
             let wt = tokio::process::Command::new("wt")
-                .args(["new-tab", "wsl.exe", "--", "bash", "-lic", &wsl_cmd])
+                .args(["new-tab", "wsl.exe", "--", "bash", "-ic", &wsl_cmd])
                 .spawn();
             if wt.is_ok() {
                 return Ok(());
             }
             let cmd = tokio::process::Command::new("cmd")
-                .args(["/c", "start", "wsl.exe", "--", "bash", "-lic", &wsl_cmd])
+                .args(["/c", "start", "wsl.exe", "--", "bash", "-ic", &wsl_cmd])
                 .spawn();
             if cmd.is_ok() {
                 return Ok(());
@@ -87,17 +87,17 @@ fn unc_to_linux_path(path: &str) -> String {
 pub async fn launch_claude_session(session_id: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // Try launching via WSL in Windows Terminal first
-        let wsl_cmd = format!("claude --resume {}", session_id);
+        // Source bashrc to get PATH, then run claude
+        let wsl_cmd = format!("source ~/.bashrc 2>/dev/null; claude --resume {}", session_id);
         let wt = tokio::process::Command::new("wt")
-            .args(["new-tab", "wsl.exe", "--", "bash", "-lic", &wsl_cmd])
+            .args(["new-tab", "wsl.exe", "--", "bash", "-ic", &wsl_cmd])
             .spawn();
         if wt.is_ok() {
             return Ok(());
         }
         // Fallback: cmd start with wsl
         let cmd = tokio::process::Command::new("cmd")
-            .args(["/c", "start", "wsl.exe", "--", "bash", "-lic", &wsl_cmd])
+            .args(["/c", "start", "wsl.exe", "--", "bash", "-ic", &wsl_cmd])
             .spawn();
         if cmd.is_ok() {
             return Ok(());
@@ -224,18 +224,24 @@ pub async fn open_in_editor(path: &str, editor: Option<&str>) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // If the path is a WSL UNC path, convert to wsl:// URI for editors that support it,
-        // or try launching through wsl.exe
+        // Build a list of editor commands to try, with full paths for known editors
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let cursor_full = format!(r"{}\Programs\cursor\resources\app\bin\cursor.cmd", localappdata);
+        let code_full = format!(r"{}\Programs\Microsoft VS Code\bin\code.cmd", localappdata);
+
+        let mut editors_to_try: Vec<String> = Vec::new();
+        if editor_cmd != "code" && editor_cmd != "cursor" {
+            editors_to_try.push(editor_cmd.to_string());
+        }
+        editors_to_try.push(cursor_full);
+        editors_to_try.push("cursor".to_string());
+        editors_to_try.push(code_full);
+        editors_to_try.push("code".to_string());
+
         let is_wsl_path = path.starts_with("\\\\wsl") || path.contains("\\wsl$\\") || path.contains("\\wsl.localhost\\");
 
         if is_wsl_path {
             let linux_path = unc_to_linux_path(path);
-            // Try editors in order: configured editor, cursor, code
-            let editors_to_try: Vec<&str> = if editor_cmd != "code" && editor_cmd != "cursor" {
-                vec![editor_cmd, "cursor", "code"]
-            } else {
-                vec!["cursor", "code"]
-            };
             for ed in &editors_to_try {
                 // Editors like Cursor/VS Code handle WSL paths via: cursor --remote wsl+Ubuntu <path>
                 let result = tokio::process::Command::new(ed)
@@ -244,23 +250,10 @@ pub async fn open_in_editor(path: &str, editor: Option<&str>) -> Result<()> {
                 if result.is_ok() {
                     return Ok(());
                 }
-                // Try with .cmd extension (WSL PATH compatibility)
-                let cmd_variant = format!("{}.cmd", ed);
-                let result2 = tokio::process::Command::new(&cmd_variant)
-                    .args(["--remote", "wsl+Ubuntu", &linux_path])
-                    .spawn();
-                if result2.is_ok() {
-                    return Ok(());
-                }
             }
         }
 
         // Non-WSL path or WSL editors failed: try plain open
-        let editors_to_try: Vec<&str> = if editor_cmd != "code" && editor_cmd != "cursor" {
-            vec![editor_cmd, "cursor", "code"]
-        } else {
-            vec!["cursor", "code"]
-        };
         for ed in &editors_to_try {
             if tokio::process::Command::new(ed).arg(path).spawn().is_ok() {
                 return Ok(());

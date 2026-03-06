@@ -63,7 +63,9 @@ export default function CardDetailView() {
 
   // Build the command to resume a Claude session via WSL
   const buildResumeCommand = (): string[] => {
-    return ["wsl.exe", "--", "bash", "-lic", `claude --resume ${sessionId}`];
+    // Use -ic (interactive, not login) to avoid broken login profile scripts
+    // Source .bashrc explicitly to get PATH with claude CLI
+    return ["wsl.exe", "--", "bash", "-ic", `source ~/.bashrc 2>/dev/null; claude --resume ${sessionId}`];
   };
 
   const handleStartTerminal = () => {
