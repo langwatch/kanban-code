@@ -7,16 +7,32 @@ pub fn is_wsl() -> bool {
         .unwrap_or(false)
 }
 
+/// Launch a brand-new Claude CLI session for a prompt in a given project dir.
+///
+/// The command run is: `cd <project> && claude '<prompt>'`
+/// The card's `is_launching` flag should be set before calling this so the
+/// spinner shows while the session is starting.
+pub async fn launch_new_claude_session(prompt: &str, project: &str) -> Result<()> {
+    // Escape single quotes in prompt for shell safety
+    let safe_prompt = prompt.replace('\'', "'\\''");
+    let command = format!("cd '{}' && claude '{}'", project, safe_prompt);
+    launch_terminal_command(&command).await
+}
+
 /// Launch a Claude CLI session resume in a new terminal window.
 ///
 /// WSL: uses `wsl.exe` to open Windows Terminal with Claude running in WSL.
 /// Fallback: tries common Linux terminal emulators.
 pub async fn launch_claude_session(session_id: &str) -> Result<()> {
     let command = format!("claude --resume {}", session_id);
+    launch_terminal_command(&command).await
+}
 
+/// Internal: open a new terminal window and run `command` inside it.
+async fn launch_terminal_command(command: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        launch_in_windows_terminal(&command).await?;
+        launch_in_windows_terminal(command).await?;
         return Ok(());
     }
 
@@ -26,14 +42,14 @@ pub async fn launch_claude_session(session_id: &str) -> Result<()> {
     if is_wsl() {
         // Try Windows Terminal (wt.exe) which is on PATH in WSL
         let wt = tokio::process::Command::new("wt.exe")
-            .args(["new-tab", "wsl.exe", "--", "bash", "-lic", &command])
+            .args(["new-tab", "wsl.exe", "--", "bash", "-lic", command])
             .spawn();
         if wt.is_ok() {
             return Ok(());
         }
         // Fall back: open a new cmd.exe window running wsl bash -c ...
         let cmd = tokio::process::Command::new("cmd.exe")
-            .args(["/c", "start", "wt.exe", "wsl.exe", "--", "bash", "-lic", &command])
+            .args(["/c", "start", "wt.exe", "wsl.exe", "--", "bash", "-lic", command])
             .spawn();
         if cmd.is_ok() {
             return Ok(());
@@ -67,9 +83,9 @@ pub async fn launch_claude_session(session_id: &str) -> Result<()> {
             "kitty",
         ] {
             let args: &[&str] = if *term == "alacritty" || *term == "kitty" {
-                &["-e", "bash", "-lic", &command]
+                &["-e", "bash", "-lic", command]
             } else {
-                &["--", "bash", "-lic", &command]
+                &["--", "bash", "-lic", command]
             };
             if tokio::process::Command::new(term).args(args).spawn().is_ok() {
                 return Ok(());
