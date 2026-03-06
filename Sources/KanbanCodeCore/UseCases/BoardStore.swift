@@ -62,14 +62,20 @@ public struct AppState: Sendable {
         cards.filter { cardMatchesProjectFilter($0) }
     }
 
-    /// Cards for a specific column, sorted by last activity (newest first).
+    /// Cards for a specific column, sorted by manual sortOrder then last activity (newest first).
     public func cards(in column: KanbanCodeColumn) -> [KanbanCodeCard] {
         filteredCards.filter { $0.column == column }
             .sorted {
-                let t0 = $0.link.lastActivity ?? $0.link.updatedAt
-                let t1 = $1.link.lastActivity ?? $1.link.updatedAt
-                if t0 != t1 { return t0 > t1 }
-                return $0.id < $1.id
+                switch ($0.link.sortOrder, $1.link.sortOrder) {
+                case (let a?, let b?): return a < b
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil):
+                    let t0 = $0.link.lastActivity ?? $0.link.updatedAt
+                    let t1 = $1.link.lastActivity ?? $1.link.updatedAt
+                    if t0 != t1 { return t0 > t1 }
+                    return $0.id < $1.id
+                }
             }
     }
 
@@ -155,6 +161,7 @@ public enum Action: Sendable {
     case moveCardToProject(cardId: String, projectPath: String)
     case markPRMerged(cardId: String, prNumber: Int)
     case mergeCards(sourceId: String, targetId: String)
+    case reorderCard(cardId: String, targetCardId: String, above: Bool)
 
     // Queued prompts
     case addQueuedPrompt(cardId: String, prompt: QueuedPrompt)
@@ -329,6 +336,8 @@ public enum Reducer {
 
         case .moveCard(let cardId, let column):
             guard var link = state.links[cardId] else { return [] }
+            // Clear sortOrder when moving to a different column
+            link.sortOrder = nil
             link.column = column
             link.manualOverrides.column = true
             if column == .allSessions {
@@ -339,6 +348,33 @@ public enum Reducer {
             link.updatedAt = .now
             state.links[cardId] = link
             return [.upsertLink(link)]
+
+        case .reorderCard(let cardId, let targetCardId, let above):
+            guard let link = state.links[cardId] else { return [] }
+            let column = link.column
+            // Get current sorted order for the column
+            var columnCards = state.cards(in: column)
+            // Remove the dragged card
+            columnCards.removeAll { $0.id == cardId }
+            // Find insertion index
+            let insertIndex: Int
+            if let targetIdx = columnCards.firstIndex(where: { $0.id == targetCardId }) {
+                insertIndex = above ? targetIdx : targetIdx + 1
+            } else {
+                insertIndex = columnCards.count
+            }
+            // Re-insert the dragged card as a placeholder (we only need the id)
+            let draggedCard = state.cards.first { $0.id == cardId }!
+            columnCards.insert(draggedCard, at: insertIndex)
+            // Assign sortOrder 0, 1, 2, ... to all cards in the column
+            var effects: [Effect] = []
+            for (i, card) in columnCards.enumerated() {
+                if state.links[card.id] != nil {
+                    state.links[card.id]!.sortOrder = i
+                    effects.append(.upsertLink(state.links[card.id]!))
+                }
+            }
+            return effects
 
         case .renameCard(let cardId, let name):
             guard var link = state.links[cardId] else { return [] }

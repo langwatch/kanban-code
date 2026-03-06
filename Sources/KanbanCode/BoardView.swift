@@ -45,6 +45,9 @@ struct BoardView: View {
                             onMergeCards: { sourceId, targetId in
                                 onMergeCards(sourceId, targetId)
                             },
+                            onReorderCard: { cardId, targetCardId, above in
+                                store.dispatch(.reorderCard(cardId: cardId, targetCardId: targetCardId, above: above))
+                            },
                             onRenameCard: { cardId, name in
                                 store.dispatch(.renameCard(cardId: cardId, name: name))
                             },

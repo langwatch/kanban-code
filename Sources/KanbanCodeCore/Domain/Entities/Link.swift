@@ -168,6 +168,10 @@ public struct Link: Identifiable, Codable, Sendable {
     /// Whether this card's project is configured for remote execution.
     public var isRemote: Bool
 
+    /// Manual sort order within a column. Cards with sortOrder are sorted by it
+    /// (lower first); cards without fall back to time-based sort.
+    public var sortOrder: Int?
+
     /// Launch lock — true while an async launch/resume is in progress.
     /// Prevents background reconciliation from overriding card state mid-launch.
     public var isLaunching: Bool?
@@ -272,6 +276,7 @@ public struct Link: Identifiable, Codable, Sendable {
         queuedPrompts: [QueuedPrompt]? = nil,
         isRemote: Bool = false,
         isLaunching: Bool? = nil,
+        sortOrder: Int? = nil,
         discoveredBranches: [String]? = nil,
         discoveredRepos: [String: String]? = nil
     ) {
@@ -294,6 +299,7 @@ public struct Link: Identifiable, Codable, Sendable {
         self.queuedPrompts = queuedPrompts
         self.isRemote = isRemote
         self.isLaunching = isLaunching
+        self.sortOrder = sortOrder
         self.discoveredBranches = discoveredBranches
         self.discoveredRepos = discoveredRepos
     }
@@ -303,7 +309,7 @@ public struct Link: Identifiable, Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         // Card-level
         case id, name, projectPath, column, createdAt, updatedAt, lastActivity
-        case manualOverrides, manuallyArchived, source, promptBody, isRemote, isLaunching
+        case manualOverrides, manuallyArchived, source, promptBody, isRemote, isLaunching, sortOrder
         case discoveredBranches, discoveredRepos
         // Typed links (new nested format)
         case sessionLink, tmuxLink, worktreeLink, prLinks, issueLink, queuedPrompts
@@ -329,6 +335,7 @@ public struct Link: Identifiable, Codable, Sendable {
         promptBody = try c.decodeIfPresent(String.self, forKey: .promptBody)
         isRemote = try c.decodeIfPresent(Bool.self, forKey: .isRemote) ?? false
         isLaunching = try c.decodeIfPresent(Bool.self, forKey: .isLaunching)
+        sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
         discoveredBranches = try c.decodeIfPresent([String].self, forKey: .discoveredBranches)
         discoveredRepos = try c.decodeIfPresent([String: String].self, forKey: .discoveredRepos)
 
@@ -410,6 +417,7 @@ public struct Link: Identifiable, Codable, Sendable {
         try c.encodeIfPresent(promptBody, forKey: .promptBody)
         try c.encode(isRemote, forKey: .isRemote)
         try c.encodeIfPresent(isLaunching, forKey: .isLaunching)
+        try c.encodeIfPresent(sortOrder, forKey: .sortOrder)
         try c.encodeIfPresent(discoveredBranches, forKey: .discoveredBranches)
         try c.encodeIfPresent(discoveredRepos, forKey: .discoveredRepos)
 
