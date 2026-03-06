@@ -8,6 +8,10 @@ class DragState {
     var sourceColumn: KanbanCodeColumn?
     /// Card ID the cursor is currently over (merge candidate).
     var mergeTargetId: String?
+    /// Drop insertion indicator for same-column reordering.
+    var reorderTargetId: String?
+    /// Whether to insert above (true) or below (false) the reorder target.
+    var reorderAbove: Bool = true
 }
 
 /// Preference key to collect card frames within a column's coordinate space.
@@ -27,6 +31,7 @@ struct DroppableColumnView: View {
     var isRefreshingBacklog: Bool = false
     var onMoveCard: (String, KanbanCodeColumn) -> Void = { _, _ in }
     var onMergeCards: (String, String) -> Void = { _, _ in }   // (sourceId, targetId)
+    var onReorderCard: (String, String, Bool) -> Void = { _, _, _ in }  // (cardId, targetCardId, above)
     var onRenameCard: (String, String) -> Void = { _, _ in }
     var onArchiveCard: (String) -> Void = { _ in }
     var onStartCard: (String) -> Void = { _ in }
@@ -54,6 +59,11 @@ struct DroppableColumnView: View {
                         guard let source = dragState.draggingCard, source.id != card.id else { return false }
                         return Link.mergeBlocked(source: source.link, target: card.link) == nil
                     }()
+
+                    // Drop indicator above this card
+                    if dragState.reorderTargetId == card.id && dragState.reorderAbove {
+                        ReorderIndicator()
+                    }
 
                     CardView(
                         card: card,
@@ -124,6 +134,11 @@ struct DroppableColumnView: View {
                                 onRenameCard(card.id, name)
                             }
                         )
+                    }
+
+                    // Drop indicator below this card
+                    if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
+                        ReorderIndicator()
                     }
                 }
 
@@ -207,10 +222,12 @@ struct DroppableColumnView: View {
             dragState: dragState,
             isTargeted: $isTargeted,
             onMoveCard: onMoveCard,
-            onMergeCards: onMergeCards
+            onMergeCards: onMergeCards,
+            onReorderCard: onReorderCard
         ))
         .animation(.easeInOut(duration: 0.15), value: isTargeted)
         .animation(.easeInOut(duration: 0.15), value: dragState.mergeTargetId)
+        .animation(.easeInOut(duration: 0.15), value: dragState.reorderTargetId)
     }
 }
 
@@ -224,20 +241,26 @@ struct ColumnDropDelegate: DropDelegate {
     @Binding var isTargeted: Bool
     let onMoveCard: (String, KanbanCodeColumn) -> Void
     let onMergeCards: (String, String) -> Void
+    let onReorderCard: (String, String, Bool) -> Void  // (cardId, targetCardId, above)
+
+    private var isSameColumn: Bool {
+        dragState.sourceColumn == column
+    }
 
     func dropEntered(info: DropInfo) {
         isTargeted = true
-        updateMergeTarget(at: info.location)
+        updateTargets(at: info.location)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        updateMergeTarget(at: info.location)
+        updateTargets(at: info.location)
         return DropProposal(operation: .move)
     }
 
     func dropExited(info: DropInfo) {
         isTargeted = false
         dragState.mergeTargetId = nil
+        dragState.reorderTargetId = nil
     }
 
     func performDrop(info: DropInfo) -> Bool {
@@ -245,6 +268,7 @@ struct ColumnDropDelegate: DropDelegate {
             dragState.draggingCard = nil
             dragState.sourceColumn = nil
             dragState.mergeTargetId = nil
+            dragState.reorderTargetId = nil
             isTargeted = false
         }
 
@@ -258,19 +282,51 @@ struct ColumnDropDelegate: DropDelegate {
             return true
         }
 
+        // Same-column reorder
+        if isSameColumn, let targetId = dragState.reorderTargetId, targetId != sourceCard.id {
+            onReorderCard(sourceCard.id, targetId, dragState.reorderAbove)
+            return true
+        }
+
         // Otherwise, column-level move
         guard let source = dragState.sourceColumn, source != column else { return false }
         onMoveCard(sourceCard.id, column)
         return true
     }
 
-    private func updateMergeTarget(at location: CGPoint) {
+    private func updateTargets(at location: CGPoint) {
         guard let source = dragState.draggingCard else {
             dragState.mergeTargetId = nil
+            dragState.reorderTargetId = nil
             return
         }
 
-        // Find the card under the cursor
+        if isSameColumn {
+            // Same-column: detect reorder position
+            updateReorderTarget(at: location, source: source)
+        } else {
+            // Cross-column: detect merge target
+            updateMergeTarget(at: location, source: source)
+        }
+    }
+
+    private func updateReorderTarget(at location: CGPoint, source: KanbanCodeCard) {
+        dragState.mergeTargetId = nil
+
+        // Find the nearest card and whether cursor is in upper or lower half
+        for (cardId, frame) in cardFrames {
+            guard cardId != source.id, frame.contains(location) else { continue }
+            let midY = frame.midY
+            dragState.reorderTargetId = cardId
+            dragState.reorderAbove = location.y < midY
+            return
+        }
+        dragState.reorderTargetId = nil
+    }
+
+    private func updateMergeTarget(at location: CGPoint, source: KanbanCodeCard) {
+        dragState.reorderTargetId = nil
+
         for (cardId, frame) in cardFrames {
             guard cardId != source.id, frame.contains(location) else { continue }
             guard let targetCard = cards.first(where: { $0.id == cardId }),
@@ -282,5 +338,25 @@ struct ColumnDropDelegate: DropDelegate {
             return
         }
         dragState.mergeTargetId = nil
+    }
+}
+
+// MARK: - Reorder Drop Indicator
+
+struct ReorderIndicator: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 6, height: 6)
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 6, height: 6)
+        }
+        .padding(.horizontal, 4)
+        .transition(.opacity)
     }
 }
