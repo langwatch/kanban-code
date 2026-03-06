@@ -1,6 +1,19 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-surface-0: #0d0d0f;
+  --color-surface-1: #141417;
+  --color-surface-2: #1c1c21;
+  --color-surface-3: #242429;
+  --color-surface-4: #2e2e35;
+  --color-border-subtle: #2a2a32;
+  --color-border: #3a3a44;
+  --color-accent-blue: #4f8ef7;
+  --color-accent-green: #3fb950;
+  --color-accent-yellow: #d29922;
+  --color-accent-red: #f85149;
+  --color-accent-purple: #a371f7;
+}
 
 @layer base {
   * {
@@ -21,7 +34,6 @@
     user-select: none;
   }
 
-  /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
