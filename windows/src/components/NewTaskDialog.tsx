@@ -6,6 +6,7 @@ export default function NewTaskDialog() {
   const [prompt, setPrompt] = useState("");
   const [title, setTitle] = useState("");
   const [project, setProject] = useState("");
+  const [launch, setLaunch] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
@@ -31,7 +32,8 @@ export default function NewTaskDialog() {
       await createCard(
         prompt.trim(),
         title.trim() || null,
-        project || "."
+        project || ".",
+        launch
       );
       setNewTaskOpen(false);
     } finally {
@@ -107,6 +109,16 @@ export default function NewTaskDialog() {
             )}
           </div>
 
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={launch}
+              onChange={(e) => setLaunch(e.target.checked)}
+              className="w-3.5 h-3.5 rounded accent-[#4f8ef7]"
+            />
+            <span className="text-xs text-zinc-400">Start immediately in terminal</span>
+          </label>
+
           <div className="flex gap-2 pt-1">
             <button
               type="button"
@@ -120,7 +132,7 @@ export default function NewTaskDialog() {
               disabled={!prompt.trim() || submitting}
               className="flex-1 py-2 rounded-lg bg-[#4f8ef7] hover:bg-[#5b97fa] disabled:opacity-40 text-white text-xs font-medium transition-colors"
             >
-              {submitting ? "Creating..." : "Create Task"}
+              {submitting ? "Creating..." : launch ? "Create & Start" : "Create Task"}
             </button>
           </div>
         </form>
