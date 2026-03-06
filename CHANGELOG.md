@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.17](https://github.com/langwatch/kanban-code/compare/v0.1.16...v0.1.17) (2026-03-06)
+
+
+### Features
+
+* add cmd+click to open URLs in history view ([1e671f4](https://github.com/langwatch/kanban-code/commit/1e671f446de1edf10b6168a0c98d5a1585a0bd40))
+* add drag-to-reorder for projects in settings ([235dcff](https://github.com/langwatch/kanban-code/commit/235dcff2f319c37d00cb03631ae973e7fbe02c13))
+* **macos:** card reordering within same column ([7045925](https://github.com/langwatch/kanban-code/commit/704592552817db678b3d9a9e076ec610e2b66834))
+* **macos:** card reordering within same column via drag-and-drop ([21695bd](https://github.com/langwatch/kanban-code/commit/21695bd71a22263821ca25680de8f994ca9ca921))
+* paste images into prompts and send them to Claude Code via tmux ([ed7a24b](https://github.com/langwatch/kanban-code/commit/ed7a24b6bc78d2b5eceb8600cb7079de9af5b082))
+
+
+### Bug Fixes
+
+* merge button toast stuck and card not moving to done ([3f5557b](https://github.com/langwatch/kanban-code/commit/3f5557b37a82b4ee2e4ca36301d36eed3a8ac57c))
+* remove terminal associations from cards when killing sessions on quit ([4d2aa74](https://github.com/langwatch/kanban-code/commit/4d2aa74c2e5f4ac1261508350e22bf0ea11b4ce0))
+* use editor CLI to open worktree folders as project root ([ce54bb1](https://github.com/langwatch/kanban-code/commit/ce54bb198145920afbd679880920ba1886ed3812))
+* use single mutagen sync session instead of one per project ([a97446c](https://github.com/langwatch/kanban-code/commit/a97446c37ae8dd8ba1871f4c267f418d36c69a8d))
+
 ## [0.1.16](https://github.com/langwatch/kanban-code/compare/v0.1.15...v0.1.16) (2026-03-05)
 
 
