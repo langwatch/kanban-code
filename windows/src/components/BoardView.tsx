@@ -126,7 +126,8 @@ export default function BoardView() {
             </p>
             <button
               onClick={() => setNewTaskOpen(true)}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#4f8ef7] hover:bg-[#5b97fa] text-white text-[13px] font-semibold transition-colors mt-2"
+              className="btn-action flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#4f8ef7] text-white text-[13px] font-semibold mt-2"
+              title="Create a new task card"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
