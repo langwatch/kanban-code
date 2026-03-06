@@ -295,7 +295,10 @@ export default function CardDetailView() {
       )}
 
       {/* Tab content */}
-      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+      <div
+        className="flex-1 overflow-hidden flex flex-col min-h-0"
+        style={{ background: activeTab === "terminal" && terminalActive ? "#0a0a0c" : undefined }}
+      >
         {activeTab === "terminal" && canTerminal && (
           terminalActive ? (
             <TerminalView
@@ -351,17 +354,18 @@ export default function CardDetailView() {
           </div>
         )}
         {activeTab === "prompt" && card.link.promptBody && (
-          <div className="overflow-y-auto flex-1 p-5">
-            <pre
-              className="text-[13px] whitespace-pre-wrap break-words leading-relaxed font-mono rounded-xl p-4"
-              style={{
-                color: c.textSecondary,
-                background: c.bgAccent("0.03"),
-                border: `1px solid ${c.border}`,
-              }}
+          <div className="overflow-y-auto flex-1 p-4">
+            <div
+              className="rounded-xl p-4"
+              style={{ background: c.bgAccent("0.03") }}
             >
-              {card.link.promptBody}
-            </pre>
+              <pre
+                className="text-[13px] whitespace-pre-wrap break-words leading-[1.65] font-mono"
+                style={{ color: c.textSecondary }}
+              >
+                {card.link.promptBody}
+              </pre>
+            </div>
           </div>
         )}
       </div>
@@ -389,39 +393,39 @@ function MetaBadge({ label, color, theme, title }: { label: string; color: strin
 function HistoryTab({ turns, transcriptPage, loading, onLoadMore }: {
   turns: Turn[]; transcriptPage: TranscriptPage | null; loading: boolean; onLoadMore: () => void;
 }) {
-  const { theme } = useTheme();
-  const c = t(theme);
-
   if (loading && turns.length === 0) {
     return (
-      <div className="flex items-center justify-center p-10">
-        <div className="flex items-center gap-2.5">
-          <div className="w-4 h-4 border-2 border-[#4f8ef7] border-t-transparent rounded-full animate-spin" />
-          <span className="text-[13px]" style={{ color: c.textMuted }}>Loading transcript...</span>
-        </div>
+      <div className="flex items-center justify-center p-12" style={{ background: "#141416" }}>
+        <div className="w-5 h-5 border-2 border-[#4f8ef7] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (turns.length === 0) {
     return (
-      <div className="flex items-center justify-center p-10 text-[13px]" style={{ color: c.textDim }}>
-        No history yet
+      <div className="flex flex-col items-center justify-center p-12 gap-2" style={{ background: "#141416" }}>
+        <svg className="w-8 h-8 text-[#555]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 0 1 1.037-.443 48.2 48.2 0 0 0 5.887-.512c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z" />
+        </svg>
+        <span className="text-[12px] text-[#555]">No conversation history</span>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col py-1">
+    <div
+      className="flex flex-col px-3 pt-2 pb-3 gap-0.5 font-mono"
+      style={{ background: "#141416" }}
+    >
       {turns.map((turn) => <TurnItem key={turn.index} turn={turn} />)}
       {transcriptPage?.hasMore && (
         <button
           onClick={onLoadMore}
           disabled={loading}
-          className="mx-4 my-3 py-2 rounded-lg text-[12px] font-medium transition-all duration-150 disabled:opacity-40"
-          style={{ border: `1px solid ${c.border}`, color: c.textMuted }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+          className="mt-2 py-2 rounded-lg text-[11px] font-mono font-medium transition-all duration-150 disabled:opacity-40"
+          style={{ color: "#666", background: "rgba(255,255,255,0.03)" }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
         >
           {loading ? "Loading..." : `Load more (${transcriptPage.totalTurns - turns.length} remaining)`}
         </button>
@@ -431,35 +435,95 @@ function HistoryTab({ turns, transcriptPage, loading, onLoadMore }: {
 }
 
 function TurnItem({ turn }: { turn: Turn }) {
-  const { theme } = useTheme();
-  const c = t(theme);
   const isUser = turn.role === "user";
+  const blocks = turn.contentBlocks;
+
   return (
     <div
-      className="px-5 py-3.5 transition-colors duration-100"
-      style={{ borderBottom: `1px solid ${c.bgAccent("0.03")}` }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = c.bgAccent("0.02"); }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+      className="rounded px-2 py-1 transition-colors duration-100"
+      style={{ background: isUser && blocks.some(b => b.kind === "text") ? "rgba(255,255,255,0.04)" : undefined }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = isUser && blocks.some(b => b.kind === "text") ? "rgba(255,255,255,0.04)" : ""; }}
     >
-      <div className="flex items-center gap-2 mb-1.5">
-        <div
-          className="w-1.5 h-1.5 rounded-full"
-          style={{ background: isUser ? "#4f8ef7" : "#3fb950" }}
-        />
-        <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: isUser ? "#4f8ef7" : "#3fb950" }}>
-          {isUser ? "You" : "Claude"}
-        </span>
-        {turn.timestamp && (
-          <span className="text-[11px] ml-auto" style={{ color: c.textDim }}>
-            {new Date(turn.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+      {blocks.length > 0 ? (
+        blocks.map((block, i) => (
+          <BlockLine key={i} block={block} isUser={isUser} isFirst={i === 0} />
+        ))
+      ) : (
+        <div className="flex gap-1.5 items-start">
+          <span className="text-[12px] leading-[1.6] shrink-0" style={{ color: isUser ? "#3fb950" : "#d4d4d4" }}>
+            {isUser ? "❯" : "●"}
           </span>
-        )}
-      </div>
-      <p className="text-[13px] leading-[1.6] line-clamp-4 pl-3.5" style={{ color: c.textSecondary }}>
-        {turn.textPreview || "(tool use)"}
-      </p>
+          <span className="text-[12px] leading-[1.6] line-clamp-6" style={{ color: isUser ? "#e4e4e7" : "rgba(220,220,220,0.85)" }}>
+            {turn.textPreview || "(empty)"}
+          </span>
+        </div>
+      )}
     </div>
   );
+}
+
+function BlockLine({ block, isUser, isFirst }: { block: { kind: string; text: string }; isUser: boolean; isFirst: boolean }) {
+  if (block.kind === "text") {
+    const trimmed = block.text.trim();
+    if (!trimmed) return null;
+    return (
+      <div className="flex gap-1.5 items-start">
+        <span className="text-[12px] leading-[1.6] shrink-0" style={{ color: isUser ? "#3fb950" : "#d4d4d4" }}>
+          {isFirst ? (isUser ? "❯" : "●") : "\u00A0\u00A0"}
+        </span>
+        <span
+          className="text-[12px] leading-[1.6]"
+          style={{
+            color: isUser ? "#e4e4e7" : "rgba(220,220,220,0.85)",
+            lineClamp: isUser ? undefined : "20",
+            display: "-webkit-box",
+            WebkitLineClamp: isUser ? undefined : 20,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {trimmed}
+        </span>
+      </div>
+    );
+  }
+
+  if (block.kind === "tool_use") {
+    const name = block.text.split("(")[0] || block.text;
+    const args = block.text.includes("(") ? block.text.slice(block.text.indexOf("(")) : "";
+    return (
+      <div className="flex gap-1.5 items-start">
+        <span className="text-[12px] leading-[1.6] shrink-0 text-[#3fb950]">{"\u00A0\u00A0●"}</span>
+        <span className="text-[12px] leading-[1.6]">
+          <span style={{ color: "rgba(63,185,80,0.8)" }}>{name}</span>
+          {args && <span className="line-clamp-2" style={{ color: "#555" }}>{args}</span>}
+        </span>
+      </div>
+    );
+  }
+
+  if (block.kind === "tool_result") {
+    return (
+      <div className="flex gap-1.5 items-start">
+        <span className="text-[12px] leading-[1.6] shrink-0" style={{ color: "#444" }}>{"\u00A0\u00A0⎿"}</span>
+        <span className="text-[12px] leading-[1.6] line-clamp-3" style={{ color: "#444" }}>
+          {block.text}
+        </span>
+      </div>
+    );
+  }
+
+  if (block.kind === "thinking") {
+    return (
+      <div className="flex gap-1.5 items-start">
+        <span className="text-[12px] leading-[1.6] shrink-0" style={{ color: "#444" }}>{"\u00A0\u00A0∴"}</span>
+        <span className="text-[12px] leading-[1.6] italic" style={{ color: "#444" }}>Thinking...</span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function ContentTab({ title, body, url }: { title: string; body?: string; url?: string }) {
@@ -474,9 +538,9 @@ function ContentTab({ title, body, url }: { title: string; body?: string; url?: 
             href={url}
             target="_blank"
             rel="noreferrer"
-            className="shrink-0 p-1 rounded-md transition-all duration-150"
+            className="shrink-0 p-1.5 rounded-lg transition-all duration-150"
             style={{ color: "#4f8ef7" }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(79,142,247,0.1)"; }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(79,142,247,0.08)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
             title="Open in browser"
           >

@@ -56,7 +56,7 @@ export default function ColumnView({ column }: { column: KanbanColumn }) {
       {/* Cards */}
       <div
         ref={setNodeRef}
-        className="flex flex-col gap-2 overflow-y-auto px-2 pb-2 flex-1 min-h-[60px]"
+        className="flex flex-col gap-2 overflow-y-auto px-2 pt-1 pb-2 flex-1 min-h-[60px]"
       >
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => (

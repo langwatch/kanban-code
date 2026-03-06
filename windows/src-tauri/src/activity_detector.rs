@@ -33,14 +33,13 @@ impl ActivityState {
 
 /// Detect session activity from JSONL mtime.
 ///
-/// Without hook events we can only approximate from file modification time.
-/// Critically, mtime alone CANNOT confirm "actively working" — a file touched
-/// 10 seconds ago might just be a session sitting at a prompt. Only hooks
-/// (UserPromptSubmit → Stop) can confirm Claude is processing.
+/// The JSONL transcript file is actively written to while Claude processes.
+/// A file modified very recently means Claude is likely generating output
+/// or running tools right now.
 ///
-/// Thresholds match the macOS poll-only path (no hooks):
-///   < 5min  → idle/waiting (session recently active, possibly at prompt)
-///   < 1hr   → needs attention (Claude likely finished, waiting for user)
+/// Thresholds:
+///   < 15s   → actively working (file being written → In Progress + spinner)
+///   < 5min  → needs attention (Claude stopped → Waiting, no spinner)
 ///   < 24h   → ended
 ///   else    → stale
 pub fn detect_activity(jsonl_path: &str) -> ActivityState {
@@ -52,11 +51,9 @@ pub fn detect_activity(jsonl_path: &str) -> ActivityState {
         .duration_since(mtime)
         .unwrap_or(Duration::MAX);
 
-    if elapsed < Duration::from_secs(5 * 60) {
-        // Recently active — but without hooks we can't confirm Claude is working.
-        // Show as idle/waiting (no spinner), matching macOS poll behaviour.
-        ActivityState::IdleWaiting
-    } else if elapsed < Duration::from_secs(3600) {
+    if elapsed < Duration::from_secs(15) {
+        ActivityState::ActivelyWorking
+    } else if elapsed < Duration::from_secs(5 * 60) {
         ActivityState::NeedsAttention
     } else if elapsed < Duration::from_secs(86400) {
         ActivityState::Ended

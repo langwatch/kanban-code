@@ -95,7 +95,7 @@ export default function TerminalView({ ptyId, command, initialInput, onExit }: P
       lineHeight: 1.3,
       cursorBlink: true,
       cursorStyle: "bar",
-      theme: theme === "dark" ? DARK_THEME : LIGHT_THEME,
+      theme: DARK_THEME,
       allowProposedApi: true,
       scrollback: 5000,
     });
@@ -174,18 +174,16 @@ export default function TerminalView({ ptyId, command, initialInput, onExit }: P
     };
   }, []); // Only mount once
 
-  // Update theme without remounting
-  useEffect(() => {
-    if (xtermRef.current) {
-      xtermRef.current.options.theme = theme === "dark" ? DARK_THEME : LIGHT_THEME;
-    }
-  }, [theme]);
 
   return (
     <div
-      ref={termRef}
-      className="flex-1 min-h-0"
-      style={{ padding: "4px", height: "100%", minHeight: 200 }}
-    />
+      className="flex-1 min-h-0 overflow-hidden m-2"
+      style={{ background: "#0a0a0c", borderRadius: "12px" }}
+    >
+      <div
+        ref={termRef}
+        style={{ padding: "8px", height: "100%", minHeight: 200 }}
+      />
+    </div>
   );
 }

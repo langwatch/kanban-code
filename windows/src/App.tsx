@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import BoardView from "./components/BoardView";
 import CardDetailView from "./components/CardDetailView";
 import NewTaskDialog from "./components/NewTaskDialog";
@@ -27,6 +27,45 @@ export default function App() {
 
   const { theme, toggle } = useTheme();
   const c = t(theme);
+  const rippleRef = useRef<HTMLDivElement>(null);
+
+  const handleThemeToggle = useCallback((e: React.MouseEvent) => {
+    const btn = e.currentTarget.getBoundingClientRect();
+    const x = btn.left + btn.width / 2;
+    const y = btn.top + btn.height / 2;
+    const maxRadius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    );
+
+    const ripple = rippleRef.current;
+    if (!ripple) { toggle(); return; }
+
+    const nextBg = theme === "dark" ? "#f5f5f7" : "#0a0a0c";
+    ripple.style.left = `${x}px`;
+    ripple.style.top = `${y}px`;
+    ripple.style.background = nextBg;
+    ripple.style.width = "0px";
+    ripple.style.height = "0px";
+    ripple.style.opacity = "1";
+    ripple.style.transform = "translate(-50%, -50%) scale(0)";
+    ripple.style.display = "block";
+
+    // Force reflow
+    ripple.offsetHeight;
+
+    ripple.style.transition = "transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease";
+    ripple.style.width = `${maxRadius * 2}px`;
+    ripple.style.height = `${maxRadius * 2}px`;
+    ripple.style.transform = "translate(-50%, -50%) scale(1)";
+
+    setTimeout(() => {
+      toggle();
+      ripple.style.transition = "opacity 0.15s ease";
+      ripple.style.opacity = "0";
+      setTimeout(() => { ripple.style.display = "none"; }, 150);
+    }, 350);
+  }, [theme, toggle]);
 
   useEffect(() => {
     refresh();
@@ -88,7 +127,7 @@ export default function App() {
 
           {/* Theme toggle */}
           <button
-            onClick={toggle}
+            onClick={handleThemeToggle}
             className="p-2 rounded-lg transition-colors"
             style={{ color: c.textMuted }}
             onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; }}
@@ -164,6 +203,19 @@ export default function App() {
           {error}
         </div>
       )}
+
+      {/* Theme ripple overlay */}
+      <div
+        ref={rippleRef}
+        style={{
+          display: "none",
+          position: "fixed",
+          borderRadius: "50%",
+          pointerEvents: "none",
+          zIndex: 9999,
+          opacity: 0,
+        }}
+      />
     </div>
   );
 }
