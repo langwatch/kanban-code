@@ -305,44 +305,32 @@ function NotificationsSection({
 }) {
   return (
     <div className="flex flex-col gap-5 max-w-lg">
-      <div className="flex items-center gap-3">
-        <label className="relative inline-flex cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.notifications.pushoverEnabled}
-            onChange={(e) =>
-              onChange({
-                ...settings,
-                notifications: {
-                  ...settings.notifications,
-                  pushoverEnabled: e.target.checked,
-                },
-              })
-            }
-            className="sr-only"
-          />
-          <div
-            className={`w-9 h-5 rounded-full transition-colors ${
-              settings.notifications.pushoverEnabled
-                ? "bg-[#4f8ef7]"
-                : "bg-[#2a2a32]"
-            }`}
-          >
-            <div
-              className={`w-4 h-4 bg-white rounded-full shadow mt-0.5 transition-transform ${
-                settings.notifications.pushoverEnabled
-                  ? "translate-x-4"
-                  : "translate-x-0.5"
-              }`}
-            />
-          </div>
-        </label>
-        <span className="text-sm text-zinc-300">Enable Pushover notifications</span>
-      </div>
+      <Toggle
+        checked={settings.notifications.notificationsEnabled}
+        onChange={(v) =>
+          onChange({
+            ...settings,
+            notifications: { ...settings.notifications, notificationsEnabled: v },
+          })
+        }
+        label="Enable OS notifications"
+        description="Show a system notification when Claude finishes a turn and needs your input"
+      />
+
+      <Toggle
+        checked={settings.notifications.pushoverEnabled}
+        onChange={(v) =>
+          onChange({
+            ...settings,
+            notifications: { ...settings.notifications, pushoverEnabled: v },
+          })
+        }
+        label="Enable Pushover notifications"
+      />
 
       {settings.notifications.pushoverEnabled && (
         <>
-          <FieldGroup label="Pushover token">
+          <FieldGroup label="Pushover token (optional — macOS app feature)">
             <input
               type="password"
               value={settings.notifications.pushoverToken ?? ""}
@@ -376,6 +364,48 @@ function NotificationsSection({
           </FieldGroup>
         </>
       )}
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+  description,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <label className="relative inline-flex cursor-pointer mt-0.5 shrink-0">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="sr-only"
+        />
+        <div
+          className={`w-9 h-5 rounded-full transition-colors ${
+            checked ? "bg-[#4f8ef7]" : "bg-[#2a2a32]"
+          }`}
+        >
+          <div
+            className={`w-4 h-4 bg-white rounded-full shadow mt-0.5 transition-transform ${
+              checked ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </div>
+      </label>
+      <div>
+        <span className="text-sm text-zinc-300">{label}</span>
+        {description && (
+          <p className="text-[11px] text-zinc-500 mt-0.5">{description}</p>
+        )}
+      </div>
     </div>
   );
 }

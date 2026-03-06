@@ -97,7 +97,12 @@ export interface Session {
   jsonlPath?: string;
 }
 
-export type ActivityState = "activelyWorking" | "waitingForInput" | "idle";
+export type ActivityState =
+  | "activelyWorking"
+  | "needsAttention"
+  | "idleWaiting"
+  | "ended"
+  | "stale";
 
 export interface CardDto {
   id: string;
@@ -133,6 +138,7 @@ export interface GitHubSettings {
 }
 
 export interface NotificationSettings {
+  notificationsEnabled: boolean;
   pushoverEnabled: boolean;
   pushoverToken?: string;
   pushoverUserKey?: string;
