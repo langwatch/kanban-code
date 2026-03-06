@@ -19,11 +19,11 @@ public final class MutagenAdapter: SyncManagerPort, @unchecked Sendable {
     }
 
     public func startSync(localPath: String, remotePath: String, name: String, ignores: [String] = MutagenAdapter.defaultIgnores) async throws {
-        // Check for existing session by name — avoids duplicates
-        // (Previous dict-based check failed when multiple sessions shared a name)
+        // Check for ANY existing kanban sync session — there should only ever be one
+        // since we use a single global remote config.
         let listResult = try? await ShellCommand.run(
             mutagenPath,
-            arguments: ["sync", "list", "--name", name]
+            arguments: ["sync", "list", "--label-selector", "\(label)=true"]
         )
         if let listResult, listResult.succeeded, listResult.stdout.contains("Name:") {
             // Already running — just flush and return

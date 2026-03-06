@@ -1639,7 +1639,7 @@ struct ContentView: View {
                     extraEnv = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
                     isRemote = true
 
-                    let syncName = "kanban-code-\((projectPath as NSString).lastPathComponent)"
+                    let syncName = "kanban-code-sync"
                     let remoteDest = "\(remote.host):\(remote.remotePath)"
                     let ignores = remote.syncIgnores ?? MutagenAdapter.defaultIgnores
                     try? await mutagenAdapter.startSync(
@@ -2031,7 +2031,7 @@ struct ContentView: View {
                     extraEnv = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
                     isRemote = true
 
-                    let syncName = "kanban-code-\((projectPath as NSString).lastPathComponent)"
+                    let syncName = "kanban-code-sync"
                     let remoteDest = "\(remote.host):\(remote.remotePath)"
                     let ignores = remote.syncIgnores ?? MutagenAdapter.defaultIgnores
                     try? await mutagenAdapter.startSync(
