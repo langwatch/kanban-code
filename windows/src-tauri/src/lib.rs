@@ -66,13 +66,29 @@ async fn create_card(
     prompt: String,
     title: Option<String>,
     project: String,
+    launch: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<coordination_store::Link, String> {
-    state
+    let mut link = state
         .coordination_store
-        .create_card(prompt, title, project)
+        .create_card(prompt.clone(), title, project.clone())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    if launch.unwrap_or(false) {
+        // Mark as launching so the spinner shows immediately
+        link.is_launching = Some(true);
+        let _ = state.coordination_store.upsert_link(&link).await;
+
+        // Fire-and-forget: open a terminal with `claude '<prompt>'` in project dir
+        let p = prompt.clone();
+        let proj = project.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = shell_command::launch_new_claude_session(&p, &proj).await;
+        });
+    }
+
+    Ok(link)
 }
 
 #[tauri::command]
