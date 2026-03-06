@@ -67,9 +67,10 @@ export default function CardView({ card, isDragging = false }: Props) {
             e.currentTarget.style.borderColor = c.borderCard;
           }
         }}
-        className={`relative rounded-lg px-3 py-2.5 cursor-pointer select-none transition-all ${
+        className={`card-hover relative rounded-lg px-3 py-2.5 cursor-pointer select-none ${
           isDragging ? "shadow-2xl scale-[1.02]" : ""
         }`}
+        title={card.displayTitle}
       >
         {/* Spinner */}
         {card.showSpinner && (
@@ -92,10 +93,10 @@ export default function CardView({ card, isDragging = false }: Props) {
 
         {/* Badges row */}
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
-          {hasBranch && <Badge text={card.link.worktreeLink!.branch!} color="#4f8ef7" theme={theme} />}
-          {hasPR && <Badge text={`PR #${card.link.prLinks[0].number}`} color={prStatusColor} theme={theme} />}
-          {hasIssue && <Badge text={`#${card.link.issueLink!.number}`} color="#d29922" theme={theme} />}
-          {hasSession && !hasBranch && !hasPR && !hasIssue && <Badge text="session" color="#6b7280" theme={theme} />}
+          {hasBranch && <Badge text={card.link.worktreeLink!.branch!} color="#4f8ef7" theme={theme} title={`Branch: ${card.link.worktreeLink!.branch}`} />}
+          {hasPR && <Badge text={`PR #${card.link.prLinks[0].number}`} color={prStatusColor} theme={theme} title={card.link.prLinks[0].title ?? `PR #${card.link.prLinks[0].number}`} />}
+          {hasIssue && <Badge text={`#${card.link.issueLink!.number}`} color="#d29922" theme={theme} title={card.link.issueLink!.title ?? `Issue #${card.link.issueLink!.number}`} />}
+          {hasSession && !hasBranch && !hasPR && !hasIssue && <Badge text="session" color="#6b7280" theme={theme} title={`Session: ${card.link.sessionLink!.sessionId}`} />}
           <span className="flex-1" />
           <span className="text-[11px]" style={{ color: c.textDim }}>{card.relativeTime}</span>
         </div>
@@ -114,11 +115,12 @@ export default function CardView({ card, isDragging = false }: Props) {
   );
 }
 
-function Badge({ text, color, theme }: { text: string; color: string; theme: string }) {
+function Badge({ text, color, theme, title }: { text: string; color: string; theme: string; title?: string }) {
   return (
     <span
-      className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium truncate max-w-[120px]"
+      className="badge-hover inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium truncate max-w-[120px] cursor-default"
       style={{ background: color + (theme === "dark" ? "18" : "15"), color }}
+      title={title}
     >
       {text}
     </span>

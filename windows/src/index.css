@@ -70,3 +70,70 @@
 .animate-slide-up {
   animation: slide-up 0.2s ease-out;
 }
+
+/* ── Global interactive hover effects ──────────────────────────── */
+
+/* Action buttons — scale + brighten */
+.btn-action {
+  transition: all 0.15s ease;
+}
+.btn-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(79, 142, 247, 0.25);
+  filter: brightness(1.1);
+}
+.btn-action:active {
+  transform: translateY(0);
+  filter: brightness(0.95);
+}
+
+/* Secondary / outline buttons */
+.btn-secondary {
+  transition: all 0.15s ease;
+}
+.btn-secondary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  filter: brightness(1.05);
+}
+.btn-secondary:active {
+  transform: translateY(0);
+}
+
+/* Icon buttons (close, etc) */
+.btn-icon {
+  transition: all 0.15s ease;
+  border-radius: 6px;
+  padding: 2px;
+}
+.btn-icon:hover {
+  background: rgba(128, 128, 128, 0.15);
+  transform: scale(1.1);
+}
+
+/* Tab items */
+.tab-item {
+  transition: all 0.15s ease;
+  position: relative;
+}
+.tab-item:not(:disabled):hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+
+/* Card hover lift */
+.card-hover {
+  transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Badge hover */
+.badge-hover {
+  transition: all 0.15s ease;
+}
+.badge-hover:hover {
+  filter: brightness(1.2);
+  transform: scale(1.05);
+}

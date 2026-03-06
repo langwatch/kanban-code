@@ -103,18 +103,19 @@ export default function CardDetailView() {
             />
           ) : (
             <h2
-              className="flex-1 text-[15px] font-semibold leading-snug cursor-text"
+              className="flex-1 text-[15px] font-semibold leading-snug cursor-text hover:opacity-80 transition-opacity"
               style={{ color: c.textPrimary }}
               onClick={() => { setEditName(card.displayTitle); setIsEditing(true); }}
-              title="Click to rename"
+              title="Click to rename this card"
             >
               {card.displayTitle}
             </h2>
           )}
           <button
             onClick={() => selectCard(null)}
-            className="mt-0.5 shrink-0 transition-colors"
+            className="btn-icon mt-0.5 shrink-0"
             style={{ color: c.textMuted }}
+            title="Close detail panel"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -124,10 +125,10 @@ export default function CardDetailView() {
 
         {/* Meta badges */}
         <div className="flex flex-wrap gap-1.5 mt-2.5">
-          {card.projectName && <span className="text-[12px]" style={{ color: c.textMuted }}>{card.projectName}</span>}
-          {branch && <span className="text-[12px] text-[#4f8ef7] bg-[#4f8ef7]/10 px-2 py-0.5 rounded">{branch}</span>}
-          {pr && <span className="text-[12px] text-[#3fb950] bg-[#3fb950]/10 px-2 py-0.5 rounded">PR #{pr.number}</span>}
-          {issue && <span className="text-[12px] text-[#d29922] bg-[#d29922]/10 px-2 py-0.5 rounded">#{issue.number}</span>}
+          {card.projectName && <span className="badge-hover text-[12px] cursor-default" style={{ color: c.textMuted }} title={projectPath ?? ""}>{card.projectName}</span>}
+          {branch && <span className="badge-hover text-[12px] text-[#4f8ef7] bg-[#4f8ef7]/10 px-2 py-0.5 rounded cursor-default" title={`Branch: ${branch}`}>{branch}</span>}
+          {pr && <span className="badge-hover text-[12px] text-[#3fb950] bg-[#3fb950]/10 px-2 py-0.5 rounded cursor-default" title={pr.title ?? `Pull Request #${pr.number}`}>PR #{pr.number}</span>}
+          {issue && <span className="badge-hover text-[12px] text-[#d29922] bg-[#d29922]/10 px-2 py-0.5 rounded cursor-default" title={issue.title ?? `Issue #${issue.number}`}>#{issue.number}</span>}
         </div>
 
         {/* Action buttons */}
@@ -135,7 +136,8 @@ export default function CardDetailView() {
           {sessionId && (
             <button
               onClick={handleStartTerminal}
-              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-[#4f8ef7] hover:bg-[#5b97fa] text-white text-[13px] font-semibold transition-colors"
+              className="btn-action flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-[#4f8ef7] text-white text-[13px] font-semibold"
+              title={terminalActive ? "Switch to terminal view" : "Resume this Claude session in an embedded terminal"}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
@@ -146,13 +148,14 @@ export default function CardDetailView() {
           {projectPath && (
             <button
               onClick={() => openInEditor(projectPath)}
-              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-[13px] transition-colors"
+              className="btn-secondary flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-[13px]"
               style={{ border: `1px solid ${c.border}`, color: c.textSecondary }}
+              title={`Open in Cursor: ${projectPath}`}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m10 20-7-7 7-7M17 20l7-7-7-7" />
               </svg>
-              Editor
+              Open in Cursor
             </button>
           )}
         </div>
@@ -172,12 +175,13 @@ export default function CardDetailView() {
               key={tab}
               disabled={disabled}
               onClick={() => setActiveTab(tab)}
-              className="flex-1 py-2.5 text-[12px] font-medium capitalize transition-colors"
+              className="tab-item flex-1 py-2.5 text-[12px] font-medium capitalize"
               style={{
                 color: activeTab === tab ? "#4f8ef7" : disabled ? c.textDim : c.textMuted,
                 borderBottom: activeTab === tab ? "2px solid #4f8ef7" : "2px solid transparent",
                 cursor: disabled ? "not-allowed" : "pointer",
               }}
+              title={disabled ? `No ${tab} data available` : `View ${tab}`}
             >
               {tab}
             </button>
@@ -281,8 +285,9 @@ function HistoryTab({ turns, transcriptPage, loading, onLoadMore }: {
         <button
           onClick={onLoadMore}
           disabled={loading}
-          className="m-3 py-2 rounded-lg text-[12px] transition-colors disabled:opacity-50"
+          className="btn-secondary m-3 py-2 rounded-lg text-[12px] disabled:opacity-50"
           style={{ border: `1px solid ${c.border}`, color: c.textMuted }}
+          title="Load older conversation turns"
         >
           {loading ? "Loading..." : `Load more (${transcriptPage.totalTurns - turns.length} remaining)`}
         </button>
