@@ -109,44 +109,46 @@ export default function TerminalView({ ptyId, command, initialInput, onExit }: P
     xtermRef.current = xterm;
     fitRef.current = fitAddon;
 
-    // Initial fit + spawn
+    // Initial fit + spawn — delay to let flex layout compute dimensions
     setTimeout(() => {
-      fitAddon.fit();
+      try {
+        fitAddon.fit();
+      } catch {
+        // ignore fit error on first try
+      }
       const dims = fitAddon.proposeDimensions();
       const cols = dims?.cols ?? 80;
       const rows = dims?.rows ?? 24;
 
+      console.log("[Terminal] spawning", command[0], "cols:", cols, "rows:", rows);
+
       try {
-        // spawn(command[0], args, { cols, rows })
         const pty = spawn(command[0], command.slice(1), { cols, rows });
         ptyRef.current = pty;
 
-        // PTY output → xterm (data is Uint8Array)
         pty.onData((data: Uint8Array) => {
           xterm.write(data);
         });
 
-        // PTY exit
         pty.onExit((_info: { exitCode: number; signal?: number }) => {
           xterm.writeln("\r\n\x1b[90m[Process exited]\x1b[0m");
           onExit?.();
         });
 
-        // xterm input → PTY
         xterm.onData((data: string) => {
           pty.write(data);
         });
 
-        // Send initial command after shell is ready
         if (initialInput) {
           setTimeout(() => {
             pty.write(initialInput);
           }, 800);
         }
       } catch (err) {
+        console.error("[Terminal] spawn failed:", err);
         xterm.writeln(`\r\n\x1b[31mFailed to start terminal: ${err}\x1b[0m`);
       }
-    }, 50);
+    }, 150);
 
     // Resize observer
     const observer = new ResizeObserver(() => {
@@ -183,7 +185,7 @@ export default function TerminalView({ ptyId, command, initialInput, onExit }: P
     <div
       ref={termRef}
       className="flex-1 min-h-0"
-      style={{ padding: "4px" }}
+      style={{ padding: "4px", height: "100%", minHeight: 200 }}
     />
   );
 }
