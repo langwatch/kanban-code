@@ -61,12 +61,10 @@ export default function CardDetailView() {
     setIsEditing(false);
   };
 
-  // Build the command to resume a Claude session via WSL
-  const buildResumeCommand = (): string[] => {
-    // Use -ic (interactive, not login) to avoid broken login profile scripts
-    // Source .bashrc explicitly to get PATH with claude CLI
-    return ["wsl.exe", "--", "bash", "-ic", `source ~/.bashrc 2>/dev/null; claude --resume ${sessionId}`];
-  };
+  // Just spawn an interactive WSL shell — it handles PATH/profile naturally
+  const shellCommand = ["wsl.exe"];
+  // Send the resume command after the shell is ready
+  const resumeInput = `claude --resume ${sessionId}\r`;
 
   const handleStartTerminal = () => {
     setTerminalActive(true);
@@ -195,7 +193,8 @@ export default function CardDetailView() {
           terminalActive ? (
             <TerminalView
               ptyId={`resume-${card.id}`}
-              command={buildResumeCommand()}
+              command={shellCommand}
+              initialInput={resumeInput}
               onExit={() => {}}
             />
           ) : (

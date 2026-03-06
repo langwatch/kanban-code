@@ -9,8 +9,10 @@ import "@xterm/xterm/css/xterm.css";
 interface Props {
   /** Unique terminal session id (for React key purposes) */
   ptyId: string;
-  /** Command to run, e.g. ["wsl.exe", "--", "bash", "-lic", "claude --resume abc"] */
+  /** Command to run, e.g. ["wsl.exe"] */
   command: string[];
+  /** Text to write into the PTY after shell starts (e.g. "claude --resume abc\r") */
+  initialInput?: string;
   /** Called when the PTY process exits */
   onExit?: () => void;
 }
@@ -63,7 +65,7 @@ const LIGHT_THEME = {
   brightWhite: "#8c959f",
 };
 
-export default function TerminalView({ ptyId, command, onExit }: Props) {
+export default function TerminalView({ ptyId, command, initialInput, onExit }: Props) {
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -134,6 +136,13 @@ export default function TerminalView({ ptyId, command, onExit }: Props) {
         xterm.onData((data: string) => {
           pty.write(data);
         });
+
+        // Send initial command after shell is ready
+        if (initialInput) {
+          setTimeout(() => {
+            pty.write(initialInput);
+          }, 800);
+        }
       } catch (err) {
         xterm.writeln(`\r\n\x1b[31mFailed to start terminal: ${err}\x1b[0m`);
       }
