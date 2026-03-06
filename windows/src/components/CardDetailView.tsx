@@ -61,10 +61,11 @@ export default function CardDetailView() {
     setIsEditing(false);
   };
 
-  // Just spawn an interactive WSL shell — it handles PATH/profile naturally
+  // Spawn an interactive WSL shell, then cd to project dir and resume
   const shellCommand = ["wsl.exe"];
-  // Send the resume command after the shell is ready
-  const resumeInput = `claude --resume ${sessionId}\r`;
+  // cd to project dir first (claude --resume needs to run from the project)
+  const cdCmd = projectPath ? `cd ${projectPath.replace(/ /g, "\\ ")} && ` : "";
+  const resumeInput = `${cdCmd}claude --resume ${sessionId}\r`;
 
   const handleStartTerminal = () => {
     setTerminalActive(true);
