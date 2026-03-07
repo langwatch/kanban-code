@@ -160,7 +160,13 @@ struct CardView: View {
             in: RoundedRectangle(cornerRadius: 8)
         )
         .contentShape(Rectangle())
-        .onTapGesture { onSelect() }
+        .onTapGesture(count: 2) {
+            // Double-click: ensure card is selected (don't toggle off)
+            if !isSelected { onSelect() }
+        }
+        .onTapGesture {
+            onSelect()
+        }
         .contextMenu {
             if card.column == .backlog {
                 Button(action: onStart) {
