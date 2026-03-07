@@ -16,6 +16,7 @@ struct LaunchConfig: Identifiable {
     let remoteHost: String?
     let isResume: Bool
     let sessionId: String?
+    let promptImagePaths: [String]
 
     init(
         cardId: String,
@@ -27,7 +28,8 @@ struct LaunchConfig: Identifiable {
         hasRemoteConfig: Bool = false,
         remoteHost: String? = nil,
         isResume: Bool = false,
-        sessionId: String? = nil
+        sessionId: String? = nil,
+        promptImagePaths: [String] = []
     ) {
         self.cardId = cardId
         self.projectPath = projectPath
@@ -39,6 +41,7 @@ struct LaunchConfig: Identifiable {
         self.remoteHost = remoteHost
         self.isResume = isResume
         self.sessionId = sessionId
+        self.promptImagePaths = promptImagePaths
     }
 }
 
@@ -443,6 +446,7 @@ struct ContentView: View {
                     remoteHost: config.remoteHost,
                     isResume: config.isResume,
                     sessionId: config.sessionId,
+                    promptImagePaths: config.promptImagePaths,
                     isPresented: Binding(
                         get: { launchConfig != nil },
                         set: { if !$0 { launchConfig = nil } }
@@ -1163,6 +1167,14 @@ struct ContentView: View {
         .popover(isPresented: $showSyncPopover) {
             syncStatusPopover
         }
+        .onChange(of: currentSyncStatus) {
+            if showSyncPopover {
+                showSyncPopover = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    showSyncPopover = true
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -1184,10 +1196,12 @@ struct ContentView: View {
                 Text(rawSyncOutput)
                     .font(.app(.caption, design: .monospaced))
                     .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
             }
-            .frame(height: 250)
+            .id(rawSyncOutput.count)
+            .frame(maxHeight: 250)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
 
             HStack(spacing: 4) {
@@ -1782,7 +1796,8 @@ struct ContentView: View {
                 hasExistingWorktree: card.link.worktreeLink != nil,
                 isGitRepo: isGitRepo,
                 hasRemoteConfig: projectIsUnderRemote,
-                remoteHost: globalRemote?.host
+                remoteHost: globalRemote?.host,
+                promptImagePaths: card.link.promptImagePaths ?? []
             )
         }
     }
