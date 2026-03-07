@@ -12,7 +12,7 @@ make run-app         # build + launch the app
 
 - **KanbanCodeCore** (`Sources/KanbanCodeCore/`) — pure Swift library, no UI. Domain entities, use cases, adapters.
 - **KanbanCode** (`Sources/KanbanCode/`) — SwiftUI + AppKit macOS app. Views, toolbar, system tray.
-- Deployment target: **macOS 26** (swift-tools-version 6.2). No need for `#available` checks.
+- Deployment target: **macOS 15** (swift-tools-version 6.2). Use `#available` checks for newer APIs.
 - **Elm-like unidirectional state** — see [`docs/architecture.md`](docs/architecture.md) for full details.
   - All state lives in `AppState` struct (single source of truth).
   - All mutations go through `store.dispatch(action)` → pure `Reducer` → async `Effect`s.
@@ -63,14 +63,16 @@ private nonisolated func watchFile(path: String) async {
 
 This applies to **any** GCD callback (`setEventHandler`, `setCancelHandler`, `DispatchQueue.global().async`) called from a `@MainActor` context.
 
-## Toolbar Layout (macOS 26 Liquid Glass)
+## Toolbar Layout
 
-Toolbar uses SwiftUI `.toolbar` with `ToolbarSpacer` (macOS 26+) for separate glass pills:
+Toolbar uses SwiftUI `.toolbar` with standard spacing:
 
-- **`.navigation`** placement = left side. All items merge into ONE pill (spacers don't help).
-- **`.principal`** placement = center. Separate pill from navigation.
-- **`.primaryAction`** placement = right side. `ToolbarSpacer(.fixed)` DOES create separate pills here.
-- Use `Menu` (not `Text`) for items that need their own pill within `.navigation` — menus map to `NSPopUpButton` which gets separate glass automatically.
+- **`.navigation`** placement = left side. All items merge into ONE group (spacers don't help).
+- **`.principal`** placement = center. Separate from navigation.
+- **`.primaryAction`** placement = right side.
+- Use `Menu` (not `Text`) for items that need visual separation within `.navigation` — menus map to `NSPopUpButton` which gets separate styling automatically.
+
+Note: `ToolbarSpacer` and Liquid Glass effects require macOS 26+ (unreleased). For macOS 15 compatibility, use standard toolbar layout.
 
 ## Commits
 

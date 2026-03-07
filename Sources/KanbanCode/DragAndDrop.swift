@@ -55,110 +55,9 @@ struct DroppableColumnView: View {
         ScrollView {
             LazyVStack(spacing: 8) {
                 ForEach(cards) { card in
-                    let isMergeTarget = dragState.mergeTargetId == card.id
-                    let canMerge: Bool = {
-                        guard let source = dragState.draggingCard, source.id != card.id else { return false }
-                        return Link.mergeBlocked(source: source.link, target: card.link) == nil
-                    }()
-
-                    // Drop indicator above this card
-                    if dragState.reorderTargetId == card.id && dragState.reorderAbove {
-                        ReorderIndicator()
-                    }
-
-                    CardView(
-                        card: card,
-                        isSelected: card.id == selectedCardId,
-                        onSelect: {
-                            let newId = selectedCardId == card.id ? nil : card.id
-                            selectedCardId = newId
-                            if newId != nil { onCardClicked(card.id) }
-                        },
-                        onStart: { onStartCard(card.id) },
-                        onResume: { onResumeCard(card.id) },
-                        onFork: { onForkCard(card.id) },
-                        onRename: {
-                            renamingCardId = card.id
-                        },
-                        onCopyResumeCmd: { onCopyResumeCmd(card.id) },
-                        onCleanupWorktree: { onCleanupWorktree(card.id) },
-                        canCleanupWorktree: canCleanupWorktree(card.id),
-                        onArchive: { onArchiveCard(card.id) },
-                        onDelete: { onDeleteCard(card.id) },
-                        availableProjects: availableProjects,
-                        onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) }
-                    )
-                    // Merge highlight
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(
-                                isMergeTarget && canMerge ? Color.orange : Color.clear,
-                                lineWidth: 2
-                            )
-                    )
-                    .overlay(alignment: .top) {
-                        if isMergeTarget && canMerge {
-                            Text("Merge")
-                                .font(.app(.caption2).bold())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(Color.orange, in: Capsule())
-                                .offset(y: -10)
-                        }
-                    }
-                    // Report frame in column coordinate space
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: CardFramePreference.self,
-                                value: [card.id: geo.frame(in: .named("column_\(column.rawValue)"))]
-                            )
-                        }
-                    )
-                    .onDrag {
-                        dragState.draggingCard = card
-                        dragState.sourceColumn = column
-                        return NSItemProvider(object: card.id as NSString)
-                    }
-                    .sheet(isPresented: Binding(
-                        get: { renamingCardId == card.id },
-                        set: { if !$0 { renamingCardId = nil } }
-                    )) {
-                        RenameSessionDialog(
-                            currentName: card.link.name ?? card.displayTitle,
-                            isPresented: Binding(
-                                get: { renamingCardId == card.id },
-                                set: { if !$0 { renamingCardId = nil } }
-                            ),
-                            onRename: { name in
-                                onRenameCard(card.id, name)
-                            }
-                        )
-                    }
-
-                    // Drop indicator below this card
-                    if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
-                        ReorderIndicator()
-                    }
+                    cardRow(card)
                 }
-
-                // Ghost card placeholder when dragging over this column (not merging)
-                if isTargeted, dragState.mergeTargetId == nil,
-                   let dragging = dragState.draggingCard, dragState.sourceColumn != column {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(dragging.displayTitle)
-                            .font(.app(.body, weight: .medium))
-                            .lineLimit(2)
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])))
-                    .opacity(0.7)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                }
+                ghostCardPlaceholder
             }
             .padding(.horizontal, 8)
             .padding(.top, 56) // space for the floating header
@@ -176,46 +75,7 @@ struct DroppableColumnView: View {
                     lineWidth: isTargeted ? 2 : 0
                 )
         )
-        // Header pill floating on top of the column
-        .overlay(alignment: .top) {
-            HStack {
-                Text(column.displayName)
-                    .font(.app(.headline))
-                    .foregroundStyle(.primary)
-
-                Spacer()
-
-                if let onRefreshBacklog {
-                    Button {
-                        onRefreshBacklog()
-                    } label: {
-                        if isRefreshingBacklog {
-                            ProgressView()
-                                .controlSize(.mini)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.app(.caption))
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Refresh GitHub issues")
-                    .disabled(isRefreshingBacklog)
-                }
-
-                Text("\(cards.count)")
-                    .font(.app(.caption))
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.secondary.opacity(0.2)))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-            .padding(4)
-        }
+        .overlay(alignment: .top) { columnHeader }
         .onDrop(of: [.utf8PlainText], delegate: ColumnDropDelegate(
             column: column,
             cards: cards,
@@ -234,6 +94,160 @@ struct DroppableColumnView: View {
         .animation(.easeInOut(duration: 0.15), value: isTargeted)
         .animation(.easeInOut(duration: 0.15), value: dragState.mergeTargetId)
         .animation(.easeInOut(duration: 0.15), value: dragState.reorderTargetId)
+    }
+
+    // MARK: - Extracted Subviews
+
+    @ViewBuilder
+    private func cardRow(_ card: KanbanCodeCard) -> some View {
+        let isMergeTarget = dragState.mergeTargetId == card.id
+        let canMerge: Bool = {
+            guard let source = dragState.draggingCard, source.id != card.id else { return false }
+            return Link.mergeBlocked(source: source.link, target: card.link) == nil
+        }()
+
+        // Drop indicator above this card
+        if dragState.reorderTargetId == card.id && dragState.reorderAbove {
+            ReorderIndicator()
+        }
+
+        CardView(
+            card: card,
+            isSelected: card.id == selectedCardId,
+            onSelect: {
+                let newId = selectedCardId == card.id ? nil : card.id
+                selectedCardId = newId
+                if newId != nil { onCardClicked(card.id) }
+            },
+            onStart: { onStartCard(card.id) },
+            onResume: { onResumeCard(card.id) },
+            onFork: { onForkCard(card.id) },
+            onRename: {
+                renamingCardId = card.id
+            },
+            onCopyResumeCmd: { onCopyResumeCmd(card.id) },
+            onCleanupWorktree: { onCleanupWorktree(card.id) },
+            canCleanupWorktree: canCleanupWorktree(card.id),
+            onArchive: { onArchiveCard(card.id) },
+            onDelete: { onDeleteCard(card.id) },
+            availableProjects: availableProjects,
+            onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) }
+        )
+        // Merge highlight
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    isMergeTarget && canMerge ? Color.orange : Color.clear,
+                    lineWidth: 2
+                )
+        )
+        .overlay(alignment: .top) {
+            if isMergeTarget && canMerge {
+                Text("Merge")
+                    .font(.app(.caption2).bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Color.orange, in: Capsule())
+                    .offset(y: -10)
+            }
+        }
+        // Report frame in column coordinate space
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: CardFramePreference.self,
+                    value: [card.id: geo.frame(in: .named("column_\(column.rawValue)"))]
+                )
+            }
+        )
+        .onDrag {
+            dragState.draggingCard = card
+            dragState.sourceColumn = column
+            return NSItemProvider(object: card.id as NSString)
+        }
+        .sheet(isPresented: Binding(
+            get: { renamingCardId == card.id },
+            set: { if !$0 { renamingCardId = nil } }
+        )) {
+            RenameSessionDialog(
+                currentName: card.link.name ?? card.displayTitle,
+                isPresented: Binding(
+                    get: { renamingCardId == card.id },
+                    set: { if !$0 { renamingCardId = nil } }
+                ),
+                onRename: { name in
+                    onRenameCard(card.id, name)
+                }
+            )
+        }
+
+        // Drop indicator below this card
+        if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
+            ReorderIndicator()
+        }
+    }
+
+    @ViewBuilder
+    private var ghostCardPlaceholder: some View {
+        if isTargeted, dragState.mergeTargetId == nil,
+           let dragging = dragState.draggingCard, dragState.sourceColumn != column {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(dragging.displayTitle)
+                    .font(.app(.body, weight: .medium))
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])))
+            .opacity(0.7)
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        }
+    }
+
+    @ViewBuilder
+    private var columnHeader: some View {
+        HStack {
+            Text(column.displayName)
+                .font(.app(.headline))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            if let onRefreshBacklog {
+                Button {
+                    onRefreshBacklog()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.app(.caption))
+                        .opacity(isRefreshingBacklog ? 0 : 1)
+                        .overlay {
+                            if isRefreshingBacklog {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            }
+                        }
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh GitHub issues")
+                .disabled(isRefreshingBacklog)
+            }
+
+            Text("\(cards.count)")
+                .font(.app(.caption))
+                .fontWeight(.medium)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        .padding(4)
     }
 
     private func handleBackgroundTap(at location: CGPoint) {

@@ -752,8 +752,15 @@ struct ContentView: View {
 
                     Button { Task { await store.reconcile() } } label: {
                         Image(systemName: "arrow.clockwise")
+                            .opacity(store.state.isLoading || store.state.isRefreshingBacklog ? 0 : 1)
+                            .overlay {
+                                if store.state.isLoading || store.state.isRefreshingBacklog {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                }
+                            }
                     }
-                    .disabled(store.state.isLoading)
+                    .disabled(store.state.isLoading || store.state.isRefreshingBacklog)
                     .help("Refresh sessions")
 
                     Button {
@@ -803,7 +810,9 @@ struct ContentView: View {
                     .help("Search sessions (⌘K)")
                 }
 
-                ToolbarSpacer(.fixed, placement: .primaryAction)
+                if #available(macOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .primaryAction)
+                }
 
                 ToolbarItem(placement: .primaryAction) {
                     Button {

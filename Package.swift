@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "KanbanCode",
     platforms: [
-        .macOS(.v26),
+        .macOS(.v15),
     ],
     products: [
         .executable(name: "KanbanCode", targets: ["KanbanCode"]),

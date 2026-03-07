@@ -78,21 +78,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             window.makeKeyAndOrderFront(nil)
         }
 
-        // Set app icon from bundled resource (SPM uses Bundle.appResources)
-        if let iconURL = Bundle.appResources.url(forResource: "AppIcon", withExtension: "icns", subdirectory: "Resources"),
-           let icon = NSImage(contentsOf: iconURL) {
-            NSApp.applicationIconImage = icon
-        }
+        // Set app icon from bundled resource
+        // Note: Commented out to avoid bundle proxy issues with SPM
+         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+            let icon = NSImage(contentsOf: iconURL) {
+             NSApp.applicationIconImage = icon
+         }
 
         // Set up notifications: delegate must be set BEFORE requesting authorization
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error {
-                print("[Kanban Code] Notification permission error: \(error)")
-            } else if !granted {
-                print("[Kanban Code] Notification permission denied")
+        // Guard: UNUserNotificationCenter crashes if there's no valid bundle identifier
+        // (e.g. when running via `swift run` outside a .app bundle)
+        if Bundle.main.bundleIdentifier != nil {
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error {
+                    print("[Kanban Code] Notification permission error: \(error)")
+                } else if !granted {
+                    print("[Kanban Code] Notification permission denied")
+                }
             }
+        } else {
+            print("[Kanban Code] Skipping notification setup — no bundle identifier available")
         }
     }
 

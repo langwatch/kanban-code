@@ -41,6 +41,25 @@ struct CardView: View {
             }
             .lineLimit(1)
 
+            // GitHub issue labels
+            if let labels = card.link.issueLink?.labels, !labels.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(labels.prefix(4), id: \.self) { label in
+                        Text(label)
+                            .font(.app(size: 9, weight: .medium))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                            .foregroundStyle(.secondary)
+                    }
+                    if labels.count > 4 {
+                        Text("+\(labels.count - 4)")
+                            .font(.app(size: 9, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
             // Bottom row: badge + time + link indicators
             HStack(spacing: 6) {
                 if card.link.cardLabel == .session {
@@ -289,6 +308,8 @@ struct CardLabelBadge: View {
         case .session: .orange
         case .worktree: .green
         case .issue: .blue
+        case .bug: .red
+        case .feature: .teal
         case .pr: .purple
         case .task: .gray
         }
