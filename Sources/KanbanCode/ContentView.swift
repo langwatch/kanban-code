@@ -72,6 +72,7 @@ struct ContentView: View {
     private let tmuxAdapter: TmuxAdapter
     private let systemTray = SystemTray()
     private let mutagenAdapter = MutagenAdapter()
+    private let ghAdapter = GhCliAdapter()
     private let hookEventsPath: String
     private let settingsFilePath: String
 
@@ -426,11 +427,11 @@ struct ContentView: View {
                     projects: store.state.configuredProjects,
                     defaultProjectPath: store.state.selectedProjectPath,
                     globalRemoteSettings: store.state.globalRemoteSettings,
-                    onCreate: { prompt, projectPath, title, startImmediately, images in
-                        createManualTask(prompt: prompt, projectPath: projectPath, title: title, startImmediately: startImmediately, images: images)
+                    onCreate: { prompt, projectPath, title, startImmediately, createGitHubIssue, images in
+                        createManualTask(prompt: prompt, projectPath: projectPath, title: title, startImmediately: startImmediately, createGitHubIssue: createGitHubIssue, images: images)
                     },
-                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images in
-                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images)
+                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, createGitHubIssue, images in
+                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, createGitHubIssue: createGitHubIssue, images: images)
                     }
                 )
             }
@@ -1624,7 +1625,7 @@ struct ContentView: View {
         presentNewTask()
     }
 
-    private func createManualTask(prompt: String, projectPath: String?, title: String? = nil, startImmediately: Bool = false, images: [ImageAttachment] = []) {
+    private func createManualTask(prompt: String, projectPath: String?, title: String? = nil, startImmediately: Bool = false, createGitHubIssue: Bool = false, images: [ImageAttachment] = []) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let name: String
         if let title, !title.isEmpty {
@@ -1641,20 +1642,24 @@ struct ContentView: View {
             name: name,
             projectPath: projectPath,
             column: startImmediately ? .inProgress : .backlog,
-            source: .manual,
+            source: createGitHubIssue ? .githubIssue : .manual,
             promptBody: trimmed,
             promptImagePaths: imagePaths
         )
 
         store.dispatch(.createManualTask(link))
-        KanbanCodeLog.info("manual-task", "Created manual task card=\(link.id.prefix(12)) name='\(name)' project=\(projectPath ?? "nil") startImmediately=\(startImmediately)")
+        KanbanCodeLog.info("manual-task", "Created manual task card=\(link.id.prefix(12)) name='\(name)' project=\(projectPath ?? "nil") startImmediately=\(startImmediately) ghIssue=\(createGitHubIssue)")
+
+        if createGitHubIssue, let repoRoot = projectPath {
+            createGitHubIssueForCard(cardId: link.id, title: name, body: trimmed, repoRoot: repoRoot)
+        }
 
         if startImmediately {
             startCard(cardId: link.id)
         }
     }
 
-    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = []) {
+    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, createGitHubIssue: Bool = false, images: [ImageAttachment] = []) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let name: String
         if let title, !title.isEmpty {
@@ -1671,14 +1676,18 @@ struct ContentView: View {
             name: name,
             projectPath: projectPath,
             column: .inProgress,
-            source: .manual,
+            source: createGitHubIssue ? .githubIssue : .manual,
             promptBody: trimmed,
             promptImagePaths: imagePaths
         )
         let effectivePath = projectPath ?? NSHomeDirectory()
 
         store.dispatch(.createManualTask(link))
-        KanbanCodeLog.info("manual-task", "Created & launching task card=\(link.id.prefix(12)) name='\(name)' project=\(effectivePath)")
+        KanbanCodeLog.info("manual-task", "Created & launching task card=\(link.id.prefix(12)) name='\(name)' project=\(effectivePath) ghIssue=\(createGitHubIssue)")
+
+        if createGitHubIssue, let repoRoot = projectPath {
+            createGitHubIssueForCard(cardId: link.id, title: name, body: trimmed, repoRoot: repoRoot)
+        }
 
         Task {
             let settings = try? await settingsStore.read()
@@ -1687,6 +1696,21 @@ struct ContentView: View {
 
             let wtName: String? = createWorktree ? "" : nil
             executeLaunch(cardId: link.id, prompt: builtPrompt, projectPath: effectivePath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images)
+        }
+    }
+
+    // MARK: - GitHub Issue Creation
+
+    private func createGitHubIssueForCard(cardId: String, title: String, body: String, repoRoot: String) {
+        Task {
+            do {
+                let result = try await ghAdapter.createIssue(repoRoot: repoRoot, title: title, body: body)
+                store.dispatch(.addIssueLinkToCard(cardId: cardId, issueNumber: result.number))
+                KanbanCodeLog.info("gh-issue", "Created GitHub issue #\(result.number) for card=\(cardId.prefix(12)) url=\(result.url)")
+            } catch {
+                store.dispatch(.setError("Failed to create GitHub issue: \(error.localizedDescription)"))
+                KanbanCodeLog.warn("gh-issue", "Failed to create issue for card=\(cardId.prefix(12)): \(error)")
+            }
         }
     }
 

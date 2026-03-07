@@ -442,6 +442,33 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         }
     }
 
+    // MARK: - Issue Creation
+
+    /// Create a new GitHub issue and return its number and URL.
+    public func createIssue(repoRoot: String, title: String, body: String?) async throws -> (number: Int, url: String) {
+        var arguments = ["issue", "create", "--title", title]
+        if let body, !body.isEmpty {
+            arguments += ["--body", body]
+        }
+
+        let result = try await ShellCommand.run(
+            ghPath,
+            arguments: arguments,
+            currentDirectory: repoRoot
+        )
+        guard result.succeeded, !result.stdout.isEmpty else {
+            throw GhCliError.commandFailed(result.stderr)
+        }
+        // gh issue create prints the URL on stdout (e.g. "https://github.com/owner/repo/issues/42\n")
+        let url = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Extract issue number from URL
+        guard let lastComponent = url.split(separator: "/").last,
+              let number = Int(lastComponent) else {
+            throw GhCliError.commandFailed("Failed to parse issue number from: \(url)")
+        }
+        return (number: number, url: url)
+    }
+
     /// Merge a PR using the configured merge command template.
     /// The template can contain `${number}` which gets replaced with the PR number.
     public func mergePR(repoRoot: String, prNumber: Int, commandTemplate: String) async throws -> MergeResult {
@@ -481,11 +508,14 @@ public enum MergeResult: Sendable {
 
 public enum GhCliError: Error, LocalizedError {
     case rateLimited
+    case commandFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .rateLimited:
             return "GitHub API rate limit exceeded — pausing PR lookups for 5 minutes"
+        case .commandFailed(let message):
+            return message
         }
     }
 }

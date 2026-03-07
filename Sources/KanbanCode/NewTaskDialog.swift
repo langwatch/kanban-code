@@ -6,10 +6,10 @@ struct NewTaskDialog: View {
     var projects: [Project] = []
     var defaultProjectPath: String?
     var globalRemoteSettings: RemoteSettings?
-    /// (prompt, projectPath, title, startImmediately, images) — creates task, optionally starts via LaunchConfirmation
-    var onCreate: (String, String?, String?, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _ in }
-    /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images) — creates and launches directly (skips LaunchConfirmation)
-    var onCreateAndLaunch: (String, String?, String?, Bool, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _, _ in }
+    /// (prompt, projectPath, title, startImmediately, createGitHubIssue, images) — creates task, optionally starts via LaunchConfirmation
+    var onCreate: (String, String?, String?, Bool, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _, _ in }
+    /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, createGitHubIssue, images) — creates and launches directly (skips LaunchConfirmation)
+    var onCreateAndLaunch: (String, String?, String?, Bool, Bool, Bool, String?, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _, _, _ in }
 
     @State private var prompt = ""
     @State private var images: [ImageAttachment] = []
@@ -24,6 +24,7 @@ struct NewTaskDialog: View {
     @State private var runRemotely = true
     @AppStorage("dangerouslySkipPermissions") private var dangerouslySkipPermissions = true
     @AppStorage("lastSelectedProjectPath") private var lastSelectedProjectPath = ""
+    @AppStorage("createGitHubIssue") private var createGitHubIssue = false
 
     private static let customPathSentinel = "__custom__"
 
@@ -65,6 +66,17 @@ struct NewTaskDialog: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.app(.caption))
                 }
+            }
+
+            // Create as GitHub issue toggle
+            Toggle("Create as GitHub issue", isOn: isGitRepo ? $createGitHubIssue : .constant(false))
+                .font(.app(.callout))
+                .disabled(!isGitRepo)
+            if createGitHubIssue && !isGitRepo {
+                Label("Select a git repository to create GitHub issues", systemImage: "info.circle")
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
             }
 
             // Start immediately toggle
@@ -197,6 +209,7 @@ struct NewTaskDialog: View {
         let proj = resolvedProjectPath
         let titleOrNil = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines)
         if let proj { lastSelectedProjectPath = proj }
+        let ghIssue = createGitHubIssue && isGitRepo
         if startImmediately {
             onCreateAndLaunch(
                 prompt,
@@ -206,10 +219,11 @@ struct NewTaskDialog: View {
                 runRemotely && hasRemoteConfig,
                 dangerouslySkipPermissions,
                 commandEdited ? command : nil,
+                ghIssue,
                 images
             )
         } else {
-            onCreate(prompt, proj, titleOrNil, false, images)
+            onCreate(prompt, proj, titleOrNil, false, ghIssue, images)
         }
         isPresented = false
     }
