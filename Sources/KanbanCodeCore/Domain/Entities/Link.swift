@@ -19,6 +19,7 @@ public struct SessionLink: Codable, Sendable, Equatable {
 public struct TmuxLink: Codable, Sendable, Equatable {
     public var sessionName: String          // Primary tmux session
     public var extraSessions: [String]?     // User-created shell terminals
+    public var tabNames: [String: String]?  // Custom display names for terminal tabs (sessionName → label)
     public var isShellOnly: Bool?           // true if primary session is a plain shell (not Claude)
     public var isPrimaryDead: Bool?         // true when primary killed but extras survive
 

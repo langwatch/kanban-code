@@ -307,6 +307,9 @@ struct ContentView: View {
                 onKillTerminal: { sessionName in
                     store.dispatch(.killTerminal(cardId: card.id, sessionName: sessionName))
                 },
+                onRenameTerminal: { sessionName, label in
+                    store.dispatch(.renameTerminalTab(cardId: card.id, sessionName: sessionName, label: label))
+                },
                 onPRMerged: { prNumber in
                     store.dispatch(.markPRMerged(cardId: card.id, prNumber: prNumber))
                 },
@@ -451,11 +454,11 @@ struct ContentView: View {
                         get: { launchConfig != nil },
                         set: { if !$0 { launchConfig = nil } }
                     )
-                ) { editedPrompt, createWorktree, runRemotely, skipPermissions, commandOverride, images in
+                ) { editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images in
                     if config.isResume {
                         executeResume(cardId: config.cardId, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride)
                     } else {
-                        let wtName: String? = createWorktree ? (config.worktreeName ?? "") : nil
+                        let wtName: String? = createWorktree ? (worktreeBranch ?? config.worktreeName ?? "") : nil
                         executeLaunch(cardId: config.cardId, prompt: editedPrompt, projectPath: config.projectPath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images)
                     }
                 }

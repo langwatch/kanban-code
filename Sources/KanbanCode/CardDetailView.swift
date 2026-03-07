@@ -56,6 +56,7 @@ struct CardDetailView: View {
     var onDeleteCard: () -> Void = {}
     var onCreateTerminal: () -> Void = {}
     var onKillTerminal: (String) -> Void = { _ in }
+    var onRenameTerminal: (String, String) -> Void = { _, _ in } // (sessionName, label)
     var onPRMerged: (Int) -> Void = { _ in }
     var onCancelLaunch: () -> Void = {}
     var onAddQueuedPrompt: (QueuedPrompt) -> Void = { _ in }
@@ -120,6 +121,8 @@ struct CardDetailView: View {
     @State private var knownTerminalCount: Int = 0
     @State private var terminalGrabFocus: Bool = false
     @State private var suppressTerminalFocus: Bool = false
+    @State private var renamingSession: String?
+    @State private var tabRenameText: String = ""
 
     /// Launch lock older than 30s is stale — stop showing spinner, show terminal instead
     private var isLaunchStale: Bool {
@@ -128,7 +131,7 @@ struct CardDetailView: View {
 
     let sessionStore: SessionStore
 
-    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, focusTerminal: Binding<Bool> = .constant(false)) {
+    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onRenameTerminal: @escaping (String, String) -> Void = { _, _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, focusTerminal: Binding<Bool> = .constant(false)) {
         self.card = card
         self.sessionStore = sessionStore
         self.onResume = onResume
@@ -144,6 +147,7 @@ struct CardDetailView: View {
         self.onDeleteCard = onDeleteCard
         self.onCreateTerminal = onCreateTerminal
         self.onKillTerminal = onKillTerminal
+        self.onRenameTerminal = onRenameTerminal
         self.onPRMerged = onPRMerged
         self.onCancelLaunch = onCancelLaunch
         self.onAddQueuedPrompt = onAddQueuedPrompt
@@ -844,8 +848,8 @@ struct CardDetailView: View {
         let tmux = card.link.tmuxLink
         let primaryName = tmux?.sessionName ?? ""
         let isPrimary = sessionName == primaryName
-        let displayName: String = {
-            // Shell-only primary gets labeled "Shell" to distinguish from numbered extras
+        let customName = tmux?.tabNames?[sessionName]
+        let displayName: String = customName ?? {
             if isPrimary { return "Shell" }
             let stripped = sessionName.replacingOccurrences(of: "\(primaryName)-", with: "")
             return stripped.isEmpty || stripped == sessionName ? "sh1" : stripped
@@ -859,9 +863,19 @@ struct CardDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "terminal")
                         .font(.app(.caption2))
-                    Text(displayName)
+                    if renamingSession == sessionName {
+                        TextField("Name", text: $tabRenameText, onCommit: {
+                            onRenameTerminal(sessionName, tabRenameText)
+                            renamingSession = nil
+                        })
                         .font(.app(.caption))
-                        .lineLimit(1)
+                        .textFieldStyle(.plain)
+                        .frame(width: 60)
+                    } else {
+                        Text(displayName)
+                            .font(.app(.caption))
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -872,9 +886,8 @@ struct CardDetailView: View {
             Button {
                 onKillTerminal(sessionName)
                 if selectedTerminalSession == sessionName {
-                    // Switch to next available shell, or Claude tab
                     let remaining = shellSessions.filter { $0 != sessionName }
-                    selectedTerminalSession = remaining.first // nil → Claude tab
+                    selectedTerminalSession = remaining.first
                 }
             } label: {
                 Image(systemName: "xmark")
@@ -891,6 +904,12 @@ struct CardDetailView: View {
             isSelected ? Color.accentColor.opacity(0.15) : Color.clear,
             in: RoundedRectangle(cornerRadius: 6)
         )
+        .contextMenu {
+            Button("Rename") {
+                tabRenameText = customName ?? ""
+                renamingSession = sessionName
+            }
+        }
     }
 
     private static func initialTab(for card: KanbanCodeCard) -> DetailTab {

@@ -15,14 +15,15 @@ struct LaunchConfirmationDialog: View {
     let isResume: Bool
     let sessionId: String?
     @Binding var isPresented: Bool
-    var onLaunch: (String, Bool, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _ in } // (editedPrompt, createWorktree, runRemotely, skipPermissions, commandOverride, images)
+    var onLaunch: (String, Bool, String?, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _ in } // (editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images)
 
     @State private var prompt: String
     @State private var images: [ImageAttachment]
     @State private var command: String = ""
     @State private var commandEdited: Bool = false
+    @State private var worktreeBranch: String = ""
     @AppStorage("createWorktree") private var createWorktree = true
-    @AppStorage("runRemotely") private var runRemotely = true
+    @State private var runRemotely: Bool
     @AppStorage("dangerouslySkipPermissions") private var dangerouslySkipPermissions = true
 
     init(
@@ -38,7 +39,7 @@ struct LaunchConfirmationDialog: View {
         sessionId: String? = nil,
         promptImagePaths: [String] = [],
         isPresented: Binding<Bool>,
-        onLaunch: @escaping (String, Bool, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _ in }
+        onLaunch: @escaping (String, Bool, String?, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _ in }
     ) {
         self.cardId = cardId
         self.projectPath = projectPath
@@ -54,6 +55,8 @@ struct LaunchConfirmationDialog: View {
         self.onLaunch = onLaunch
         self._prompt = State(initialValue: initialPrompt)
         self._images = State(initialValue: promptImagePaths.compactMap { ImageAttachment.fromPath($0) })
+        let key = "runRemotely_\(projectPath)"
+        self._runRemotely = State(initialValue: UserDefaults.standard.object(forKey: key) as? Bool ?? true)
     }
 
     var body: some View {
@@ -122,6 +125,12 @@ struct LaunchConfirmationDialog: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.leading, 20)
                             }
+                            if createWorktree && isGitRepo {
+                                TextField("Branch name", text: $worktreeBranch, prompt: Text("Leave empty for a random one"))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.app(.callout))
+                                    .padding(.leading, 20)
+                            }
                         }
 
                         Toggle("Run remotely", isOn: hasRemoteConfig ? $runRemotely : .constant(false))
@@ -185,9 +194,13 @@ struct LaunchConfirmationDialog: View {
             if !commandEdited { command = commandPreview }
         }
         .onChange(of: runRemotely) {
+            UserDefaults.standard.set(runRemotely, forKey: "runRemotely_\(projectPath)")
             if !commandEdited { command = commandPreview }
         }
         .onChange(of: createWorktree) {
+            if !commandEdited { command = commandPreview }
+        }
+        .onChange(of: worktreeBranch) {
             if !commandEdited { command = commandPreview }
         }
         .onChange(of: dangerouslySkipPermissions) {
@@ -202,7 +215,8 @@ struct LaunchConfirmationDialog: View {
             guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         }
         let override = commandEdited ? command : nil
-        onLaunch(prompt, effectiveCreateWorktree, effectiveRunRemotely, dangerouslySkipPermissions, override, images)
+        let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        onLaunch(prompt, effectiveCreateWorktree, branch.isEmpty ? nil : branch, effectiveRunRemotely, dangerouslySkipPermissions, override, images)
         isPresented = false
     }
 
@@ -233,8 +247,11 @@ struct LaunchConfirmationDialog: View {
             if dangerouslySkipPermissions { cmd += " --dangerously-skip-permissions" }
 
             if effectiveCreateWorktree {
+                let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let name = worktreeName, !name.isEmpty {
                     cmd += " --worktree \(name)"
+                } else if !branch.isEmpty {
+                    cmd += " --worktree \(branch)"
                 } else {
                     cmd += " --worktree"
                 }

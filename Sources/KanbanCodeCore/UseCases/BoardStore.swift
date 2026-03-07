@@ -179,6 +179,7 @@ public enum Action: Sendable {
     case terminalCreated(cardId: String, tmuxName: String)
     case terminalFailed(cardId: String, error: String)
     case extraTerminalCreated(cardId: String, sessionName: String)
+    case renameTerminalTab(cardId: String, sessionName: String, label: String)
 
     // Background reconciliation
     case reconciled(ReconciliationResult)
@@ -793,6 +794,21 @@ public enum Reducer {
         case .extraTerminalCreated(let cardId, _):
             state.busyCards.remove(cardId)
             return []
+
+        case .renameTerminalTab(let cardId, let sessionName, let label):
+            guard var link = state.links[cardId],
+                  var tmux = link.tmuxLink else { return [] }
+            var names = tmux.tabNames ?? [:]
+            if label.isEmpty {
+                names.removeValue(forKey: sessionName)
+            } else {
+                names[sessionName] = label
+            }
+            tmux.tabNames = names.isEmpty ? nil : names
+            link.tmuxLink = tmux
+            link.updatedAt = .now
+            state.links[cardId] = link
+            return [.upsertLink(link)]
 
         // MARK: Background Reconciliation
 
