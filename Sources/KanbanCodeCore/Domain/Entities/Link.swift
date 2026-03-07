@@ -96,12 +96,14 @@ public struct IssueLink: Codable, Sendable, Equatable {
     public var url: String?
     public var body: String?
     public var title: String?
+    public var labels: [String]?
 
-    public init(number: Int, url: String? = nil, body: String? = nil, title: String? = nil) {
+    public init(number: Int, url: String? = nil, body: String? = nil, title: String? = nil, labels: [String]? = nil) {
         self.number = number
         self.url = url
         self.body = body
         self.title = title
+        self.labels = labels
     }
 }
 
@@ -127,6 +129,8 @@ public enum CardLabel: String, Sendable {
     case session = "SESSION"
     case worktree = "WORKTREE"
     case issue = "ISSUE"
+    case bug = "BUG"
+    case feature = "FEATURE"
     case pr = "PR"
     case task = "TASK"
 }
@@ -229,7 +233,12 @@ public struct Link: Identifiable, Codable, Sendable {
     public var cardLabel: CardLabel {
         if sessionLink != nil { return .session }
         if worktreeLink != nil { return .worktree }
-        if issueLink != nil { return .issue }
+        if let issue = issueLink {
+            let ghLabels = Set((issue.labels ?? []).map { $0.lowercased() })
+            if ghLabels.contains("bug") { return .bug }
+            if ghLabels.contains(where: { $0.contains("feature") || $0.contains("enhancement") }) { return .feature }
+            return .issue
+        }
         if !prLinks.isEmpty { return .pr }
         return .task
     }

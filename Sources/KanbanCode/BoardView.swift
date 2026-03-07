@@ -39,7 +39,7 @@ struct BoardView: View {
                                 set: { store.dispatch(.selectCard(cardId: $0)) }
                             ),
                             dragState: dragState,
-                            isRefreshingBacklog: store.state.isRefreshingBacklog,
+                            isRefreshingBacklog: column == .backlog ? store.state.isRefreshingBacklog : false,
                             onMoveCard: { cardId, targetColumn in
                                 onDropCard(cardId, targetColumn)
                             },

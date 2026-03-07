@@ -1484,16 +1484,24 @@ public final class BoardStore: @unchecked Sendable {
                     let key = "\(project.path):\(issue.number)"
                     fetchedIssueKeys.insert(key)
 
-                    let existing = links.first(where: {
+                    let existingIndex = links.firstIndex(where: {
                         $0.issueLink?.number == issue.number && $0.projectPath == project.path
                     })
-                    if existing == nil {
+                    if let idx = existingIndex {
+                        // Update labels and title on existing issues
+                        let newLabels = issue.labels.isEmpty ? nil : issue.labels
+                        if links[idx].issueLink?.labels != newLabels || links[idx].issueLink?.title != issue.title {
+                            links[idx].issueLink?.labels = newLabels
+                            links[idx].issueLink?.title = issue.title
+                            changed = true
+                        }
+                    } else {
                         let link = Link(
                             name: "#\(issue.number): \(issue.title)",
                             projectPath: project.path,
                             column: .backlog,
                             source: .githubIssue,
-                            issueLink: IssueLink(number: issue.number, url: issue.url, body: issue.body, title: issue.title)
+                            issueLink: IssueLink(number: issue.number, url: issue.url, body: issue.body, title: issue.title, labels: issue.labels.isEmpty ? nil : issue.labels)
                         )
                         links.append(link)
                         changed = true
