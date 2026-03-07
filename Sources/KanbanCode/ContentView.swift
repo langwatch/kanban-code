@@ -1145,14 +1145,15 @@ struct ContentView: View {
                     .font(.app(.headline))
                     .lineLimit(1)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 8)
         }
         .buttonStyle(.plain)
         .help("Mutagen file sync status")
-        .task {
+        .task(id: currentSyncStatus) {
             await refreshSyncStatus()
+            let interval: Duration = currentSyncStatus == .staging ? .seconds(1) : .seconds(10)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
+                try? await Task.sleep(for: interval)
                 await refreshSyncStatus()
             }
         }
@@ -1293,7 +1294,7 @@ struct ContentView: View {
     private func syncStatusColor(_ status: SyncStatus) -> Color {
         switch status {
         case .watching: .green
-        case .staging: .blue
+        case .staging: .secondary
         case .conflicts: .yellow
         case .paused: .yellow
         case .error: .red
@@ -1303,12 +1304,12 @@ struct ContentView: View {
 
     private func syncStatusLabel(_ status: SyncStatus) -> String {
         switch status {
-        case .watching: "Files in sync"
-        case .staging: "Syncing files…"
-        case .conflicts: "Conflicts detected"
-        case .paused: "Sync paused"
-        case .error: "Sync error"
-        case .notRunning: "Sync not running"
+        case .watching: "Files in Sync"
+        case .staging: "Syncing Files…"
+        case .conflicts: "Conflicts Detected"
+        case .paused: "Sync Paused"
+        case .error: "Sync Error"
+        case .notRunning: "Sync Not Running"
         }
     }
 
