@@ -810,8 +810,9 @@ struct ContentView: View {
                     .help("Search sessions (⌘K)")
                 }
 
-                // ToolbarSpacer requires macOS 26 - removed for compatibility
-                // ToolbarSpacer(.fixed, placement: .primaryAction)
+                if #available(macOS 26, *) {
+                    ToolbarSpacer(.fixed, placement: .primaryAction)
+                }
 
                 ToolbarItem(placement: .primaryAction) {
                     Button {

@@ -220,14 +220,14 @@ struct CardDetailView: View {
                                     .contentShape(Circle())
                             }
                             .buttonStyle(.plain)
-                            //.glassEffect(.regular, in: .capsule)
+                            .glassCapsule()
                             .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
                             .modifier(HoverBrightness())
                             .help("Open in editor")
                         }
 
                         actionsMenuButton
-                            //.glassEffect(.regular, in: .capsule)
+                            .glassCapsule()
                             .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
                             .modifier(HoverBrightness())
                             .help("More actions")
@@ -1260,7 +1260,7 @@ struct CardDetailView: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            //.glassEffect(.regular, in: .capsule)
+            .glassCapsule()
             .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
             .modifier(HoverBrightness())
             .help(totalThreads > 0 ? "Open unresolved comment" : "Open pull request")

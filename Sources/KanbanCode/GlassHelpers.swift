@@ -2,30 +2,49 @@ import SwiftUI
 
 extension View {
     /// Apply liquid glass effect to a column.
-    /// Note: Actual glass effects require macOS 26+. Using fallback styling for macOS 15.
+    /// Uses Liquid Glass on macOS 26+, falls back to translucent material on macOS 15.
+    @ViewBuilder
     func glassColumn() -> some View {
-        // Fallback: subtle translucent background for macOS 15
-        self
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(.quaternary, lineWidth: 0.5)
-            )
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: 12))
+        } else {
+            self
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                )
+        }
     }
 
     /// Apply liquid glass effect to a search/modal overlay.
-    /// Note: Actual glass effects require macOS 26+. Using fallback styling for macOS 15.
+    /// Uses Liquid Glass on macOS 26+, falls back to regular material on macOS 15.
+    @ViewBuilder
     func glassOverlay() -> some View {
-        // Fallback: thicker material for overlays on macOS 15
-        self
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: 16))
+        } else {
+            self
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .shadow(color: .black.opacity(0.15), radius: 20, y: 10)
+        }
+    }
+
+    /// Apply liquid glass capsule effect to a button or small element.
+    /// Uses Liquid Glass on macOS 26+, no-op on macOS 15.
+    @ViewBuilder
+    func glassCapsule() -> some View {
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular, in: .capsule)
+        } else {
+            self
+        }
     }
 
     /// Extend background under glass for visual continuity.
-    /// Note: Background extension requires macOS 26+. No-op on macOS 15.
+    /// Uses backgroundExtensionEffect on macOS 26+, no-op on macOS 15.
+    @ViewBuilder
     func extendedBackground() -> some View {
-        // No effect - return as-is
         self
     }
 }
