@@ -109,9 +109,14 @@ struct ContentView: View {
         let geminiDetector = GeminiActivityDetector()
         let geminiStore = GeminiSessionStore()
 
+        let enabledAssistants = Self.loadEnabledAssistants()
         let registry = CodingAssistantRegistry()
-        registry.register(.claude, discovery: claudeDiscovery, detector: claudeDetector, store: claudeStore)
-        registry.register(.gemini, discovery: geminiDiscovery, detector: geminiDetector, store: geminiStore)
+        if enabledAssistants.contains(.claude) {
+            registry.register(.claude, discovery: claudeDiscovery, detector: claudeDetector, store: claudeStore)
+        }
+        if enabledAssistants.contains(.gemini) {
+            registry.register(.gemini, discovery: geminiDiscovery, detector: geminiDetector, store: geminiStore)
+        }
 
         let discovery = CompositeSessionDiscovery(registry: registry)
         let activityDetector = CompositeActivityDetector(registry: registry, defaultDetector: claudeDetector)
@@ -150,7 +155,8 @@ struct ContentView: View {
             activityDetector: activityDetector,
             tmux: tmux,
             prTracker: GhCliAdapter(),
-            notifier: notifier
+            notifier: notifier,
+            registry: registry
         )
 
         let launch = LaunchSession(tmux: tmux)
@@ -171,6 +177,16 @@ struct ContentView: View {
             .appendingPathComponent(".kanban-code/settings.json")
     }
 
+    private static func loadEnabledAssistants() -> [CodingAssistant] {
+        let settingsPath = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".kanban-code/settings.json")
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+              let settings = try? JSONDecoder().decode(Settings.self, from: data) else {
+            return CodingAssistant.allCases
+        }
+        return settings.enabledAssistants
+    }
+
     private static func loadPushoverConfig() -> PushoverClient? {
         let settingsPath = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".kanban-code/settings.json")
@@ -186,6 +202,24 @@ struct ContentView: View {
             return nil
         }
         return PushoverClient(token: token, userKey: user)
+    }
+
+    private func updateRegisteredAssistants(_ enabled: [CodingAssistant]) {
+        for assistant in CodingAssistant.allCases {
+            if enabled.contains(assistant) {
+                // Re-register if not already registered
+                if assistantRegistry.discovery(for: assistant) == nil {
+                    switch assistant {
+                    case .claude:
+                        assistantRegistry.register(.claude, discovery: ClaudeCodeSessionDiscovery(), detector: ClaudeCodeActivityDetector(), store: ClaudeCodeSessionStore())
+                    case .gemini:
+                        assistantRegistry.register(.gemini, discovery: GeminiSessionDiscovery(), detector: GeminiActivityDetector(), store: GeminiSessionStore())
+                    }
+                }
+            } else {
+                assistantRegistry.unregister(assistant)
+            }
+        }
     }
 
     private var boardView: some View {
@@ -447,6 +481,7 @@ struct ContentView: View {
                     projects: store.state.configuredProjects,
                     defaultProjectPath: store.state.selectedProjectPath,
                     globalRemoteSettings: store.state.globalRemoteSettings,
+                    enabledAssistants: assistantRegistry.available,
                     onCreate: { prompt, projectPath, title, startImmediately, images in
                         createManualTask(prompt: prompt, projectPath: projectPath, title: title, startImmediately: startImmediately, images: images)
                     },
@@ -725,6 +760,10 @@ struct ContentView: View {
                     let pushover = Self.loadPushoverConfig()
                     let newNotifier = CompositeNotifier(primary: pushover, fallback: MacOSNotificationClient())
                     orchestrator.updateNotifier(newNotifier)
+                    // Update registry for enabled/disabled assistants
+                    if let settings = try? await settingsStore.read() {
+                        updateRegisteredAssistants(settings.enabledAssistants)
+                    }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeQuitRequested)) { _ in
@@ -928,6 +967,8 @@ struct ContentView: View {
     }
 
     /// Watch ~/.kanban-code/settings.json for changes → hot-reload.
+    /// Only needed for external edits (e.g. manual file editing).
+    /// In-app settings changes post `.kanbanCodeSettingsChanged` directly.
     private nonisolated func watchSettingsFile(path: String) async {
         guard FileManager.default.fileExists(atPath: path) else { return }
 

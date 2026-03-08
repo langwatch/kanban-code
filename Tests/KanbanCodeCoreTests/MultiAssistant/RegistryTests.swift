@@ -169,22 +169,22 @@ private final class FailingDiscovery: SessionDiscovery, @unchecked Sendable {
 @Suite("CompositeActivityDetector")
 struct CompositeActivityDetectorTests {
 
-    @Test("Routes hook events to default detector")
-    func routesHookToDefault() async {
-        let defaultDetector = MockDetector()
+    @Test("Routes hook events to all registered detectors")
+    func routesHookToRegistered() async {
+        let claudeDetector = MockDetector()
         let registry = CodingAssistantRegistry()
-        registry.register(.claude, discovery: MockDiscovery(), detector: defaultDetector, store: MockStore())
+        registry.register(.claude, discovery: MockDiscovery(), detector: claudeDetector, store: MockStore())
 
-        let composite = CompositeActivityDetector(registry: registry, defaultDetector: defaultDetector)
+        let composite = CompositeActivityDetector(registry: registry, defaultDetector: claudeDetector)
         let event = HookEvent(sessionId: "s1", eventName: "UserPromptSubmit")
         await composite.handleHookEvent(event)
 
-        // The default detector should have received the event
+        // The registered detector should have received the event
         // (MockDetector ignores it, but we verify the call doesn't crash)
     }
 
-    @Test("activityState returns first non-stale result from registered detectors")
-    func activityStateFirstNonStale() async {
+    @Test("activityState returns highest-priority result across detectors")
+    func activityStateHighestPriority() async {
         let claudeDetector = MockDetector()
         let geminiDetector = MockDetector()
         await geminiDetector.setState(.activelyWorking, for: "s1")
@@ -199,19 +199,16 @@ struct CompositeActivityDetectorTests {
         #expect(state == .activelyWorking)
     }
 
-    @Test("activityState falls back to default when all are stale")
-    func activityStateFallbackToDefault() async {
-        let defaultDetector = MockDetector()
-        await defaultDetector.setState(.ended, for: "s1")
-
+    @Test("activityState returns stale when no detector knows the session")
+    func activityStateUnknownSession() async {
         let registry = CodingAssistantRegistry()
         // Only register gemini (which doesn't know about s1)
         registry.register(.gemini, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
 
-        let composite = CompositeActivityDetector(registry: registry, defaultDetector: defaultDetector)
+        let composite = CompositeActivityDetector(registry: registry, defaultDetector: MockDetector())
         let state = await composite.activityState(for: "s1")
 
-        #expect(state == .ended)
+        #expect(state == .stale)
     }
 
     @Test("pollActivity merges results from all detectors")

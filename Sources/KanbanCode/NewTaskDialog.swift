@@ -6,6 +6,7 @@ struct NewTaskDialog: View {
     var projects: [Project] = []
     var defaultProjectPath: String?
     var globalRemoteSettings: RemoteSettings?
+    var enabledAssistants: [CodingAssistant] = CodingAssistant.allCases
     /// (prompt, projectPath, title, startImmediately, images) — creates task without an assistant set
     var onCreate: (String, String?, String?, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _ in }
     /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant) — creates and launches directly (skips LaunchConfirmation)
@@ -145,9 +146,9 @@ struct NewTaskDialog: View {
 
             // Buttons
             HStack {
-                if startImmediately {
+                if startImmediately && enabledAssistants.count > 1 {
                     Picker(selection: $selectedAssistantRaw) {
-                        ForEach(CodingAssistant.allCases, id: \.self) { assistant in
+                        ForEach(enabledAssistants, id: \.self) { assistant in
                             Text(assistant.displayName)
                                 .tag(assistant.rawValue)
                         }
@@ -180,6 +181,11 @@ struct NewTaskDialog: View {
                 selectedProjectPath = lastSelectedProjectPath
             } else if let first = projects.first {
                 selectedProjectPath = first.path
+            }
+            // Ensure selected assistant is enabled; fall back to first enabled
+            if !enabledAssistants.contains(selectedAssistant),
+               let first = enabledAssistants.first {
+                selectedAssistant = first
             }
             if let path = resolvedProjectPath {
                 runRemotely = UserDefaults.standard.object(forKey: "runRemotely_\(path)") as? Bool ?? true

@@ -831,7 +831,7 @@ struct CardDetailView: View {
             VStack(spacing: 12) {
                 AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(32).scaled, height: CGFloat(32).scaled)
-                    .opacity(0.3)
+                    .foregroundStyle(Color.primary.opacity(0.3))
                 Text("\(assistant.displayName) session ended")
                     .font(.app(.body))
                     .foregroundStyle(.secondary)
@@ -845,7 +845,7 @@ struct CardDetailView: View {
             VStack(spacing: 12) {
                 AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(32).scaled, height: CGFloat(32).scaled)
-                    .opacity(0.3)
+                    .foregroundStyle(Color.primary.opacity(0.3))
                 Text("No agent session")
                     .font(.app(.body))
                     .foregroundStyle(.secondary)
@@ -1729,7 +1729,7 @@ private struct SessionIdRow: View {
             HStack(spacing: 4) {
                 AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(12).scaled, height: CGFloat(12).scaled)
-                    .opacity(0.5)
+                    .foregroundStyle(Color.primary.opacity(0.4))
                 Text(sessionId)
                     .font(.app(.caption))
                     .foregroundStyle(.secondary)

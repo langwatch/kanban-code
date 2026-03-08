@@ -37,6 +37,13 @@ public final class CodingAssistantRegistry: @unchecked Sendable {
         stores[assistant]
     }
 
+    /// Remove all adapters for a coding assistant.
+    public func unregister(_ assistant: CodingAssistant) {
+        discoveries.removeValue(forKey: assistant)
+        detectors.removeValue(forKey: assistant)
+        stores.removeValue(forKey: assistant)
+    }
+
     /// All registered assistants, sorted by raw value for deterministic ordering.
     public var available: [CodingAssistant] {
         Array(discoveries.keys).sorted { $0.rawValue < $1.rawValue }

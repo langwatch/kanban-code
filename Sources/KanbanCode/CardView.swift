@@ -46,7 +46,7 @@ struct CardView: View {
                 if card.link.cardLabel == .session {
                     AssistantIcon(assistant: card.link.effectiveAssistant)
                         .frame(width: CGFloat(14).scaled, height: CGFloat(14).scaled)
-                        .opacity(0.4)
+                        .foregroundStyle(Color.primary.opacity(0.4))
                 } else {
                     CardLabelBadge(label: card.link.cardLabel)
                 }
@@ -316,7 +316,7 @@ struct GeminiSparkle: Shape {
         let cy = rect.midY
 
         // 4-pointed star with curved concave sides
-        let waist: CGFloat = 0.28
+        let waist: CGFloat = 0.07
 
         return Path { p in
             // Start at top point

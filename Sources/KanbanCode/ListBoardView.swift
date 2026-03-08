@@ -382,7 +382,7 @@ private struct ListCardRowView: View {
                     if card.link.cardLabel == .session {
                         AssistantIcon(assistant: card.link.effectiveAssistant)
                             .frame(width: CGFloat(13).scaled, height: CGFloat(13).scaled)
-                            .opacity(0.4)
+                            .foregroundStyle(Color.primary.opacity(0.4))
                     }
 
                     if let tmux = card.link.tmuxLink {

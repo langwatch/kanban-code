@@ -1,24 +1,49 @@
 import Foundation
 
-/// Manages Claude Code hook installation for Kanban Code.
+/// Manages hook installation for coding assistants (Claude Code, Gemini CLI).
+///
+/// Both Claude Code and Gemini CLI use the same hook configuration format:
+/// `settings.json` → `hooks` → `{ EventName: [{ matcher, hooks: [{ type, command }] }] }`
+///
+/// The same hook script (`~/.kanban-code/hook.sh`) works for both because both pass
+/// `session_id`, `hook_event_name`, and `transcript_path` via stdin JSON.
+/// The orchestrator normalizes Gemini-specific event names (e.g. `AfterAgent` → `Stop`).
 public enum HookManager {
 
-    /// The hook events we need to listen to.
-    static let requiredHooks = [
-        "Stop", "Notification", "SessionStart", "SessionEnd", "UserPromptSubmit",
-    ]
+    /// Hook events needed per assistant. Event names differ but serve the same purpose.
+    public static func requiredHooks(for assistant: CodingAssistant) -> [String] {
+        switch assistant {
+        case .claude:
+            ["Stop", "Notification", "SessionStart", "SessionEnd", "UserPromptSubmit"]
+        case .gemini:
+            ["AfterAgent", "Notification", "SessionStart", "SessionEnd", "BeforeAgent"]
+        }
+    }
 
-    /// Check if hooks are already installed.
-    /// Handles Claude Code's nested format: {matcher: "", hooks: [{type, command}]}
-    public static func isInstalled(claudeSettingsPath: String? = nil) -> Bool {
-        let path = claudeSettingsPath ?? defaultSettingsPath()
+    /// Claude Code's required hooks (backward compat).
+    static let requiredHooks = requiredHooks(for: .claude)
+
+    /// Normalize Gemini event names to the canonical names the orchestrator understands.
+    public static func normalizeEventName(_ name: String) -> String {
+        switch name {
+        case "AfterAgent": "Stop"
+        case "BeforeAgent": "UserPromptSubmit"
+        default: name
+        }
+    }
+
+    // MARK: - Check
+
+    /// Check if hooks are already installed for the given assistant.
+    public static func isInstalled(for assistant: CodingAssistant, settingsPath: String? = nil) -> Bool {
+        let path = settingsPath ?? defaultSettingsPath(for: assistant)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hooks = root["hooks"] as? [String: Any] else {
             return false
         }
 
-        return requiredHooks.allSatisfy { eventName in
+        return requiredHooks(for: assistant).allSatisfy { eventName in
             guard let groups = hooks[eventName] as? [[String: Any]] else { return false }
             return groups.contains { group in
                 guard let hookEntries = group["hooks"] as? [[String: Any]] else { return false }
@@ -29,21 +54,28 @@ public enum HookManager {
         }
     }
 
-    /// Install hooks: deploys the hook script and updates Claude's settings.
-    /// Uses Claude Code's nested format: [{matcher: "", hooks: [{type, command}]}]
+    /// Backward-compatible: check Claude hooks only.
+    public static func isInstalled(claudeSettingsPath: String? = nil) -> Bool {
+        isInstalled(for: .claude, settingsPath: claudeSettingsPath)
+    }
+
+    // MARK: - Install
+
+    /// Install hooks for the given assistant.
     public static func install(
-        claudeSettingsPath: String? = nil,
+        for assistant: CodingAssistant,
+        settingsPath: String? = nil,
         hookScriptPath: String? = nil
     ) throws {
-        let settingsPath = claudeSettingsPath ?? defaultSettingsPath()
+        let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
         let scriptPath = hookScriptPath ?? defaultHookScriptPath()
 
-        // Step 1: Deploy the hook script to disk
+        // Deploy the hook script to disk
         try deployHookScript(to: scriptPath)
 
         // Read existing settings
         var root: [String: Any]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             root = existing
         } else {
@@ -57,7 +89,7 @@ public enum HookManager {
             "command": scriptPath,
         ]
 
-        for eventName in requiredHooks {
+        for eventName in requiredHooks(for: assistant) {
             var groups = hooks[eventName] as? [[String: Any]] ?? []
 
             // Check if .kanban-code/hook.sh already exists in any group
@@ -68,10 +100,8 @@ public enum HookManager {
 
             if !alreadyInstalled {
                 if groups.isEmpty {
-                    // No existing hooks for this event — create new group
                     groups.append(["matcher": "", "hooks": [hookEntry]])
                 } else {
-                    // Add to the first group's hooks array
                     var firstGroup = groups[0]
                     var entries = firstGroup["hooks"] as? [[String: Any]] ?? []
                     entries.append(hookEntry)
@@ -87,33 +117,41 @@ public enum HookManager {
 
         // Write back
         let fileManager = FileManager.default
-        let dir = (settingsPath as NSString).deletingLastPathComponent
+        let dir = (resolvedSettingsPath as NSString).deletingLastPathComponent
         try fileManager.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: settingsPath))
+        try data.write(to: URL(fileURLWithPath: resolvedSettingsPath))
     }
 
-    /// Remove Kanban hooks from settings.
-    public static func uninstall(claudeSettingsPath: String? = nil) throws {
-        let settingsPath = claudeSettingsPath ?? defaultSettingsPath()
+    /// Backward-compatible: install Claude hooks only.
+    public static func install(
+        claudeSettingsPath: String? = nil,
+        hookScriptPath: String? = nil
+    ) throws {
+        try install(for: .claude, settingsPath: claudeSettingsPath, hookScriptPath: hookScriptPath)
+    }
 
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: settingsPath)),
+    // MARK: - Uninstall
+
+    /// Remove Kanban hooks from the given assistant's settings.
+    public static func uninstall(for assistant: CodingAssistant, settingsPath: String? = nil) throws {
+        let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
+
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var hooks = root["hooks"] as? [String: Any] else {
             return
         }
 
-        for eventName in requiredHooks {
+        for eventName in requiredHooks(for: assistant) {
             if var groups = hooks[eventName] as? [[String: Any]] {
-                // Remove .kanban-code/hook.sh entries from each group
                 for i in groups.indices {
                     if var entries = groups[i]["hooks"] as? [[String: Any]] {
                         entries.removeAll { ($0["command"] as? String)?.contains(".kanban-code/hook.sh") == true }
                         groups[i]["hooks"] = entries
                     }
                 }
-                // Remove groups that have no hooks left
                 groups.removeAll { group in
                     guard let entries = group["hooks"] as? [[String: Any]] else { return true }
                     return entries.isEmpty
@@ -129,19 +167,23 @@ public enum HookManager {
         root["hooks"] = hooks
 
         let newData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try newData.write(to: URL(fileURLWithPath: settingsPath))
+        try newData.write(to: URL(fileURLWithPath: resolvedSettingsPath))
     }
 
-    /// Deploy the hook script to the target path, creating directories as needed.
+    /// Backward-compatible: uninstall Claude hooks only.
+    public static func uninstall(claudeSettingsPath: String? = nil) throws {
+        try uninstall(for: .claude, settingsPath: claudeSettingsPath)
+    }
+
+    // MARK: - Private
+
     private static func deployHookScript(to path: String) throws {
         let fm = FileManager.default
         let dir = (path as NSString).deletingLastPathComponent
         try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        // Write script (overwrites if exists — ensures latest version)
         try hookScriptContent.write(toFile: path, atomically: true, encoding: .utf8)
 
-        // Make executable (755)
         try fm.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: path
@@ -150,8 +192,8 @@ public enum HookManager {
 
     private static let hookScriptContent = """
     #!/usr/bin/env bash
-    # Kanban hook handler for Claude Code.
-    # Receives JSON on stdin from Claude hooks, appends a timestamped
+    # Kanban hook handler for coding assistants (Claude Code, Gemini CLI).
+    # Receives JSON on stdin from hooks, appends a timestamped
     # event line to ~/.kanban-code/hook-events.jsonl.
 
     set -euo pipefail
@@ -182,12 +224,17 @@ public enum HookManager {
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     # Append event line
-    printf '{\"sessionId\":\"%s\",\"event\":\"%s\",\"timestamp\":\"%s\",\"transcriptPath\":\"%s\"}\\n' \\
+    printf '{"sessionId":"%s","event":"%s","timestamp":"%s","transcriptPath":"%s"}\\n' \\
         "$session_id" "$hook_event" "$timestamp" "$transcript" >> "$EVENTS_FILE"
     """
 
+    /// Settings file path per assistant.
+    public static func defaultSettingsPath(for assistant: CodingAssistant) -> String {
+        (NSHomeDirectory() as NSString).appendingPathComponent("\(assistant.configDirName)/settings.json")
+    }
+
     private static func defaultSettingsPath() -> String {
-        (NSHomeDirectory() as NSString).appendingPathComponent(".claude/settings.json")
+        defaultSettingsPath(for: .claude)
     }
 
     private static func defaultHookScriptPath() -> String {

@@ -184,4 +184,103 @@ struct HookManagerTests {
         #expect(content.contains("hook-events.jsonl"))
         #expect(content.contains("session_id"))
     }
+
+    // MARK: - Multi-Assistant Support
+
+    @Test("Install for Gemini uses correct event names")
+    func installGemini() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let settingsPath = (dir as NSString).appendingPathComponent("settings.json")
+        let scriptPath = (dir as NSString).appendingPathComponent(".kanban-code/hook.sh")
+        try "{}".write(toFile: settingsPath, atomically: true, encoding: .utf8)
+
+        try HookManager.install(for: .gemini, settingsPath: settingsPath, hookScriptPath: scriptPath)
+
+        let installed = HookManager.isInstalled(for: .gemini, settingsPath: settingsPath)
+        #expect(installed)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: settingsPath))
+        let root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let hooks = root["hooks"] as! [String: Any]
+
+        // Gemini uses different event names
+        #expect(hooks["AfterAgent"] != nil)
+        #expect(hooks["BeforeAgent"] != nil)
+        #expect(hooks["Notification"] != nil)
+        #expect(hooks["SessionStart"] != nil)
+        #expect(hooks["SessionEnd"] != nil)
+
+        // Should NOT have Claude-specific events
+        #expect(hooks["Stop"] == nil)
+        #expect(hooks["UserPromptSubmit"] == nil)
+    }
+
+    @Test("isInstalled for Gemini checks Gemini event names")
+    func isInstalledGemini() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let settingsPath = (dir as NSString).appendingPathComponent("settings.json")
+        let scriptPath = (dir as NSString).appendingPathComponent(".kanban-code/hook.sh")
+        try "{}".write(toFile: settingsPath, atomically: true, encoding: .utf8)
+
+        // Install Claude hooks
+        try HookManager.install(for: .claude, settingsPath: settingsPath, hookScriptPath: scriptPath)
+
+        // Claude hooks installed but Gemini hooks are not
+        #expect(HookManager.isInstalled(for: .claude, settingsPath: settingsPath))
+        #expect(!HookManager.isInstalled(for: .gemini, settingsPath: settingsPath))
+    }
+
+    @Test("Uninstall for Gemini removes hooks from its own settings file")
+    func uninstallGemini() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        // Claude and Gemini use separate settings files in practice
+        let claudeSettings = (dir as NSString).appendingPathComponent("claude-settings.json")
+        let geminiSettings = (dir as NSString).appendingPathComponent("gemini-settings.json")
+        let scriptPath = (dir as NSString).appendingPathComponent(".kanban-code/hook.sh")
+        try "{}".write(toFile: claudeSettings, atomically: true, encoding: .utf8)
+        try "{}".write(toFile: geminiSettings, atomically: true, encoding: .utf8)
+
+        try HookManager.install(for: .claude, settingsPath: claudeSettings, hookScriptPath: scriptPath)
+        try HookManager.install(for: .gemini, settingsPath: geminiSettings, hookScriptPath: scriptPath)
+
+        #expect(HookManager.isInstalled(for: .claude, settingsPath: claudeSettings))
+        #expect(HookManager.isInstalled(for: .gemini, settingsPath: geminiSettings))
+
+        // Uninstall Gemini
+        try HookManager.uninstall(for: .gemini, settingsPath: geminiSettings)
+
+        // Claude unaffected, Gemini removed
+        #expect(HookManager.isInstalled(for: .claude, settingsPath: claudeSettings))
+        #expect(!HookManager.isInstalled(for: .gemini, settingsPath: geminiSettings))
+    }
+
+    @Test("normalizeEventName maps Gemini events to canonical names")
+    func normalizeEventName() {
+        #expect(HookManager.normalizeEventName("AfterAgent") == "Stop")
+        #expect(HookManager.normalizeEventName("BeforeAgent") == "UserPromptSubmit")
+        #expect(HookManager.normalizeEventName("SessionStart") == "SessionStart")
+        #expect(HookManager.normalizeEventName("SessionEnd") == "SessionEnd")
+        #expect(HookManager.normalizeEventName("Notification") == "Notification")
+        #expect(HookManager.normalizeEventName("Stop") == "Stop")
+    }
+
+    @Test("requiredHooks returns correct events per assistant")
+    func requiredHooksPerAssistant() {
+        let claude = HookManager.requiredHooks(for: .claude)
+        #expect(claude.contains("Stop"))
+        #expect(claude.contains("UserPromptSubmit"))
+        #expect(!claude.contains("AfterAgent"))
+
+        let gemini = HookManager.requiredHooks(for: .gemini)
+        #expect(gemini.contains("AfterAgent"))
+        #expect(gemini.contains("BeforeAgent"))
+        #expect(!gemini.contains("Stop"))
+        #expect(!gemini.contains("UserPromptSubmit"))
+    }
 }

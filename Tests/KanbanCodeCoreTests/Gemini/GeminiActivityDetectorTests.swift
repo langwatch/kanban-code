@@ -137,17 +137,60 @@ struct GeminiActivityDetectorTests {
         #expect(state == .stale)
     }
 
-    // MARK: - Hook Events (no-op for Gemini)
+    // MARK: - Hook Events
 
-    @Test("handleHookEvent is a no-op")
-    func hookEventNoOp() async {
+    @Test("handleHookEvent sets state from UserPromptSubmit")
+    func hookEventPromptSubmit() async {
         let detector = GeminiActivityDetector()
         let event = HookEvent(sessionId: "s1", eventName: "UserPromptSubmit")
         await detector.handleHookEvent(event)
 
-        // Should not have set any state
         let state = await detector.activityState(for: "s1")
-        #expect(state == .stale)
+        #expect(state == .activelyWorking)
+    }
+
+    @Test("handleHookEvent sets state from Stop")
+    func hookEventStop() async {
+        let detector = GeminiActivityDetector()
+        let event = HookEvent(sessionId: "s1", eventName: "Stop")
+        await detector.handleHookEvent(event)
+
+        let state = await detector.activityState(for: "s1")
+        #expect(state == .needsAttention)
+    }
+
+    @Test("handleHookEvent normalizes Gemini event names")
+    func hookEventNormalization() async {
+        let detector = GeminiActivityDetector()
+
+        // AfterAgent should be treated as Stop
+        let event = HookEvent(sessionId: "s1", eventName: "AfterAgent")
+        await detector.handleHookEvent(event)
+        let state = await detector.activityState(for: "s1")
+        #expect(state == .needsAttention)
+
+        // BeforeAgent should be treated as UserPromptSubmit
+        let event2 = HookEvent(sessionId: "s2", eventName: "BeforeAgent")
+        await detector.handleHookEvent(event2)
+        let state2 = await detector.activityState(for: "s2")
+        #expect(state2 == .activelyWorking)
+    }
+
+    @Test("Hook state takes priority over poll state")
+    func hookStatePriority() async throws {
+        let path = try writeTempFile()
+        defer { cleanup(path) }
+        try setModTime(path, secondsAgo: 7200) // file says ended
+
+        let detector = GeminiActivityDetector()
+
+        // Hook says actively working
+        let event = HookEvent(sessionId: "s1", eventName: "UserPromptSubmit")
+        await detector.handleHookEvent(event)
+
+        // Poll should still return hook state, not file state
+        let result = await detector.pollActivity(sessionPaths: ["s1": path])
+        #expect(result["s1"] == .activelyWorking)
     }
 
     // MARK: - Custom Thresholds

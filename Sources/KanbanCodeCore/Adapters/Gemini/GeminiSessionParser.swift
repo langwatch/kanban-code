@@ -16,6 +16,36 @@ public enum GeminiSessionParser {
         public let lastUpdated: String?
         public let messages: [Message]
         public let summary: String?
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            sessionId = try container.decode(String.self, forKey: .sessionId)
+            projectHash = try container.decodeIfPresent(String.self, forKey: .projectHash)
+            startTime = try container.decodeIfPresent(String.self, forKey: .startTime)
+            lastUpdated = try container.decodeIfPresent(String.self, forKey: .lastUpdated)
+            summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            // Decode messages individually — if one fails, render it as raw JSON text
+            var messagesContainer = try container.nestedUnkeyedContainer(forKey: .messages)
+            var parsed: [Message] = []
+            while !messagesContainer.isAtEnd {
+                if let msg = try? messagesContainer.decode(Message.self) {
+                    parsed.append(msg)
+                } else {
+                    // Re-decode the failing element as raw JSON for display
+                    let raw = try messagesContainer.decode(AnyCodable.self)
+                    let type = raw.stringValue(forKey: "type") ?? "unknown"
+                    let rawText: String
+                    if let data = try? JSONEncoder().encode(raw),
+                       let str = String(data: data, encoding: .utf8) {
+                        rawText = str
+                    } else {
+                        rawText = "(unparseable message)"
+                    }
+                    parsed.append(Message(type: type, rawContent: rawText))
+                }
+            }
+            messages = parsed
+        }
     }
 
     /// A single message in the conversation.
@@ -39,6 +69,18 @@ public enum GeminiSessionParser {
             model = try container.decodeIfPresent(String.self, forKey: .model)
             toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
             timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
+        }
+
+        /// Fallback initializer for messages that failed to decode.
+        init(type: String, rawContent: String) {
+            self.id = nil
+            self.type = type
+            self.content = .text(rawContent)
+            self.thoughts = nil
+            self.tokens = nil
+            self.model = nil
+            self.toolCalls = nil
+            self.timestamp = nil
         }
     }
 
@@ -112,7 +154,6 @@ public enum GeminiSessionParser {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decodeIfPresent(String.self, forKey: .id)
             name = try container.decodeIfPresent(String.self, forKey: .name)
-            result = try container.decodeIfPresent(String.self, forKey: .result)
             status = try container.decodeIfPresent(String.self, forKey: .status)
             timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp)
             displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
@@ -123,6 +164,69 @@ public enum GeminiSessionParser {
             } else {
                 args = nil
             }
+            // result can be a string, an array of functionResponse objects, or absent
+            if let str = try? container.decodeIfPresent(String.self, forKey: .result) {
+                result = str
+            } else if let arr = try? container.decodeIfPresent([[String: AnyCodable]].self, forKey: .result) {
+                // Extract output text from functionResponse array
+                var outputs: [String] = []
+                for item in arr {
+                    if let fr = item["functionResponse"],
+                       case .dictionary(let frDict) = fr,
+                       let response = frDict["response"],
+                       case .dictionary(let respDict) = response,
+                       let output = respDict["output"],
+                       case .string(let text) = output {
+                        outputs.append(text)
+                    }
+                }
+                result = outputs.isEmpty ? nil : outputs.joined(separator: "\n")
+            } else {
+                result = nil
+            }
+        }
+    }
+
+    /// Minimal type-erased Codable for flexible JSON decoding.
+    public enum AnyCodable: Codable, Sendable {
+        case string(String)
+        case int(Int)
+        case double(Double)
+        case bool(Bool)
+        case dictionary([String: AnyCodable])
+        case array([AnyCodable])
+        case null
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let v = try? container.decode(String.self) { self = .string(v) }
+            else if let v = try? container.decode(Int.self) { self = .int(v) }
+            else if let v = try? container.decode(Double.self) { self = .double(v) }
+            else if let v = try? container.decode(Bool.self) { self = .bool(v) }
+            else if let v = try? container.decode([String: AnyCodable].self) { self = .dictionary(v) }
+            else if let v = try? container.decode([AnyCodable].self) { self = .array(v) }
+            else { self = .null }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .string(let v): try container.encode(v)
+            case .int(let v): try container.encode(v)
+            case .double(let v): try container.encode(v)
+            case .bool(let v): try container.encode(v)
+            case .dictionary(let v): try container.encode(v)
+            case .array(let v): try container.encode(v)
+            case .null: try container.encodeNil()
+            }
+        }
+
+        /// Extract a string value from a dictionary-typed AnyCodable.
+        func stringValue(forKey key: String) -> String? {
+            guard case .dictionary(let dict) = self,
+                  let val = dict[key],
+                  case .string(let str) = val else { return nil }
+            return str
         }
     }
 

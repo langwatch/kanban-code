@@ -1,12 +1,19 @@
 import Foundation
 
-/// Detects Gemini CLI session activity using file modification time polling.
+/// Detects Gemini CLI session activity using both hooks and file modification time polling.
 ///
-/// Phase 1 implementation: polling-only (Gemini hooks are deferred).
-/// Checks mtime of session JSON files to infer activity state.
+/// Hook events (AfterAgent, BeforeAgent, SessionStart, SessionEnd, Notification)
+/// are normalized to canonical names by the orchestrator before reaching here.
+/// File polling provides fallback for sessions started before hooks were installed.
 public actor GeminiActivityDetector: ActivityDetector {
     /// Cached activity states from the last poll.
     private var polledStates: [String: ActivityState] = [:]
+
+    /// Hook-based states: tracks the last hook event per session.
+    private var hookStates: [String: ActivityState] = [:]
+
+    /// Timestamp of the last hook event per session (for timeout detection).
+    private var lastEventTime: [String: Date] = [:]
 
     /// Thresholds (seconds) for activity detection.
     private let activeThreshold: TimeInterval   // < this = activelyWorking
@@ -19,19 +26,48 @@ public actor GeminiActivityDetector: ActivityDetector {
 
     // MARK: - ActivityDetector
 
-    /// No-op for Phase 1 — Gemini hook support is deferred.
+    /// Handle hook events from Gemini CLI.
+    /// Event names are already normalized (AfterAgent→Stop, BeforeAgent→UserPromptSubmit).
     public func handleHookEvent(_ event: HookEvent) async {
-        // Gemini CLI hooks not yet implemented
+        lastEventTime[event.sessionId] = event.timestamp
+
+        switch HookManager.normalizeEventName(event.eventName) {
+        case "UserPromptSubmit":
+            hookStates[event.sessionId] = .activelyWorking
+        case "SessionStart":
+            hookStates[event.sessionId] = .idleWaiting
+        case "Stop":
+            hookStates[event.sessionId] = .needsAttention
+        case "SessionEnd":
+            hookStates[event.sessionId] = .ended
+        case "Notification":
+            hookStates[event.sessionId] = .needsAttention
+        default:
+            break
+        }
     }
 
     /// Poll session file mtimes and return activity states.
-    /// - Parameter sessionPaths: Map of sessionId -> file path for each session to check.
-    /// - Returns: Map of sessionId -> inferred ActivityState.
     public func pollActivity(sessionPaths: [String: String]) async -> [String: ActivityState] {
         let fileManager = FileManager.default
         var states: [String: ActivityState] = [:]
 
         for (sessionId, path) in sessionPaths {
+            // Prefer hook-based state if available and recent
+            if let hookState = hookStates[sessionId] {
+                // Check for timeout: if actively working for >5 minutes without a new event, downgrade
+                if hookState == .activelyWorking,
+                   let lastTime = lastEventTime[sessionId],
+                   Date.now.timeIntervalSince(lastTime) > attentionThreshold {
+                    hookStates[sessionId] = .needsAttention
+                    states[sessionId] = .needsAttention
+                } else {
+                    states[sessionId] = hookState
+                }
+                continue
+            }
+
+            // Fall back to file polling
             guard let attrs = try? fileManager.attributesOfItem(atPath: path),
                   let mtime = attrs[.modificationDate] as? Date else {
                 states[sessionId] = .ended
@@ -41,16 +77,12 @@ public actor GeminiActivityDetector: ActivityDetector {
             let timeSinceModified = Date.now.timeIntervalSince(mtime)
 
             if timeSinceModified < activeThreshold {
-                // Modified within ~2 minutes — likely actively working
                 states[sessionId] = .activelyWorking
             } else if timeSinceModified < attentionThreshold {
-                // Modified 2-5 minutes ago — may need attention
                 states[sessionId] = .needsAttention
             } else if timeSinceModified < 3600 {
-                // 5 min to 1 hour — idle
                 states[sessionId] = .idleWaiting
             } else if timeSinceModified < 86400 {
-                // 1 hour to 1 day — ended
                 states[sessionId] = .ended
             } else {
                 states[sessionId] = .stale
@@ -67,6 +99,6 @@ public actor GeminiActivityDetector: ActivityDetector {
 
     /// Return the cached activity state for a given session.
     public func activityState(for sessionId: String) async -> ActivityState {
-        return polledStates[sessionId] ?? .stale
+        return hookStates[sessionId] ?? polledStates[sessionId] ?? .stale
     }
 }

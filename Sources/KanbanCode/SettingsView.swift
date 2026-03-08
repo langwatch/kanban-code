@@ -100,23 +100,21 @@ enum EditorDiscovery {
 // MARK: - Settings root
 
 struct SettingsView: View {
-    @State private var hooksInstalled = false
     @State private var ghAvailable = false
     @State private var tmuxAvailable = false
-    @State private var claudeAvailable = false
-    @State private var geminiAvailable = false
+    @State private var assistantStatus: [CodingAssistant: AssistantStatus] = [:]
 
     var body: some View {
         TabView {
             ProjectsSettingsView()
                 .tabItem { Label("Projects", systemImage: "folder") }
 
+            AssistantsSettingsView(assistantStatus: $assistantStatus)
+                .tabItem { Label("Assistants", systemImage: "terminal") }
+
             GeneralSettingsView(
-                hooksInstalled: $hooksInstalled,
                 ghAvailable: ghAvailable,
-                tmuxAvailable: tmuxAvailable,
-                claudeAvailable: claudeAvailable,
-                geminiAvailable: geminiAvailable
+                tmuxAvailable: tmuxAvailable
             )
             .tabItem { Label("General", systemImage: "gear") }
 
@@ -136,22 +134,117 @@ struct SettingsView: View {
     }
 
     private func checkAvailability() async {
-        hooksInstalled = HookManager.isInstalled()
+        let settingsStore = SettingsStore()
+        let enabledAssistants = (try? await settingsStore.read())?.enabledAssistants ?? CodingAssistant.allCases
+        for assistant in CodingAssistant.allCases {
+            let available = await ShellCommand.isAvailable(assistant.cliCommand)
+            let hooks = HookManager.isInstalled(for: assistant)
+            assistantStatus[assistant] = AssistantStatus(
+                available: available,
+                hooksInstalled: hooks,
+                enabled: enabledAssistants.contains(assistant)
+            )
+        }
         ghAvailable = await GhCliAdapter().isAvailable()
         tmuxAvailable = await TmuxAdapter().isAvailable()
-        claudeAvailable = await ShellCommand.isAvailable("claude")
-        geminiAvailable = await ShellCommand.isAvailable("gemini")
+    }
+}
+
+/// Per-assistant availability and hook status, used by Settings and Onboarding.
+struct AssistantStatus {
+    var available: Bool
+    var hooksInstalled: Bool
+    var enabled: Bool
+}
+
+// MARK: - Assistants
+
+struct AssistantsSettingsView: View {
+    @Binding var assistantStatus: [CodingAssistant: AssistantStatus]
+
+    private let settingsStore = SettingsStore()
+
+    var body: some View {
+        Form {
+            ForEach(CodingAssistant.allCases, id: \.self) { assistant in
+                let status = assistantStatus[assistant] ?? AssistantStatus(available: false, hooksInstalled: false, enabled: true)
+                Section {
+                    Toggle("Enabled", isOn: Binding(
+                        get: { status.enabled },
+                        set: { newValue in
+                            assistantStatus[assistant] = AssistantStatus(
+                                available: status.available,
+                                hooksInstalled: status.hooksInstalled,
+                                enabled: newValue
+                            )
+                            saveEnabledAssistants()
+                        }
+                    ))
+
+                    if status.enabled {
+                        HStack {
+                            Label("Hooks", systemImage: status.hooksInstalled ? "checkmark.circle.fill" : "xmark.circle")
+                                .foregroundStyle(status.hooksInstalled ? .green : .secondary)
+                            Spacer()
+                            if status.hooksInstalled {
+                                Text("Installed")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            } else {
+                                Button("Install Hooks") {
+                                    do {
+                                        try HookManager.install(for: assistant)
+                                        assistantStatus[assistant] = AssistantStatus(
+                                            available: status.available,
+                                            hooksInstalled: true,
+                                            enabled: status.enabled
+                                        )
+                                    } catch {
+                                        // Show error
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text(assistant.displayName)
+                        Spacer()
+                        if status.available {
+                            Label("CLI Available", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        } else {
+                            Text("Not Installed")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private func saveEnabledAssistants() {
+        let enabled = CodingAssistant.allCases.filter { assistantStatus[$0]?.enabled ?? true }
+        Task {
+            var settings = (try? await settingsStore.read()) ?? Settings()
+            settings.enabledAssistants = enabled
+            try? await settingsStore.write(settings)
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
+        }
     }
 }
 
 // MARK: - General
 
 struct GeneralSettingsView: View {
-    @Binding var hooksInstalled: Bool
     let ghAvailable: Bool
     let tmuxAvailable: Bool
-    let claudeAvailable: Bool
-    let geminiAvailable: Bool
 
     @AppStorage("preferredEditorBundleId") private var editorBundleId: String = "dev.zed.Zed"
     @AppStorage("uiTextSize") private var uiTextSize: Int = 1
@@ -211,34 +304,7 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            Section("Coding Assistants") {
-                assistantRow("Claude Code", available: claudeAvailable, installHint: CodingAssistant.claude.installCommand)
-                assistantRow("Gemini CLI", available: geminiAvailable, installHint: CodingAssistant.gemini.installCommand)
-            }
-
             Section("Integrations") {
-                HStack {
-                    Label("Claude Code Hooks", systemImage: hooksInstalled ? "checkmark.circle.fill" : "xmark.circle")
-                        .foregroundStyle(hooksInstalled ? .green : .secondary)
-                    Spacer()
-                    if !hooksInstalled {
-                        Button("Install") {
-                            do {
-                                try HookManager.install()
-                                hooksInstalled = true
-                            } catch {
-                                // Show error
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    } else {
-                        Text("Installed")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                }
-
                 statusRow("tmux", available: tmuxAvailable)
                 statusRow("GitHub CLI (gh)", available: ghAvailable)
             }
@@ -297,7 +363,6 @@ struct GeneralSettingsView: View {
                 settingsStore: settingsStore,
                 onComplete: {
                     showOnboarding = false
-                    hooksInstalled = HookManager.isInstalled()
                 }
             )
         }
@@ -312,6 +377,7 @@ struct GeneralSettingsView: View {
                 var settings = try await settingsStore.read()
                 settings.github.mergeCommand = mergeCommand.isEmpty ? GitHubSettings.defaultMergeCommand : mergeCommand
                 try await settingsStore.write(settings)
+                NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
             } catch {}
         }
     }
@@ -324,24 +390,6 @@ struct GeneralSettingsView: View {
             Text(available ? "Available" : "Not found")
                 .foregroundStyle(.secondary)
                 .font(.caption)
-        }
-    }
-
-    private func assistantRow(_ name: String, available: Bool, installHint: String) -> some View {
-        HStack {
-            Label(name, systemImage: available ? "checkmark.circle.fill" : "minus.circle")
-                .foregroundStyle(available ? .green : .secondary)
-            Spacer()
-            if available {
-                Text("Ready")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            } else {
-                Text(installHint)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.orange)
-                    .textSelection(.enabled)
-            }
         }
     }
 }
@@ -582,6 +630,7 @@ struct NotificationSettingsView: View {
                 settings.notifications.pushoverUserKey = pushoverUserKey.isEmpty ? nil : pushoverUserKey
                 settings.notifications.renderMarkdownImage = renderMarkdownImage
                 try await settingsStore.write(settings)
+                NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
             } catch {}
         }
     }
@@ -708,6 +757,7 @@ struct RemoteSettingsView: View {
                     )
                 }
                 try await settingsStore.write(settings)
+                NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
             } catch {}
         }
     }
@@ -902,6 +952,7 @@ struct ProjectsSettingsView: View {
             var settings = try await settingsStore.read()
             settings.globalView.excludedPaths = excludedPaths
             try await settingsStore.write(settings)
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
         }
     }
 

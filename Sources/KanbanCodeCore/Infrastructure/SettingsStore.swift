@@ -13,6 +13,7 @@ public struct Settings: Codable, Sendable {
     public var columnOrder: [KanbanCodeColumn]
     public var hasCompletedOnboarding: Bool
     public var defaultAssistant: CodingAssistant?
+    public var enabledAssistants: [CodingAssistant]
 
     public init(
         projects: [Project] = [],
@@ -25,7 +26,8 @@ public struct Settings: Codable, Sendable {
         githubIssuePromptTemplate: String = "#${number}: ${title}\n\n${body}",
         columnOrder: [KanbanCodeColumn] = KanbanCodeColumn.allCases,
         hasCompletedOnboarding: Bool = false,
-        defaultAssistant: CodingAssistant? = nil
+        defaultAssistant: CodingAssistant? = nil,
+        enabledAssistants: [CodingAssistant] = CodingAssistant.allCases
     ) {
         self.projects = projects
         self.globalView = globalView
@@ -38,11 +40,13 @@ public struct Settings: Codable, Sendable {
         self.columnOrder = columnOrder
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.defaultAssistant = defaultAssistant
+        self.enabledAssistants = enabledAssistants
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects, globalView, github, notifications, remote, sessionTimeout
         case promptTemplate, githubIssuePromptTemplate, columnOrder, hasCompletedOnboarding, defaultAssistant
+        case enabledAssistants
         case skill // backward-compat: old name for promptTemplate
     }
 
@@ -63,6 +67,8 @@ public struct Settings: Codable, Sendable {
         columnOrder = try container.decodeIfPresent([KanbanCodeColumn].self, forKey: .columnOrder) ?? KanbanCodeColumn.allCases
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
         defaultAssistant = try container.decodeIfPresent(CodingAssistant.self, forKey: .defaultAssistant)
+        enabledAssistants = try container.decodeIfPresent([CodingAssistant].self, forKey: .enabledAssistants)
+            ?? CodingAssistant.allCases
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -78,6 +84,7 @@ public struct Settings: Codable, Sendable {
         try container.encode(columnOrder, forKey: .columnOrder)
         try container.encode(hasCompletedOnboarding, forKey: .hasCompletedOnboarding)
         try container.encodeIfPresent(defaultAssistant, forKey: .defaultAssistant)
+        try container.encode(enabledAssistants, forKey: .enabledAssistants)
         // Note: "skill" is NOT encoded — only read for backward-compat
     }
 }

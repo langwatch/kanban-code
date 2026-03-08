@@ -19,6 +19,7 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
     private let prTracker: PRTrackerPort?
     private let notificationDedup: NotificationDeduplicator
     private var notifier: NotifierPort?
+    private let registry: CodingAssistantRegistry?
 
     private var backgroundTask: Task<Void, Never>?
     private var didInitialLoad = false
@@ -32,7 +33,8 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
         tmux: TmuxManagerPort? = nil,
         prTracker: PRTrackerPort? = nil,
         notificationDedup: NotificationDeduplicator = .init(),
-        notifier: NotifierPort? = nil
+        notifier: NotifierPort? = nil,
+        registry: CodingAssistantRegistry? = nil
     ) {
         self.discovery = discovery
         self.coordinationStore = coordinationStore
@@ -42,6 +44,7 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
         self.prTracker = prTracker
         self.notificationDedup = notificationDedup
         self.notifier = notifier
+        self.registry = registry
     }
 
     /// Start the slow background loop (columns, PRs, activity polling).
@@ -187,7 +190,9 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
                 // Notification logic — mirrors claude-pushover, adapted for batch processing.
                 // Uses EVENT TIMESTAMPS (not wall-clock) so batch-processed events
                 // behave identically to claude-pushover's one-event-per-process model.
-                switch event.eventName {
+                // Normalize Gemini event names (AfterAgent → Stop, BeforeAgent → UserPromptSubmit).
+                let eventName = HookManager.normalizeEventName(event.eventName)
+                switch eventName {
                 case "Stop":
                     // claude-pushover: sleep 0.5s, check if user prompted, send if not.
                     // NO 62s dedup — Stop always sends (dedup only applies to Notification events).
@@ -279,7 +284,17 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
         let renderMarkdown = (try? await SettingsStore().read())?.notifications.renderMarkdownImage ?? false
 
         if let transcriptPath = link?.sessionLink?.sessionPath {
-            if let lastText = await TranscriptNotificationReader.lastAssistantText(transcriptPath: transcriptPath) {
+            // Use the correct session store for the assistant (Gemini=JSON, Claude=JSONL)
+            let assistant = link?.assistant ?? .claude
+            let lastText: String?
+            if let store = registry?.store(for: assistant),
+               let turns = try? await store.readTranscript(sessionPath: transcriptPath) {
+                lastText = TranscriptNotificationReader.lastAssistantText(from: turns)
+            } else {
+                lastText = await TranscriptNotificationReader.lastAssistantText(transcriptPath: transcriptPath)
+            }
+
+            if let lastText {
                 let lineCount = lastText.components(separatedBy: "\n").count
                 if lineCount > 1 {
                     if renderMarkdown {
