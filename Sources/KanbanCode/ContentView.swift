@@ -75,6 +75,7 @@ struct ContentView: View {
         CodingAssistant(rawValue: defaultAssistantRaw) ?? .claude
     }
     private let settingsStore: SettingsStore
+    private let assistantRegistry: CodingAssistantRegistry
     private let launcher: LaunchSession
     private let tmuxAdapter: TmuxAdapter
     private let systemTray = SystemTray()
@@ -161,6 +162,7 @@ struct ContentView: View {
         _store = State(initialValue: boardStore)
         _orchestrator = State(initialValue: orch)
         self.settingsStore = settings
+        self.assistantRegistry = registry
         self.launcher = launch
         self.tmuxAdapter = tmux
         self.hookEventsPath = (NSHomeDirectory() as NSString)
@@ -288,7 +290,7 @@ struct ContentView: View {
         if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
             CardDetailView(
                 card: card,
-                sessionStore: store.sessionStore,
+                sessionStore: assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore,
                 onResume: {
                     if card.link.sessionLink != nil {
                         resumeCard(cardId: card.id)
@@ -2217,11 +2219,13 @@ struct ContentView: View {
                     }
                 }
 
-                let newSessionId = try await store.sessionStore.forkSession(
+                let cardStore = assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore
+                let newSessionId = try await cardStore.forkSession(
                     sessionPath: sessionPath, targetDirectory: targetDir
                 )
                 let dir = targetDir ?? (sessionPath as NSString).deletingLastPathComponent
-                let newPath = (dir as NSString).appendingPathComponent("\(newSessionId).jsonl")
+                let ext = card.link.effectiveAssistant == .gemini ? "json" : "jsonl"
+                let newPath = (dir as NSString).appendingPathComponent("\(newSessionId).\(ext)")
                 var newLink = Link(
                     name: (card.link.name ?? card.link.displayTitle) + " (fork)",
                     projectPath: forkProjectPath,

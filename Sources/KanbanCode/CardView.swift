@@ -44,7 +44,7 @@ struct CardView: View {
             // Bottom row: badge + time + link indicators
             HStack(spacing: 6) {
                 if card.link.cardLabel == .session {
-                    SessionIcon()
+                    AssistantIcon(assistant: card.link.effectiveAssistant)
                         .frame(width: CGFloat(14).scaled, height: CGFloat(14).scaled)
                         .opacity(0.4)
                 } else {
@@ -54,13 +54,6 @@ struct CardView: View {
                 Text(card.relativeTime)
                     .font(.app(.caption2))
                     .foregroundStyle(.tertiary)
-
-                // Assistant badge (only shown for non-default assistants)
-                if card.link.effectiveAssistant != .claude {
-                    AssistantIcon(assistant: card.link.effectiveAssistant)
-                        .frame(width: CGFloat(10).scaled, height: CGFloat(10).scaled)
-                        .foregroundStyle(.purple)
-                }
 
                 Spacer()
 
@@ -289,6 +282,28 @@ struct AssistantIcon: View {
         case .gemini:
             GeminiSparkle()
         }
+    }
+
+    /// NSImage for use in NSMenuItems — template mode for dark mode support.
+    static func menuImage(for assistant: CodingAssistant, size: CGFloat = 16) -> NSImage? {
+        switch assistant {
+        case .claude:
+            return SessionIcon.menuImage
+        case .gemini:
+            return geminiMenuImage(size: size)
+        }
+    }
+
+    private static func geminiMenuImage(size: CGFloat) -> NSImage {
+        let img = NSImage(size: NSSize(width: size, height: size))
+        img.lockFocus()
+        let path = GeminiSparkle().path(in: CGRect(origin: .zero, size: CGSize(width: size, height: size)))
+        let bezier = NSBezierPath(cgPath: path.cgPath)
+        NSColor.black.setFill()
+        bezier.fill()
+        img.unlockFocus()
+        img.isTemplate = true
+        return img
     }
 }
 

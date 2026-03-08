@@ -380,7 +380,7 @@ private struct ListCardRowView: View {
                     }
 
                     if card.link.cardLabel == .session {
-                        SessionIcon(size: CGFloat(13).scaled)
+                        AssistantIcon(assistant: card.link.effectiveAssistant)
                             .frame(width: CGFloat(13).scaled, height: CGFloat(13).scaled)
                             .opacity(0.4)
                     }

@@ -295,7 +295,7 @@ struct CardDetailView: View {
                         copyableRow(icon: "folder.badge.gearshape", text: projectPath)
                     }
                     if let sessionId = card.link.sessionLink?.sessionId {
-                        SessionIdRow(sessionId: sessionId)
+                        SessionIdRow(sessionId: sessionId, assistant: card.link.effectiveAssistant)
                     }
 
                     // Add link button
@@ -620,8 +620,8 @@ struct CardDetailView: View {
                 HStack(spacing: 4) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) {
-                            // Claude tab — always first
-                            claudeTab(isSelected: isClaudeTabSelected, isLaunching: isLaunching)
+                            // Assistant tab — always first
+                            assistantTab(isSelected: isClaudeTabSelected, isLaunching: isLaunching)
 
                             // Shell session tabs
                             ForEach(shellSessions, id: \.self) { sessionName in
@@ -716,7 +716,7 @@ struct CardDetailView: View {
 
                     // Overlay for non-terminal Claude tab states
                     if showOverlay {
-                        claudeTabOverlay(isLaunching: isLaunching)
+                        assistantTabOverlay(isLaunching: isLaunching)
                     }
                 }
             }
@@ -757,22 +757,23 @@ struct CardDetailView: View {
         }
     }
 
-    // MARK: - Claude Tab
+    // MARK: - Assistant Tab
 
     @ViewBuilder
-    private func claudeTab(isSelected: Bool, isLaunching: Bool) -> some View {
-        let claudeAlive = claudeTmuxSession != nil
-        let isDead = !claudeAlive && !isLaunching
+    private func assistantTab(isSelected: Bool, isLaunching: Bool) -> some View {
+        let assistant = card.link.effectiveAssistant
+        let assistantAlive = claudeTmuxSession != nil
+        let isDead = !assistantAlive && !isLaunching
 
         HStack(spacing: 0) {
             Button {
                 selectedTerminalSession = nil
-                if claudeAlive { terminalGrabFocus = true }
+                if assistantAlive { terminalGrabFocus = true }
             } label: {
                 HStack(spacing: 4) {
-                    SessionIcon()
+                    AssistantIcon(assistant: assistant)
                         .frame(width: CGFloat(12).scaled, height: CGFloat(12).scaled)
-                    Text("Claude")
+                    Text(assistant.displayName)
                         .font(.app(.caption))
                         .lineLimit(1)
                 }
@@ -783,13 +784,12 @@ struct CardDetailView: View {
             .buttonStyle(.plain)
             .opacity(isDead ? 0.5 : 1.0)
 
-            // X button only when Claude has a live tmux session
-            if claudeAlive {
+            // X button only when assistant has a live tmux session
+            if assistantAlive {
                 Button {
                     if let session = claudeTmuxSession {
                         onKillTerminal(session)
                     }
-                    // Stay on Claude tab (will now show Resume)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.app(size: 8, weight: .bold))
@@ -799,7 +799,7 @@ struct CardDetailView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .help("Stop Claude session")
+                .help("Stop \(assistant.displayName) session")
             }
         }
         .background(
@@ -808,9 +808,10 @@ struct CardDetailView: View {
         )
     }
 
-    /// Overlay shown on the Claude tab when there's no live Claude terminal.
+    /// Overlay shown on the assistant tab when there's no live terminal.
     @ViewBuilder
-    private func claudeTabOverlay(isLaunching: Bool) -> some View {
+    private func assistantTabOverlay(isLaunching: Bool) -> some View {
+        let assistant = card.link.effectiveAssistant
         if isLaunching {
             VStack(spacing: 12) {
                 ProgressView()
@@ -827,21 +828,21 @@ struct CardDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if card.link.sessionLink != nil {
             VStack(spacing: 12) {
-                SessionIcon()
+                AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(32).scaled, height: CGFloat(32).scaled)
                     .opacity(0.3)
-                Text("Claude session ended")
+                Text("\(assistant.displayName) session ended")
                     .font(.app(.body))
                     .foregroundStyle(.secondary)
                 Button(action: onResume) {
-                    Label("Resume Claude", systemImage: "play.fill")
+                    Label("Resume \(assistant.displayName)", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 12) {
-                SessionIcon()
+                AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(32).scaled, height: CGFloat(32).scaled)
                     .opacity(0.3)
                 Text("No agent session")
@@ -1441,13 +1442,8 @@ struct CardDetailView: View {
 
         if let sessionId = card.link.sessionLink?.sessionId {
             let sessionItem = menu.addActionItem("Copy Session ID") { [self] in copyToClipboard(sessionId) }
-            if let sessionImg = SessionIcon.menuImage {
-                let sized = NSImage(size: NSSize(width: 16, height: 16))
-                sized.lockFocus()
-                sessionImg.draw(in: NSRect(x: 0, y: 0, width: 16, height: 16))
-                sized.unlockFocus()
-                sized.isTemplate = true
-                sessionItem.image = sized
+            if let img = AssistantIcon.menuImage(for: card.link.effectiveAssistant) {
+                sessionItem.image = img
             }
         }
 
@@ -1508,12 +1504,19 @@ struct CardDetailView: View {
     private func loadHistory() async {
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
         if turns.isEmpty { isLoadingHistory = true }
-        // Preserve expanded window: if user loaded more than pageSize, keep that many
-        let loadCount = max(Self.pageSize, turns.count)
         do {
-            let result = try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
-            turns = result.turns
-            hasMoreTurns = result.hasMore
+            if card.link.effectiveAssistant == .gemini {
+                // Gemini uses JSON format — load all turns via session store
+                let allTurns = try await sessionStore.readTranscript(sessionPath: path)
+                turns = allTurns
+                hasMoreTurns = false
+            } else {
+                // Claude uses JSONL — paginated loading
+                let loadCount = max(Self.pageSize, turns.count)
+                let result = try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
+                turns = result.turns
+                hasMoreTurns = result.hasMore
+            }
         } catch {
             // Silently fail — empty history is fine
         }
@@ -1717,12 +1720,13 @@ struct CardDetailView: View {
 
 private struct SessionIdRow: View {
     let sessionId: String
+    let assistant: CodingAssistant
     @State private var copied = false
 
     var body: some View {
         HStack(spacing: 4) {
             HStack(spacing: 4) {
-                SessionIcon()
+                AssistantIcon(assistant: assistant)
                     .frame(width: CGFloat(12).scaled, height: CGFloat(12).scaled)
                     .opacity(0.5)
                 Text(sessionId)

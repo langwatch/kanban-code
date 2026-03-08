@@ -95,7 +95,7 @@ struct LaunchConfirmationDialog: View {
                     // Session ID (resume only)
                     if isResume, let sid = sessionId {
                         HStack(spacing: 6) {
-                            SessionIcon()
+                            AssistantIcon(assistant: assistant)
                                 .frame(width: CGFloat(14).scaled, height: CGFloat(14).scaled)
                                 .opacity(0.5)
                             Text(sid)
