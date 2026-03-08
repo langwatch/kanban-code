@@ -48,7 +48,13 @@ struct PromptEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: PromptEditorScrollView, context: Context) {
         guard let textView = scrollView.documentView as? SubmitTextView else { return }
-        if textView.string != text {
+        // Only push text from binding when user is NOT actively editing.
+        // When the user types, textDidChange pushes to the binding. If a parent
+        // re-render (e.g. card reconciliation) calls updateNSView before SwiftUI
+        // processes the binding update, `text` can be stale. Setting textView.string
+        // with stale text resets the cursor to the end.
+        let isEditing = textView.window?.firstResponder === textView
+        if textView.string != text && !isEditing {
             textView.string = text
         }
         textView.onSubmit = onSubmit
