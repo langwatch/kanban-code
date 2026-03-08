@@ -582,8 +582,15 @@ final class TerminalContainerNSView: NSView {
             if isActive {
                 disableScrollbar(on: terminal)
                 if grabFocus {
+                    // Try immediately, then retry after a delay for heavy cards
+                    // where SwiftUI re-renders steal focus during history loading.
                     DispatchQueue.main.async { [weak self] in
                         self?.window?.makeFirstResponder(terminal)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        guard let self, self.activeSession == sessionName,
+                              self.window?.firstResponder !== terminal else { return }
+                        self.window?.makeFirstResponder(terminal)
                     }
                 }
             }
