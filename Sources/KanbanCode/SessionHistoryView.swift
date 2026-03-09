@@ -41,7 +41,10 @@ struct SessionHistoryView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var searchScanTask: Task<Void, Never>?
     @State private var isSearchScanning = false
-    @State private var didOverscrollTop = false
+    @State private var isNearTop = false
+    @State private var autoLoadEnabled = false
+    @State private var autoLoadEnableTask: Task<Void, Never>?
+    @State private var scrollState = ScrollState()
     @State private var pendingMatchScroll = false  // scroll to match after turns load from navigation
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -130,21 +133,39 @@ struct SessionHistoryView: View {
                         }
                         .background(DarkScrollbarModifier())
                         .background(ScrollBottomDetector(isAtBottom: $isAtBottom))
-                        .background(OverscrollDetector(didOverscrollTop: $didOverscrollTop))
+                        .background(NearTopDetector(isNearTop: $isNearTop))
+                        .background(ScrollViewCapture(scrollState: scrollState))
                     }
-                    .onAppear { scrollToBottom(proxy: proxy, force: true) }
+                    .onAppear {
+                        scrollToBottom(proxy: proxy, force: true)
+                        armAutoLoad()
+                    }
+                    .onChange(of: sessionPath) {
+                        autoLoadEnabled = false
+                        scrollState.stopPreserving()
+                        armAutoLoad()
+                    }
                     .onChange(of: turns.count) {
-                        if activeQuery.isEmpty {
+                        if scrollState.isPreserving {
+                            // ScrollState observer handles position — don't interfere
+                        } else if activeQuery.isEmpty {
                             scrollToBottom(proxy: proxy)
                         } else if pendingMatchScroll {
                             // Only scroll when we explicitly loaded turns for search navigation
                             pendingMatchScroll = false
                             scrollToCurrentMatch(proxy: proxy, delay: true)
                         }
-                        didOverscrollTop = false
                     }
-                    .onChange(of: didOverscrollTop) {
-                        if didOverscrollTop && hasMoreTurns && !isLoadingMore && activeQuery.isEmpty {
+                    .onChange(of: isNearTop) {
+                        if isNearTop && hasMoreTurns && !isLoadingMore && autoLoadEnabled && activeQuery.isEmpty {
+                            scrollState.captureAndPreserve()
+                            onLoadMore?()
+                        }
+                    }
+                    .onChange(of: isLoadingMore) {
+                        // When a load finishes, check if still near top and should load more
+                        if !isLoadingMore && isNearTop && hasMoreTurns && autoLoadEnabled && activeQuery.isEmpty {
+                            scrollState.captureAndPreserve()
                             onLoadMore?()
                         }
                     }
@@ -387,6 +408,16 @@ struct SessionHistoryView: View {
         } else {
             withAnimation(.easeInOut(duration: 0.2)) {
                 proxy.scrollTo(idx, anchor: .center)
+            }
+        }
+    }
+
+    private func armAutoLoad() {
+        autoLoadEnableTask?.cancel()
+        autoLoadEnableTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if !Task.isCancelled {
+                autoLoadEnabled = true
             }
         }
     }
@@ -744,11 +775,10 @@ private struct ScrollBottomDetector: NSViewRepresentable {
     }
 }
 
-/// Detects overscroll (rubber-band) past the top of the scroll view — the
-/// "pull to refresh" gesture.  Fires once per pull; resets when the binding
-/// is cleared externally (e.g. after new content loads).
-private struct OverscrollDetector: NSViewRepresentable {
-    @Binding var didOverscrollTop: Bool
+/// Continuously tracks whether the scroll view is near the top of its content.
+/// Updates the binding whenever the near-top state changes.
+private struct NearTopDetector: NSViewRepresentable {
+    @Binding var isNearTop: Bool
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -766,36 +796,109 @@ private struct OverscrollDetector: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        // Re-arm when the parent resets the binding to false
-        if !didOverscrollTop {
-            context.coordinator.hasTriggered = false
-        }
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(didOverscrollTop: $didOverscrollTop)
+        Coordinator(isNearTop: $isNearTop)
     }
 
     @MainActor class Coordinator: NSObject {
-        private var didOverscrollTop: Binding<Bool>
-        var hasTriggered = false
+        private var isNearTop: Binding<Bool>
 
-        init(didOverscrollTop: Binding<Bool>) {
-            self.didOverscrollTop = didOverscrollTop
+        init(isNearTop: Binding<Bool>) {
+            self.isNearTop = isNearTop
         }
 
         @objc func boundsChanged(_ notification: Notification) {
             guard let clipView = notification.object as? NSClipView else { return }
             let scrollOffset = clipView.bounds.origin.y
-
-            // Negative offset = rubber-banding past the top
-            if scrollOffset < -30 && !hasTriggered {
-                hasTriggered = true
-                DispatchQueue.main.async { [didOverscrollTop] in
-                    didOverscrollTop.wrappedValue = true
+            let nearTop = scrollOffset < 300
+            if isNearTop.wrappedValue != nearTop {
+                DispatchQueue.main.async { [isNearTop] in
+                    isNearTop.wrappedValue = nearTop
                 }
             }
         }
     }
+}
+
+/// Preserves scroll position when content is prepended at the top.
+/// Tracks content height incrementally and adjusts the current scroll
+/// offset by the delta on each frame change, so the visible content
+/// stays in place even while the user is still scrolling. Auto-stops
+/// after layout settles (no frame changes for 200ms).
+@MainActor class ScrollState {
+    weak var scrollView: NSScrollView?
+    private var lastKnownHeight: CGFloat?
+    private var observer: NSObjectProtocol?
+    private var settleTimer: Timer?
+
+    var isPreserving: Bool { observer != nil }
+
+    func captureAndPreserve() {
+        guard let sv = scrollView, let docView = sv.documentView else { return }
+
+        // Cancel any pending auto-stop from a previous load
+        settleTimer?.invalidate()
+        settleTimer = nil
+
+        if observer == nil {
+            lastKnownHeight = docView.frame.height
+
+            docView.postsFrameChangedNotifications = true
+            observer = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: docView,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.handleFrameChange() }
+            }
+        }
+    }
+
+    func stopPreserving() {
+        settleTimer?.invalidate()
+        settleTimer = nil
+        if let obs = observer {
+            NotificationCenter.default.removeObserver(obs)
+            observer = nil
+        }
+        lastKnownHeight = nil
+    }
+
+    private func handleFrameChange() {
+        guard let sv = scrollView,
+              let prevHeight = lastKnownHeight else { return }
+
+        let newHeight = sv.documentView?.frame.height ?? prevHeight
+        let delta = newHeight - prevHeight
+        lastKnownHeight = newHeight
+        guard delta > 0 else { return }
+
+        // Add the incremental height growth to the current scroll offset
+        let currentOffset = sv.contentView.bounds.origin.y
+        sv.contentView.setBoundsOrigin(NSPoint(x: 0, y: currentOffset + delta))
+        sv.reflectScrolledClipView(sv.contentView)
+
+        // Auto-stop after layout settles (no frame changes for 200ms)
+        settleTimer?.invalidate()
+        settleTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stopPreserving() }
+        }
+    }
+}
+
+/// Grabs a reference to the enclosing NSScrollView for ScrollState.
+private struct ScrollViewCapture: NSViewRepresentable {
+    let scrollState: ScrollState
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [scrollState] in
+            scrollState.scrollView = view.enclosingScrollView
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
