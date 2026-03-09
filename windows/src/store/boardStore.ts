@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type {
   BoardStateDto,
   CardDto,
+  DependencyStatus,
   KanbanColumn,
   QueuedPrompt,
   Session,
@@ -265,6 +266,10 @@ export async function removeQueuedPrompt(
   promptId: string
 ): Promise<void> {
   return invoke("remove_queued_prompt", { cardId, promptId });
+}
+
+export async function checkDependencies(): Promise<DependencyStatus> {
+  return invoke<DependencyStatus>("check_dependencies");
 }
 
 export async function searchTranscript(

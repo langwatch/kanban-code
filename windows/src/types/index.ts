@@ -170,6 +170,13 @@ export interface Settings {
   terminalFontSize: number;
 }
 
+export interface DependencyStatus {
+  claudeAvailable: boolean;
+  gitAvailable: boolean;
+  ghAvailable: boolean;
+  ghAuthenticated: boolean;
+}
+
 export interface ContentBlock {
   kind: "text" | "tool_use" | "tool_result" | "thinking";
   text: string;

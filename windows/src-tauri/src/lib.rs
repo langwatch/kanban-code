@@ -262,6 +262,53 @@ async fn remove_queued_prompt(
         .map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyStatus {
+    claude_available: bool,
+    git_available: bool,
+    gh_available: bool,
+    gh_authenticated: bool,
+}
+
+async fn command_exists(name: &str) -> bool {
+    tokio::process::Command::new("where")
+        .arg(name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+async fn gh_is_authed() -> bool {
+    tokio::process::Command::new("gh")
+        .args(["auth", "status"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+async fn check_dependencies() -> Result<DependencyStatus, String> {
+    let (claude, git, gh) = tokio::join!(
+        command_exists("claude"),
+        command_exists("git"),
+        command_exists("gh"),
+    );
+    let gh_auth = if gh { gh_is_authed().await } else { false };
+    Ok(DependencyStatus {
+        claude_available: claude,
+        git_available: git,
+        gh_available: gh,
+        gh_authenticated: gh_auth,
+    })
+}
+
 #[tauri::command]
 async fn search_transcript(
     session_id: String,
@@ -664,6 +711,7 @@ pub fn run() {
             update_queued_prompt,
             remove_queued_prompt,
             search_transcript,
+            check_dependencies,
         ])
         .setup(|app| {
             build_tray(app)?;

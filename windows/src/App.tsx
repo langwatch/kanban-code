@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import BoardView from "./components/BoardView";
 import CardDetailView from "./components/CardDetailView";
 import NewTaskDialog from "./components/NewTaskDialog";
+import OnboardingWizard from "./components/OnboardingWizard";
 import SearchOverlay from "./components/SearchOverlay";
 import SettingsView from "./components/SettingsView";
-import { initBoardEventListener, useBoardStore } from "./store/boardStore";
+import { getSettings, initBoardEventListener, useBoardStore } from "./store/boardStore";
 import { useTheme, t } from "./theme";
 
 const isMac =
@@ -24,6 +25,8 @@ export default function App() {
     setNewTaskOpen,
     setSettingsOpen,
   } = useBoardStore();
+
+  const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
 
   const { theme, toggle } = useTheme();
   const c = t(theme);
@@ -70,6 +73,9 @@ export default function App() {
   useEffect(() => {
     refresh();
     initBoardEventListener();
+    getSettings()
+      .then((s) => setShowOnboarding(!s.hasCompletedOnboarding))
+      .catch(() => setShowOnboarding(false));
   }, []);
 
   useEffect(() => {
@@ -216,6 +222,11 @@ export default function App() {
           opacity: 0,
         }}
       />
+
+      {/* Onboarding wizard for first-time users */}
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }
