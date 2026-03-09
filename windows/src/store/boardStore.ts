@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
+import { capture } from "../analytics";
 import type {
   BoardStateDto,
   CardDto,
@@ -76,9 +77,13 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     }
   },
 
-  selectCard: (id) => set({ selectedCardId: id }),
+  selectCard: (id) => {
+    if (id) capture("card_selected");
+    set({ selectedCardId: id });
+  },
 
   moveCard: async (cardId, column) => {
+    capture("card_moved", { to_column: column });
     // Optimistic update
     set((state) => ({
       cards: state.cards.map((c) =>
@@ -100,6 +105,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   deleteCard: async (cardId) => {
+    capture("card_deleted");
     set((state) => ({
       cards: state.cards.filter((c) => c.id !== cardId),
       selectedCardId: state.selectedCardId === cardId ? null : state.selectedCardId,
@@ -113,6 +119,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   archiveCard: async (cardId) => {
+    capture("card_archived");
     set((state) => ({
       cards: state.cards.map((c) =>
         c.id === cardId
@@ -129,6 +136,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   renameCard: async (cardId, name) => {
+    capture("card_renamed");
     set((state) => ({
       cards: state.cards.map((c) =>
         c.id === cardId ? { ...c, displayTitle: name, link: { ...c.link, name } } : c
@@ -142,6 +150,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   createCard: async (prompt, title, project, launch = false) => {
+    capture("card_created", { launch });
     try {
       const link = await invoke<{ id: string }>("create_card", { prompt, title, project, launch });
       await get().refresh();
@@ -152,10 +161,22 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     }
   },
 
-  setSearchOpen: (open) => set({ searchOpen: open }),
-  setSettingsOpen: (open) => set({ settingsOpen: open }),
-  setNewTaskOpen: (open) => set({ newTaskOpen: open }),
-  setSelectedProject: (path) => set({ selectedProjectPath: path }),
+  setSearchOpen: (open) => {
+    if (open) capture("search_opened");
+    set({ searchOpen: open });
+  },
+  setSettingsOpen: (open) => {
+    if (open) capture("settings_opened");
+    set({ settingsOpen: open });
+  },
+  setNewTaskOpen: (open) => {
+    if (open) capture("new_task_opened");
+    set({ newTaskOpen: open });
+  },
+  setSelectedProject: (path) => {
+    capture("project_filtered", { has_filter: path != null });
+    set({ selectedProjectPath: path });
+  },
   clearError: () => set({ error: null }),
 
   cardsInColumn: (column) => {
@@ -230,6 +251,7 @@ export async function getTranscript(
 }
 
 export async function searchSessions(query: string): Promise<Session[]> {
+  capture("search_query", { query_length: query.length });
   return invoke<Session[]>("search_sessions", { query });
 }
 
@@ -249,6 +271,7 @@ export async function addQueuedPrompt(
   body: string,
   sendAutomatically: boolean
 ): Promise<QueuedPrompt> {
+  capture("queued_prompt_added", { send_automatically: sendAutomatically });
   return invoke<QueuedPrompt>("add_queued_prompt", { cardId, body, sendAutomatically });
 }
 
@@ -265,6 +288,7 @@ export async function removeQueuedPrompt(
   cardId: string,
   promptId: string
 ): Promise<void> {
+  capture("queued_prompt_removed");
   return invoke("remove_queued_prompt", { cardId, promptId });
 }
 

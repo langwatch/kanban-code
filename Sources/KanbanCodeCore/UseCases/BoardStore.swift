@@ -991,6 +991,9 @@ public final class BoardStore: @unchecked Sendable {
 
     public let sessionStore: SessionStore
 
+    /// Optional callback invoked on every user-initiated dispatch. Used for analytics.
+    public var onAction: (@MainActor (Action) -> Void)?
+
     public init(
         effectHandler: EffectHandler,
         discovery: SessionDiscovery,
@@ -1016,6 +1019,7 @@ public final class BoardStore: @unchecked Sendable {
 
     /// Dispatch an action. Reducer runs synchronously, effects run async.
     public func dispatch(_ action: Action) {
+        onAction?(action)
         let effects = Reducer.reduce(state: &state, action: action)
         for effect in effects {
             Task { [weak self] in
