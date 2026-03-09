@@ -50,11 +50,11 @@ export function t(theme: Theme) {
     bgBadge: (color: string) => dark ? color + "18" : color + "15",
     bgAccent: (opacity: string) => dark ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`,
 
-    // Borders
-    border: dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)",
-    borderBright: dark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.12)",
-    borderCard: dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)",
-    borderCardSelected: dark ? "rgba(79,142,247,0.3)" : "rgba(79,142,247,0.35)",
+    // Borders — GitHub-style thin white lines in dark mode
+    border: dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
+    borderBright: dark ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.12)",
+    borderCard: dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.06)",
+    borderCardSelected: dark ? "rgba(79,142,247,0.35)" : "rgba(79,142,247,0.35)",
 
     // Text
     text: dark ? "#e4e4e7" : "#1a1a1a",
