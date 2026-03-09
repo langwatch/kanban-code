@@ -561,7 +561,7 @@ struct TurnBlockView: View {
                         Text("● ")
                             .font(.sessionDetail())
                             .foregroundStyle(.white)
-                        styledText(turn.textPreview, color: Color(white: 0.85), linksActive: linksActive)
+                        styledText(turn.textPreview, color: Color(white: 0.85), linksActive: linksActive, parseMarkdown: true)
                             .font(.sessionDetail())
                             .textSelection(.enabled)
                             .lineLimit(20)
@@ -593,29 +593,51 @@ struct TurnBlockView: View {
 
     // MARK: - Highlighted text helper
 
-    private func styledText(_ text: String, color: Color, linksActive: Bool = false) -> Text {
-        var result = AttributedString(text)
+    private func styledText(_ text: String, color: Color, linksActive: Bool = false, parseMarkdown: Bool = false) -> Text {
+        var result: AttributedString
+        if parseMarkdown,
+           let md = try? AttributedString(
+               markdown: text,
+               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+           ) {
+            result = md
+            // Style inline code spans with subtle background
+            var codeRanges: [Range<AttributedString.Index>] = []
+            for run in result.runs {
+                if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                    codeRanges.append(run.range)
+                }
+            }
+            for range in codeRanges {
+                result[range].backgroundColor = Color(white: 0.15)
+            }
+        } else {
+            result = AttributedString(text)
+        }
         result.foregroundColor = color
 
-        // Search highlighting
+        // Search highlighting (use offset-based mapping for markdown compatibility)
         if let query = highlightText?.lowercased(), !query.isEmpty {
-            let lowerText = text.lowercased()
+            let renderedText = String(result.characters)
+            let lowerText = renderedText.lowercased()
             var pos = lowerText.startIndex
             let hlBg: Color = isCurrentMatch ? .orange.opacity(0.5) : .yellow.opacity(0.35)
             let hlFg: Color = isCurrentMatch ? .orange : .yellow
             while let range = lowerText.range(of: query, range: pos..<lowerText.endIndex) {
-                if let attrStart = AttributedString.Index(range.lowerBound, within: result),
-                   let attrEnd = AttributedString.Index(range.upperBound, within: result) {
-                    result[attrStart..<attrEnd].backgroundColor = hlBg
-                    result[attrStart..<attrEnd].foregroundColor = hlFg
-                }
+                let startOff = lowerText.distance(from: lowerText.startIndex, to: range.lowerBound)
+                let endOff = lowerText.distance(from: lowerText.startIndex, to: range.upperBound)
+                let chars = result.characters
+                let attrStart = chars.index(chars.startIndex, offsetBy: startOff)
+                let attrEnd = chars.index(chars.startIndex, offsetBy: endOff)
+                result[attrStart..<attrEnd].backgroundColor = hlBg
+                result[attrStart..<attrEnd].foregroundColor = hlFg
                 pos = range.upperBound
             }
         }
 
         // Make URLs clickable when cmd+hovering
         if linksActive {
-            Self.addURLLinks(to: &result, in: text)
+            Self.addURLLinks(to: &result)
         }
 
         return Text(result)
@@ -625,14 +647,18 @@ struct TurnBlockView: View {
         try? NSRegularExpression(pattern: "https?://[^\\s<>\"'\\])*]*[^\\s<>\"'\\]).,:;!?]")
     }()
 
-    private static func addURLLinks(to attr: inout AttributedString, in text: String) {
+    private static func addURLLinks(to attr: inout AttributedString) {
         guard let regex = urlRegex else { return }
+        let text = String(attr.characters)
         let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
         for match in matches {
             guard let range = Range(match.range, in: text),
-                  let attrStart = AttributedString.Index(range.lowerBound, within: attr),
-                  let attrEnd = AttributedString.Index(range.upperBound, within: attr),
                   let url = URL(string: String(text[range])) else { continue }
+            let startOff = text.distance(from: text.startIndex, to: range.lowerBound)
+            let endOff = text.distance(from: text.startIndex, to: range.upperBound)
+            let chars = attr.characters
+            let attrStart = chars.index(chars.startIndex, offsetBy: startOff)
+            let attrEnd = chars.index(chars.startIndex, offsetBy: endOff)
             attr[attrStart..<attrEnd].link = url
             attr[attrStart..<attrEnd].foregroundColor = .init(red: 0.45, green: 0.65, blue: 1.0)
             attr[attrStart..<attrEnd].underlineStyle = .single
@@ -653,7 +679,7 @@ struct TurnBlockView: View {
                     Text("  ")
                         .font(.sessionDetail())
                 }
-                styledText(trimmed, color: Color(white: 0.85), linksActive: linksActive)
+                styledText(trimmed, color: Color(white: 0.85), linksActive: linksActive, parseMarkdown: true)
                     .font(.sessionDetail())
                     .textSelection(.enabled)
                     .lineLimit(30)
