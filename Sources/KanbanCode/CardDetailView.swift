@@ -2,8 +2,23 @@ import SwiftUI
 import KanbanCodeCore
 import MarkdownUI
 
-private enum DetailTab: String {
+/// Shared between CardDetailView and ContentView so the toolbar can show
+/// the exact same actions menu without duplicating the menu builder.
+final class ActionsMenuProvider {
+    var builder: (() -> NSMenu)?
+}
+
+enum DetailTab: String {
     case terminal, history, issue, pullRequest, prompt
+
+    static func initialTab(for card: KanbanCodeCard) -> DetailTab {
+        if card.link.tmuxLink != nil { return .terminal }
+        if card.link.sessionLink != nil { return .history }
+        if card.link.issueLink != nil { return .issue }
+        if !card.link.prLinks.isEmpty { return .pullRequest }
+        if card.link.promptBody != nil { return .prompt }
+        return .history
+    }
 }
 
 /// Button style that provides hover (brighten) and press (dim + scale) feedback
@@ -71,7 +86,10 @@ struct CardDetailView: View {
     var onMoveToFolder: () -> Void = {}
     var enabledAssistants: [CodingAssistant] = []
     var onMigrateAssistant: (CodingAssistant) -> Void = { _ in }
+    var actionsMenuProvider: ActionsMenuProvider?
     @Binding var focusTerminal: Bool
+    @Binding var isExpanded: Bool
+    @Binding var isDroppingImage: Bool
 
     @AppStorage("preferredEditorBundleId") private var editorBundleId: String = "dev.zed.Zed"
 
@@ -79,7 +97,7 @@ struct CardDetailView: View {
     @State private var isLoadingHistory = false
     @State private var hasMoreTurns = false
     @State private var isLoadingMore = false
-    @State private var selectedTab: DetailTab
+    @Binding var selectedTab: DetailTab
     @State private var showRenameSheet = false
     @State private var renameText = ""
 
@@ -133,7 +151,7 @@ struct CardDetailView: View {
 
     let sessionStore: SessionStore
 
-    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onRenameTerminal: @escaping (String, String) -> Void = { _, _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onEditingQueuedPrompt: @escaping (String?) -> Void = { _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, onMoveToFolder: @escaping () -> Void = {}, enabledAssistants: [CodingAssistant] = [], onMigrateAssistant: @escaping (CodingAssistant) -> Void = { _ in }, focusTerminal: Binding<Bool> = .constant(false)) {
+    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), selectedTab: Binding<DetailTab>, onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onRenameTerminal: @escaping (String, String) -> Void = { _, _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onEditingQueuedPrompt: @escaping (String?) -> Void = { _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, onMoveToFolder: @escaping () -> Void = {}, enabledAssistants: [CodingAssistant] = [], onMigrateAssistant: @escaping (CodingAssistant) -> Void = { _ in }, actionsMenuProvider: ActionsMenuProvider? = nil, focusTerminal: Binding<Bool> = .constant(false), isExpanded: Binding<Bool> = .constant(false), isDroppingImage: Binding<Bool> = .constant(false)) {
         self.card = card
         self.sessionStore = sessionStore
         self.onResume = onResume
@@ -164,210 +182,18 @@ struct CardDetailView: View {
         self.onMoveToFolder = onMoveToFolder
         self.enabledAssistants = enabledAssistants
         self.onMigrateAssistant = onMigrateAssistant
+        self.actionsMenuProvider = actionsMenuProvider
         self._focusTerminal = focusTerminal
-        _selectedTab = State(initialValue: Self.initialTab(for: card))
+        self._isExpanded = isExpanded
+        self._isDroppingImage = isDroppingImage
+        self._selectedTab = selectedTab
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top) {
-                    Text(card.displayTitle)
-                        .font(.app(.headline))
-                        .textCase(nil)
-                        .lineLimit(2)
-                        .layoutPriority(0)
-
-                    if card.link.cardLabel == .session {
-                        Text(card.relativeTime)
-                            .font(.app(.caption))
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    // Action pills
-                    HStack(spacing: 8) {
-                        // PR summary pill
-                        if let primary = card.link.prLink {
-                            prSummaryPill(primary: primary)
-                        }
-
-                        // Merge button — only when exactly one open PR exists
-                        if let mergePR = card.link.mergeablePR {
-                            mergeButton(pr: mergePR)
-                        }
-
-                        if card.link.tmuxLink == nil {
-                            let hasSession = card.link.sessionLink != nil
-                            let isStart = card.column == .backlog || !hasSession
-                            Button(action: onResume) {
-                                Label(isStart ? "Start" : "Resume", systemImage: "play.fill")
-                                    .font(.app(size: 13))
-                                    .foregroundStyle(isStart ? Color.green.opacity(0.8) : Color.blue.opacity(0.8))
-                                    .padding(.horizontal, 12)
-                                    .frame(height: 36)
-                                    .background((isStart ? Color.green : Color.blue).opacity(0.08), in: Capsule())
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-                            .buttonStyle(HoverFeedbackStyle())
-                            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-                            .help(isStart ? "Start work on this task" : "Resume session")
-                        }
-
-                        if let path = card.link.worktreeLink?.path ?? card.link.projectPath {
-                            Button {
-                                EditorDiscovery.open(path: path, bundleId: editorBundleId)
-                            } label: {
-                                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                                    .font(.app(size: 13))
-                                    .frame(width: CGFloat(36).scaled, height: CGFloat(36).scaled)
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .glassEffect(.regular, in: .capsule)
-                            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-                            .modifier(HoverBrightness())
-                            .help("Open in editor")
-                        }
-
-                        actionsMenuButton
-                            .glassEffect(.regular, in: .capsule)
-                            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-                            .modifier(HoverBrightness())
-                            .help("More actions")
-                    }
-                    .fixedSize()
-                }
-
-                // Badge row (only when not a session — sessions show session icon on the ID row)
-                if card.link.cardLabel != .session {
-                    HStack(spacing: 6) {
-                        CardLabelBadge(label: card.link.cardLabel)
-                        Spacer()
-                        Text(card.relativeTime)
-                            .font(.app(.caption))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-
-                if card.link.isRemote {
-                    HStack(spacing: 2) {
-                        Image(systemName: "cloud")
-                            .font(.app(.caption))
-                            .foregroundStyle(.teal)
-                        Text("Remote")
-                            .font(.app(.caption))
-                            .foregroundStyle(.teal)
-                    }
-                }
-
-                // Property rows — one per link type
-                VStack(alignment: .leading, spacing: 2) {
-                    if let branch = card.link.worktreeLink?.branch, !branch.isEmpty {
-                        linkPropertyRow(
-                            icon: "arrow.triangle.branch", label: "Branch", value: branch,
-                            onUnlink: { onUnlink(.worktree) }
-                        )
-                    } else if let discovered = card.link.discoveredBranches?.first {
-                        // Show latest discovered branch (from JSONL scanning) when no worktreeLink.
-                        // Dismissing sets watermark + clears discoveredBranches via .worktree unlink.
-                        linkPropertyRow(
-                            icon: "arrow.triangle.branch", label: "Branch", value: discovered,
-                            onUnlink: { onUnlink(.worktree) }
-                        )
-                    }
-                    if let worktreePath = card.link.worktreeLink?.path, !worktreePath.isEmpty {
-                        copyableRow(icon: "folder", text: worktreePath)
-                    }
-                    ForEach(card.link.prLinks, id: \.number) { pr in
-                        let detail = pr.status.map { " · \($0.rawValue)" } ?? ""
-                        let prURL = pr.url ?? githubBaseURL.map { GitRemoteResolver.prURL(base: $0, number: pr.number) }
-                        linkPropertyRow(
-                            icon: "arrow.triangle.pull", label: "PR", value: "#\(String(pr.number))\(detail)",
-                            url: prURL,
-                            onUnlink: { onUnlink(.pr(number: pr.number)) }
-                        )
-                    }
-                    if let issue = card.link.issueLink {
-                        let issueURL = issue.url ?? githubBaseURL.map { GitRemoteResolver.issueURL(base: $0, number: issue.number) }
-                        linkPropertyRow(
-                            icon: "circle.circle", label: "Issue", value: "#\(String(issue.number))",
-                            url: issueURL,
-                            onUnlink: { onUnlink(.issue) }
-                        )
-                    }
-                    if let projectPath = card.link.projectPath {
-                        copyableRow(icon: "folder.badge.gearshape", text: projectPath)
-                    }
-                    if let sessionId = card.link.sessionLink?.sessionId {
-                        SessionIdRow(sessionId: sessionId, assistant: card.link.effectiveAssistant)
-                    }
-
-                    // Add link button
-                    Button {
-                        showAddLink = true
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "plus")
-                                .font(.app(.caption2))
-                            Text("Add link")
-                                .font(.app(.caption))
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showAddLink) {
-                        AddLinkPopover(
-                            onAddBranch: { branch in
-                                onAddBranch(branch)
-                                showAddLink = false
-                            },
-                            onAddIssue: { number in
-                                onAddIssue(number)
-                                showAddLink = false
-                            },
-                            onAddPR: { number in
-                                onAddPR(number)
-                                showAddLink = false
-                            }
-                        )
-                    }
-                }
+            if !isExpanded {
+                normalHeader
             }
-            .padding(16)
-
-            Divider()
-
-            // Tab bar + cleanup worktree button
-            HStack {
-                Picker("", selection: $selectedTab) {
-                    Text("Terminal").tag(DetailTab.terminal)
-                    Text("History").tag(DetailTab.history)
-                    if card.link.issueLink != nil {
-                        Text("Issue").tag(DetailTab.issue)
-                    }
-                    if !card.link.prLinks.isEmpty {
-                        Text("Pull Request").tag(DetailTab.pullRequest)
-                    }
-                    if card.link.promptBody != nil && card.link.issueLink == nil {
-                        Text("Prompt").tag(DetailTab.prompt)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                if card.link.worktreeLink != nil, canCleanupWorktree {
-                    Spacer()
-                    Button(role: .destructive, action: onCleanupWorktree) {
-                        Label("Cleanup Worktree", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
 
             // Content
             switch selectedTab {
@@ -400,6 +226,7 @@ struct CardDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .task(id: card.id) {
+            actionsMenuProvider?.builder = { [self] in buildActionsMenu() }
             turns = []
             isLoadingHistory = false
             isLoadingMore = false
@@ -730,6 +557,26 @@ struct CardDetailView: View {
                     if showOverlay {
                         assistantTabOverlay(isLaunching: isLaunching)
                     }
+
+                    // Drop target highlight when dragging an image over the window
+                    if isDroppingImage && !allLiveSessions.isEmpty {
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                            .overlay {
+                                VStack(spacing: 6) {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                        .font(.app(size: 28))
+                                        .foregroundStyle(Color.accentColor)
+                                    Text("Drop image to send")
+                                        .font(.app(.caption, weight: .medium))
+                                        .foregroundStyle(.white)
+                                }
+                            }
+                            .padding(8)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
                 }
             }
             .onChange(of: card.link.tmuxLink) {
@@ -925,17 +772,8 @@ struct CardDetailView: View {
         }
     }
 
-    private static func initialTab(for card: KanbanCodeCard) -> DetailTab {
-        if card.link.tmuxLink != nil { return .terminal }
-        if card.link.sessionLink != nil { return .history }
-        if card.link.issueLink != nil { return .issue }
-        if !card.link.prLinks.isEmpty { return .pullRequest }
-        if card.link.promptBody != nil { return .prompt }
-        return .history
-    }
-
     private func defaultTab(for card: KanbanCodeCard) -> DetailTab {
-        Self.initialTab(for: card)
+        DetailTab.initialTab(for: card)
     }
 
     // MARK: - Issue Tab
@@ -1422,6 +1260,185 @@ struct CardDetailView: View {
         }
     }
 
+    // MARK: - Normal Header (collapsed inspector)
+
+    @ViewBuilder
+    private var normalHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                Text(card.displayTitle)
+                    .font(.app(.headline))
+                    .textCase(nil)
+                    .lineLimit(2)
+                    .layoutPriority(0)
+
+                if card.link.cardLabel == .session {
+                    Text(card.relativeTime)
+                        .font(.app(.caption))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 8) {
+                    if let primary = card.link.prLink {
+                        prSummaryPill(primary: primary)
+                    }
+                    if let mergePR = card.link.mergeablePR {
+                        mergeButton(pr: mergePR)
+                    }
+                    if card.link.tmuxLink == nil {
+                        let hasSession = card.link.sessionLink != nil
+                        let isStart = card.column == .backlog || !hasSession
+                        Button(action: onResume) {
+                            Label(isStart ? "Start" : "Resume", systemImage: "play.fill")
+                                .font(.app(size: 13))
+                                .foregroundStyle(isStart ? Color.green.opacity(0.8) : Color.blue.opacity(0.8))
+                                .padding(.horizontal, 12)
+                                .frame(height: 36)
+                                .background((isStart ? Color.green : Color.blue).opacity(0.08), in: Capsule())
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .buttonStyle(HoverFeedbackStyle())
+                        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                        .help(isStart ? "Start work on this task" : "Resume session")
+                    }
+
+                    expandCollapseButton
+
+                    if let path = card.link.worktreeLink?.path ?? card.link.projectPath {
+                        Button {
+                            EditorDiscovery.open(path: path, bundleId: editorBundleId)
+                        } label: {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                .font(.app(size: 13))
+                                .frame(width: CGFloat(36).scaled, height: CGFloat(36).scaled)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular, in: .capsule)
+                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                        .modifier(HoverBrightness())
+                        .help("Open in editor")
+                    }
+
+                    actionsMenuButton
+                        .glassEffect(.regular, in: .capsule)
+                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                        .modifier(HoverBrightness())
+                        .help("More actions")
+                }
+                .fixedSize()
+            }
+
+            if card.link.cardLabel != .session {
+                HStack(spacing: 6) {
+                    CardLabelBadge(label: card.link.cardLabel)
+                    Spacer()
+                    Text(card.relativeTime)
+                        .font(.app(.caption))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if card.link.isRemote {
+                HStack(spacing: 2) {
+                    Image(systemName: "cloud")
+                        .font(.app(.caption))
+                        .foregroundStyle(.teal)
+                    Text("Remote")
+                        .font(.app(.caption))
+                        .foregroundStyle(.teal)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let branch = card.link.worktreeLink?.branch, !branch.isEmpty {
+                    linkPropertyRow(icon: "arrow.triangle.branch", label: "Branch", value: branch, onUnlink: { onUnlink(.worktree) })
+                } else if let discovered = card.link.discoveredBranches?.first {
+                    linkPropertyRow(icon: "arrow.triangle.branch", label: "Branch", value: discovered, onUnlink: { onUnlink(.worktree) })
+                }
+                if let worktreePath = card.link.worktreeLink?.path, !worktreePath.isEmpty {
+                    copyableRow(icon: "folder", text: worktreePath)
+                }
+                ForEach(card.link.prLinks, id: \.number) { pr in
+                    let detail = pr.status.map { " · \($0.rawValue)" } ?? ""
+                    let prURL = pr.url ?? githubBaseURL.map { GitRemoteResolver.prURL(base: $0, number: pr.number) }
+                    linkPropertyRow(icon: "arrow.triangle.pull", label: "PR", value: "#\(String(pr.number))\(detail)", url: prURL, onUnlink: { onUnlink(.pr(number: pr.number)) })
+                }
+                if let issue = card.link.issueLink {
+                    let issueURL = issue.url ?? githubBaseURL.map { GitRemoteResolver.issueURL(base: $0, number: issue.number) }
+                    linkPropertyRow(icon: "circle.circle", label: "Issue", value: "#\(String(issue.number))", url: issueURL, onUnlink: { onUnlink(.issue) })
+                }
+                if let projectPath = card.link.projectPath {
+                    copyableRow(icon: "folder.badge.gearshape", text: projectPath)
+                }
+                if let sessionId = card.link.sessionLink?.sessionId {
+                    SessionIdRow(sessionId: sessionId, assistant: card.link.effectiveAssistant)
+                }
+                Button { showAddLink = true } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "plus").font(.app(.caption2))
+                        Text("Add link").font(.app(.caption))
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showAddLink) {
+                    AddLinkPopover(
+                        onAddBranch: { onAddBranch($0); showAddLink = false },
+                        onAddIssue: { onAddIssue($0); showAddLink = false },
+                        onAddPR: { onAddPR($0); showAddLink = false }
+                    )
+                }
+            }
+        }
+        .padding(16)
+
+        Divider()
+
+        // Tab bar
+        HStack {
+            Picker("", selection: $selectedTab) {
+                Text("Terminal").tag(DetailTab.terminal)
+                Text("History").tag(DetailTab.history)
+                if card.link.issueLink != nil { Text("Issue").tag(DetailTab.issue) }
+                if !card.link.prLinks.isEmpty { Text("Pull Request").tag(DetailTab.pullRequest) }
+                if card.link.promptBody != nil && card.link.issueLink == nil { Text("Prompt").tag(DetailTab.prompt) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if card.link.worktreeLink != nil, canCleanupWorktree {
+                Spacer()
+                Button(role: .destructive, action: onCleanupWorktree) {
+                    Label("Cleanup Worktree", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Expand/Collapse Button
+
+    private var expandCollapseButton: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            Image(systemName: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                .font(.app(size: 13))
+                .frame(width: CGFloat(36).scaled, height: CGFloat(36).scaled)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: .capsule)
+        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        .modifier(HoverBrightness())
+        .help(isExpanded ? "Contract (⌘⏎)" : "Expand (⌘⏎)")
+    }
+
     private var actionsMenuButton: some View {
         NSMenuButton {
             Image(systemName: "ellipsis")
@@ -1435,6 +1452,13 @@ struct CardDetailView: View {
 
     private func buildActionsMenu() -> NSMenu {
         let menu = NSMenu()
+
+        if isExpanded {
+            menu.addActionItem("View Details", image: "info.circle") { [self] in
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded = false }
+            }
+            menu.addItem(NSMenuItem.separator())
+        }
 
         menu.addActionItem("Rename", image: "pencil") { [self] in showRenameSheet = true }
 
@@ -1972,7 +1996,7 @@ struct RenameTerminalTabDialog: View {
 
 /// A SwiftUI view that renders custom SwiftUI content but on click shows an NSMenu
 /// anchored directly below the view — no mouse-position hacks needed.
-private struct NSMenuButton<Label: View>: NSViewRepresentable {
+struct NSMenuButton<Label: View>: NSViewRepresentable {
     let label: Label
     let menuItems: () -> NSMenu
 
@@ -2006,7 +2030,7 @@ private struct NSMenuButton<Label: View>: NSViewRepresentable {
     }
 }
 
-private final class NSMenuButtonNSView: NSView {
+final class NSMenuButtonNSView: NSView {
     var menuBuilder: (() -> NSMenu)?
 
     override func mouseDown(with event: NSEvent) {
@@ -2018,7 +2042,7 @@ private final class NSMenuButtonNSView: NSView {
 
 // MARK: - NSMenu closure helper
 
-private final class NSMenuActionItem: NSObject {
+final class NSMenuActionItem: NSObject {
     let handler: () -> Void
     init(_ handler: @escaping () -> Void) { self.handler = handler }
     @objc func invoke() { handler() }
@@ -2101,3 +2125,5 @@ private struct EditPromptSheet: View {
         isPresented = false
     }
 }
+
+

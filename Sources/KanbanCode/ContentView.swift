@@ -63,6 +63,7 @@ struct ContentView: View {
     @AppStorage("uiTextSize") private var uiTextSize: Int = 1
     @State private var showAddFromPath = false
     @State private var isDroppingFolder = false
+    @State private var isDroppingImage = false
     @State private var addFromPathText = ""
     @State private var launchConfig: LaunchConfig?
     @State private var syncStatuses: [String: SyncStatus] = [:]
@@ -70,6 +71,10 @@ struct ContentView: View {
     @State private var showSyncPopover = false
     @State private var rawSyncOutput = ""
     @State private var editingQueuedPromptId: String?
+    @State private var isExpandedDetail = false
+    @State private var detailTab: DetailTab = .terminal
+    @State private var actionsMenuProvider = ActionsMenuProvider()
+    @AppStorage("preferredEditorBundleId") private var editorBundleId: String = "dev.zed.Zed"
     @AppStorage("selectedProject") private var selectedProjectPersisted: String = ""
     @AppStorage("defaultAssistant") private var defaultAssistantRaw: String = CodingAssistant.claude.rawValue
     private var defaultAssistant: CodingAssistant {
@@ -330,12 +335,18 @@ struct ContentView: View {
         }
     }
 
+    /// Screen width for expanded inspector — avoids .infinity which crashes NSLayoutConstraint.
+    private var expandedInspectorWidth: CGFloat {
+        NSScreen.main?.frame.width ?? 10000
+    }
+
     @ViewBuilder
     private var inspectorContent: some View {
         if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
             CardDetailView(
                 card: card,
                 sessionStore: assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore,
+                selectedTab: $detailTab,
                 onResume: {
                     if card.link.sessionLink != nil {
                         resumeCard(cardId: card.id)
@@ -428,9 +439,16 @@ struct ContentView: View {
                 onMigrateAssistant: { target in
                     pendingMigration = (cardId: card.id, targetAssistant: target)
                 },
-                focusTerminal: $shouldFocusTerminal
+                actionsMenuProvider: actionsMenuProvider,
+                focusTerminal: $shouldFocusTerminal,
+                isExpanded: $isExpandedDetail,
+                isDroppingImage: $isDroppingImage
             )
-            .inspectorColumnWidth(min: 600, ideal: 800, max: 1000)
+            .inspectorColumnWidth(
+                min: isExpandedDetail ? expandedInspectorWidth : 600,
+                ideal: isExpandedDetail ? expandedInspectorWidth : 800,
+                max: isExpandedDetail ? expandedInspectorWidth : 1000
+            )
         }
     }
 
@@ -441,6 +459,14 @@ struct ContentView: View {
             .navigationTitle("")
             .inspector(isPresented: showInspector) {
                 inspectorContent
+            }
+            .onChange(of: store.state.selectedCardId) {
+                if let cardId = store.state.selectedCardId,
+                   let card = store.state.cards.first(where: { $0.id == cardId }) {
+                    detailTab = DetailTab.initialTab(for: card)
+                } else {
+                    isExpandedDetail = false
+                }
             }
             .overlay {
                 if showSearch {
@@ -497,6 +523,22 @@ struct ContentView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: isDroppingFolder)
+            .overlay {
+                if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }),
+                   let sessionName = card.link.tmuxLink?.sessionName {
+                    ImageDropZone(isTargeted: $isDroppingImage) { imageData in
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setData(imageData, forType: .png)
+                        Task { try? await self.tmuxAdapter.sendBracketedPaste(to: sessionName) }
+                    }
+                    .allowsHitTesting(isDroppingImage)
+                } else {
+                    // No terminal open — don't show image drop zone
+                    Color.clear
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isDroppingImage)
     }
 
     private var boardWithSheets: some View {
@@ -929,6 +971,57 @@ struct ContentView: View {
                     }
                 }
 
+                if isExpandedDetail, let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
+                    ToolbarItemGroup(placement: .navigation) {
+                        HStack {
+                            Text("⠀⠀" + card.displayTitle)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 200)
+
+                            if card.link.cardLabel == .session {
+                                Text(card.relativeTime)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .fixedSize()
+                            }
+
+                            Picker("", selection: $detailTab) {
+                                Text("Terminal").tag(DetailTab.terminal)
+                                Text("History").tag(DetailTab.history)
+                                if card.link.issueLink != nil { Text("Issue").tag(DetailTab.issue) }
+                                if !card.link.prLinks.isEmpty { Text("Pull Request").tag(DetailTab.pullRequest) }
+                                if card.link.promptBody != nil && card.link.issueLink == nil { Text("Prompt").tag(DetailTab.prompt) }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .fixedSize()
+                        }
+                    }
+
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { isExpandedDetail = false } label: {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        }
+                        .help("Contract (⌘⏎)")
+                    }
+
+                    ToolbarItem(placement: .primaryAction) {
+                        if let path = card.link.worktreeLink?.path ?? card.link.projectPath {
+                            Button {
+                                EditorDiscovery.open(path: path, bundleId: editorBundleId)
+                            } label: {
+                                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            }
+                            .help("Open in editor")
+                        }
+                    }
+
+                    ToolbarItem(placement: .primaryAction) {
+                        expandedActionsMenu
+                    }
+                }
+
                 ToolbarItem(placement: .primaryAction) {
                     Button { showSearch.toggle() } label: {
                         HStack(spacing: 6) {
@@ -945,8 +1038,6 @@ struct ContentView: View {
                     }
                     .help("Search sessions (⌘K)")
                 }
-
-                ToolbarSpacer(.fixed, placement: .primaryAction)
 
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -1003,6 +1094,13 @@ struct ContentView: View {
                 Button("") { deleteSelectedCard() }
                     .keyboardShortcut(.deleteForward, modifiers: [])
                     .hidden()
+                Button("") {
+                    if store.state.selectedCardId != nil {
+                        isExpandedDetail.toggle()
+                    }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .hidden()
             }
         } // NavigationStack
         .id(uiTextSize) // Force full re-render when UI scale changes
@@ -1530,6 +1628,49 @@ struct ContentView: View {
         if let cardId = store.state.selectedCardId {
             pendingDeleteCardId = cardId
         }
+    }
+
+    // MARK: - Expanded Actions Menu
+
+    /// Builds a SwiftUI Menu from CardDetailView's NSMenu builder, reusing icons and items.
+    private var expandedActionsMenu: some View {
+        Menu {
+            if let menu = actionsMenuProvider.builder?() {
+                ForEach(Array(menu.items.enumerated()), id: \.offset) { _, item in
+                    if item.isSeparatorItem {
+                        Divider()
+                    } else if let submenu = item.submenu {
+                        Menu(item.title) {
+                            ForEach(Array(submenu.items.enumerated()), id: \.offset) { _, sub in
+                                Button {
+                                    (sub.representedObject as? NSMenuActionItem)?.invoke()
+                                } label: {
+                                    if let img = sub.image {
+                                        Label { Text(sub.title) } icon: { Image(nsImage: img) }
+                                    } else {
+                                        Text(sub.title)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Button {
+                            (item.representedObject as? NSMenuActionItem)?.invoke()
+                        } label: {
+                            if let img = item.image {
+                                Label { Text(item.title) } icon: { Image(nsImage: img) }
+                            } else {
+                                Text(item.title)
+                            }
+                        }
+                        .disabled(!item.isEnabled)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .help("More actions")
     }
 
     // MARK: - Keyboard Navigation

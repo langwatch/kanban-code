@@ -67,3 +67,81 @@ final class FolderDropNSView: NSView {
         return url
     }
 }
+
+// MARK: - Image/file drop zone (same pattern, for terminal drops)
+
+/// Invisible AppKit-based overlay that detects image/file drags.
+/// When an image is dragged over the window and a terminal is open,
+/// shows a drop target over the terminal area.
+struct ImageDropZone: NSViewRepresentable {
+    @Binding var isTargeted: Bool
+    var onDrop: (Data) -> Void
+
+    func makeNSView(context: Context) -> ImageDropNSView {
+        let view = ImageDropNSView()
+        view.onTargetChanged = { targeted in
+            Task { @MainActor in isTargeted = targeted }
+        }
+        view.onDrop = onDrop
+        return view
+    }
+
+    func updateNSView(_ view: ImageDropNSView, context: Context) {
+        view.onDrop = onDrop
+    }
+}
+
+final class ImageDropNSView: NSView {
+    var onTargetChanged: ((Bool) -> Void)?
+    var onDrop: ((Data) -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.png, .tiff, .fileURL])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.png, .tiff, .fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard extractImageData(from: sender.draggingPasteboard) != nil else { return [] }
+        onTargetChanged?(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard extractImageData(from: sender.draggingPasteboard) != nil else { return [] }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onTargetChanged?(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onTargetChanged?(false)
+        guard let data = extractImageData(from: sender.draggingPasteboard) else { return false }
+        onDrop?(data)
+        return true
+    }
+
+    private func extractImageData(from pasteboard: NSPasteboard) -> Data? {
+        if let data = pasteboard.data(forType: .png) { return data }
+        if let tiffData = pasteboard.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiffData),
+           let png = rep.representation(using: .png, properties: [:]) {
+            return png
+        }
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+           let url = urls.first,
+           let image = NSImage(contentsOf: url),
+           let tiffData = image.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiffData),
+           let png = rep.representation(using: .png, properties: [:]) {
+            return png
+        }
+        return nil
+    }
+}

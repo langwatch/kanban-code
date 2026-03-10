@@ -220,6 +220,7 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         urlHighlightLayer = nil
         NSCursor.arrow.set()
     }
+
 }
 
 // MARK: - Terminal process cache
@@ -417,7 +418,6 @@ final class TerminalCache {
             return existing
         }
         let terminal = BatchedTerminalView(frame: frame)
-
         // Dark terminal colors matching a real terminal
         terminal.nativeBackgroundColor = NSColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1.0)
         terminal.nativeForegroundColor = NSColor(red: 0.93, green: 0.93, blue: 0.93, alpha: 1.0)
