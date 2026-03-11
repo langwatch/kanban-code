@@ -291,6 +291,19 @@ struct CardDetailView: View {
             lastReloadTime = now
             Task { await loadHistory() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .kanbanSelectTerminalTab)) { notif in
+            guard let index = notif.userInfo?["index"] as? Int else { return }
+            selectedTab = .terminal
+            if index == 0 {
+                selectedTerminalSession = nil
+            } else {
+                let shells = shellSessions
+                if index - 1 < shells.count {
+                    selectedTerminalSession = shells[index - 1]
+                }
+            }
+            terminalGrabFocus = true
+        }
         .onChange(of: focusTerminal) {
             if focusTerminal {
                 if card.link.tmuxLink != nil {

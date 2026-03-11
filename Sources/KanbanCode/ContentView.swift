@@ -1061,6 +1061,8 @@ struct ContentView: View {
                     .help("Search sessions (⌘K / ⌘P)")
                 }
 
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         if store.state.selectedCardId != nil {
@@ -1284,11 +1286,18 @@ struct ContentView: View {
             .keyboardShortcut(AppShortcut.deleteCardForward.key, modifiers: AppShortcut.deleteCardForward.modifiers)
             .hidden()
 
-        // Project switching
+        // Cmd+1-9: terminal tab switching (when detail open) or project switching
         ForEach(Array(AppShortcut.allCases.filter { $0.projectIndex != nil }), id: \.projectIndex) { shortcut in
-            Button("") { selectProject(at: shortcut.projectIndex!) }
-                .keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
-                .hidden()
+            Button("") {
+                let ctx = shortcutContext
+                if ctx.detailOpen && !ctx.paletteOpen {
+                    selectTerminalTab(at: shortcut.projectIndex!)
+                } else {
+                    selectProject(at: shortcut.projectIndex!)
+                }
+            }
+            .keyboardShortcut(shortcut.key, modifiers: shortcut.modifiers)
+            .hidden()
         }
     }
 
@@ -1918,6 +1927,14 @@ struct ContentView: View {
         let projectIndex = index - 1
         guard projectIndex < visibleProjects.count else { return }
         setSelectedProject(visibleProjects[projectIndex].path)
+    }
+
+    private func selectTerminalTab(at index: Int) {
+        NotificationCenter.default.post(
+            name: .kanbanSelectTerminalTab,
+            object: nil,
+            userInfo: ["index": index]
+        )
     }
 
     private func addDroppedFolder(_ url: URL) {
