@@ -29,6 +29,7 @@ struct SearchOverlay: View {
     // Command palette actions
     var commands: [CommandItem] = []
     var initialQuery: String = ""
+    var deepSearchTrigger: Bool = false
 
     @State private var query = ""
     @State private var searchResults: [SearchResultItem] = []
@@ -51,11 +52,7 @@ struct SearchOverlay: View {
         .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
         .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
         .onKeyPress(.return) { handleReturn(); return .handled }
-        .background {
-            Button("") { Task { await deepSearch() } }
-                .keyboardShortcut(.return, modifiers: .command)
-                .hidden()
-        }
+        .onChange(of: deepSearchTrigger) { Task { await deepSearch() } }
         .onChange(of: query) { _, newValue in handleQueryChange(newValue) }
     }
 
