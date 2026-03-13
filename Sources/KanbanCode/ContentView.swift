@@ -198,6 +198,7 @@ struct ContentView: View {
             worktreeAdapter: GitWorktreeAdapter(),
             tmuxAdapter: tmux
         )
+        boardStore.onAction = { action in Analytics.trackAction(action) }
 
         // Load Pushover from settings.json, wrap in CompositeNotifier with macOS fallback
         let pushover = Self.loadPushoverConfig()
