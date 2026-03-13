@@ -77,6 +77,28 @@ struct LaunchSessionMultiAssistantTests {
         #expect(!cmd.contains("--dangerously-skip-permissions"))
     }
 
+    @Test("Launch with Mastra uses 'mastracode' command")
+    func launchMastra() async throws {
+        let mock = RecordingTmux()
+        let launcher = LaunchSession(tmux: mock)
+
+        _ = try await launcher.launch(
+            sessionName: "test",
+            projectPath: "/tmp/project",
+            prompt: "fix bug",
+            worktreeName: nil,
+            shellOverride: nil,
+            skipPermissions: true,
+            assistant: .mastracode
+        )
+
+        let cmd = mock.lastCommand ?? ""
+        #expect(cmd.contains("mastracode"))
+        #expect(cmd.contains("/yolo"))
+        #expect(!cmd.contains("--resume"))
+        #expect(!cmd.contains("--worktree"))
+    }
+
     @Test("Launch with Gemini skips worktree even when provided")
     func launchGeminiNoWorktree() async throws {
         let mock = RecordingTmux()
@@ -174,6 +196,27 @@ struct LaunchSessionMultiAssistantTests {
         #expect(!cmd.contains("--yolo"))
         #expect(cmd.contains("gemini"))
         #expect(cmd.contains("--resume"))
+    }
+
+    @Test("Resume with Mastra stays project-scoped")
+    func resumeMastra() async throws {
+        let mock = RecordingTmux()
+        let launcher = LaunchSession(tmux: mock)
+
+        let sessionName = try await launcher.resume(
+            sessionId: "thread_abc123-rest",
+            projectPath: "/tmp/project",
+            shellOverride: nil,
+            skipPermissions: true,
+            assistant: .mastracode
+        )
+
+        #expect(sessionName == "mastracode-thread_a")
+        let cmd = mock.lastCommand ?? ""
+        #expect(cmd.contains("mastracode"))
+        #expect(cmd.contains("/yolo"))
+        #expect(!cmd.contains("--resume"))
+        #expect(!cmd.contains("thread_abc123-rest"))
     }
 
     // MARK: - Shell override

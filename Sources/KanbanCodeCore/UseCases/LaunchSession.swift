@@ -85,7 +85,9 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
         } else {
             var built = assistant.cliCommand
             if skipPermissions { built += " \(assistant.autoApproveFlag)" }
-            built += " \(assistant.resumeFlag) \(sessionId)"
+            if let resumeFlag = assistant.resumeFlag {
+                built += " \(resumeFlag) \(sessionId)"
+            }
             let envPrefix = buildEnvPrefix(shellOverride: shellOverride, extraEnv: extraEnv)
             if !envPrefix.isEmpty {
                 built = envPrefix + " " + built

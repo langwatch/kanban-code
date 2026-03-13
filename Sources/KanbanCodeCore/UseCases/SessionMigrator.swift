@@ -39,15 +39,9 @@ public enum SessionMigrator {
             projectPath: projectPath
         )
 
-        // 4. Backup source file, then remove original so the reconciler
+        // 4. Backup source session, then remove the original so the reconciler
         //    doesn't rediscover it and create a duplicate card.
-        let backupPath = sourceSessionPath + ".bak"
-        let fm = FileManager.default
-        if fm.fileExists(atPath: backupPath) {
-            try? fm.removeItem(atPath: backupPath)
-        }
-        try fm.copyItem(atPath: sourceSessionPath, toPath: backupPath)
-        try? fm.removeItem(atPath: sourceSessionPath)
+        let backupPath = try await sourceStore.backupAndDeleteSession(sessionPath: sourceSessionPath)
 
         return MigrationResult(
             newSessionId: newSessionId,

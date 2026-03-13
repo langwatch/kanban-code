@@ -25,11 +25,7 @@ struct OnboardingWizard: View {
         var result: [OnboardingStep] = [.welcome, .assistants]
         // Add a hooks step for each enabled + available assistant
         for assistant in CodingAssistant.allCases {
-            let available: Bool
-            switch assistant {
-            case .claude: available = status?.claudeAvailable ?? false
-            case .gemini: available = status?.geminiAvailable ?? false
-            }
+            let available = status?.isAvailable(assistant) ?? false
             if available && enabledAssistants.contains(assistant) {
                 result.append(.hooks(assistant))
             }
@@ -164,12 +160,7 @@ struct OnboardingWizard: View {
             )
 
             ForEach(CodingAssistant.allCases, id: \.self) { assistant in
-                let available: Bool = {
-                    switch assistant {
-                    case .claude: status?.claudeAvailable ?? false
-                    case .gemini: status?.geminiAvailable ?? false
-                    }
-                }()
+                let available = status?.isAvailable(assistant) ?? false
 
                 HStack {
                     Toggle(assistant.displayName, isOn: Binding(
@@ -201,10 +192,7 @@ struct OnboardingWizard: View {
 
             let anyMissing = CodingAssistant.allCases.contains { assistant in
                 guard enabledAssistants.contains(assistant) else { return false }
-                switch assistant {
-                case .claude: return !(status?.claudeAvailable ?? false)
-                case .gemini: return !(status?.geminiAvailable ?? false)
-                }
+                return !(status?.isAvailable(assistant) ?? false)
             }
 
             if anyMissing {
@@ -214,12 +202,7 @@ struct OnboardingWizard: View {
                         .foregroundStyle(.secondary)
 
                     ForEach(CodingAssistant.allCases.filter { enabledAssistants.contains($0) }, id: \.self) { assistant in
-                        let available: Bool = {
-                            switch assistant {
-                            case .claude: status?.claudeAvailable ?? false
-                            case .gemini: status?.geminiAvailable ?? false
-                            }
-                        }()
+                        let available = status?.isAvailable(assistant) ?? false
 
                         if !available {
                             let command = assistant.installCommand
@@ -545,12 +528,7 @@ struct OnboardingWizard: View {
 
                 Group {
                     ForEach(CodingAssistant.allCases, id: \.self) { assistant in
-                        let available: Bool = {
-                            switch assistant {
-                            case .claude: status?.claudeAvailable ?? false
-                            case .gemini: status?.geminiAvailable ?? false
-                            }
-                        }()
+                        let available = status?.isAvailable(assistant) ?? false
                         summaryRow(assistant.displayName, status: available)
                         if available {
                             summaryRow("  \(assistant.displayName) Hooks", status: status?.assistantHooks[assistant] ?? false)

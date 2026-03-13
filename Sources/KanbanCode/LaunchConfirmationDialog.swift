@@ -243,7 +243,7 @@ struct LaunchConfirmationDialog: View {
 
         if effectiveRunRemotely {
             parts.append("SHELL=~/.kanban-code/remote/zsh")
-            if assistant == .gemini {
+            if assistant.needsRemotePathShim {
                 parts.append("PATH=~/.kanban-code/remote:$PATH")
             }
         }
@@ -251,7 +251,9 @@ struct LaunchConfirmationDialog: View {
         if isResume, let sid = sessionId {
             var resumeCmd = assistant.cliCommand
             if dangerouslySkipPermissions { resumeCmd += " \(assistant.autoApproveFlag)" }
-            resumeCmd += " \(assistant.resumeFlag) \(sid)"
+            if let resumeFlag = assistant.resumeFlag {
+                resumeCmd += " \(resumeFlag) \(sid)"
+            }
             parts.append("cd \(projectPath) && \(resumeCmd)")
         } else {
             var cmd = assistant.cliCommand

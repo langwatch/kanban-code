@@ -24,6 +24,10 @@ public protocol SessionStore: Sendable {
     /// Write conversation turns to a new session file in this store's native format.
     /// Returns the path to the new session file.
     func writeSession(turns: [ConversationTurn], sessionId: String, projectPath: String?) async throws -> String
+
+    /// Create a backup of the session and delete the original.
+    /// Returns the backup path.
+    func backupAndDeleteSession(sessionPath: String) async throws -> String
 }
 
 extension SessionStore {
@@ -43,6 +47,22 @@ extension SessionStore {
     /// Default: writing is not supported.
     public func writeSession(turns: [ConversationTurn], sessionId: String, projectPath: String?) async throws -> String {
         throw SessionStoreError.writeNotSupported
+    }
+
+    /// Default: backup a file-based session and remove the original.
+    public func backupAndDeleteSession(sessionPath: String) async throws -> String {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: sessionPath) else {
+            throw SessionStoreError.fileNotFound(sessionPath)
+        }
+
+        let backupPath = sessionPath + ".bak"
+        if fm.fileExists(atPath: backupPath) {
+            try? fm.removeItem(atPath: backupPath)
+        }
+        try fm.copyItem(atPath: sessionPath, toPath: backupPath)
+        try? fm.removeItem(atPath: sessionPath)
+        return backupPath
     }
 }
 
