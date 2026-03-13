@@ -60,60 +60,7 @@ struct CardView: View {
 
                 Spacer()
 
-                // Tmux indicator (green when attached, shows count for 2+)
-                if let tmux = card.link.tmuxLink {
-                    HStack(spacing: 2) {
-                        Image(systemName: "terminal")
-                            .font(.app(.caption2))
-                            .foregroundStyle(.green)
-                        if tmux.terminalCount > 1 {
-                            Text(verbatim: "\(tmux.terminalCount)")
-                                .font(.app(size: 9, weight: .bold))
-                                .foregroundStyle(.green)
-                        }
-                    }
-                }
-
-                // PR badge(s) — worst status across all PRs
-                if let primary = card.link.prLink {
-                    let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
-                    PRBadge(status: card.link.worstPRStatus, prNumber: primary.number, unresolvedThreads: totalThreads)
-                    if card.link.prLinks.count > 1 {
-                        Text(verbatim: "+\(card.link.prLinks.count - 1)")
-                            .font(.app(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                // Rate limit badge
-                if card.isRateLimited {
-                    RateLimitBadge()
-                }
-
-                // Issue indicator
-                if let issue = card.link.issueLink {
-                    HStack(spacing: 2) {
-                        Image(systemName: "circle.circle")
-                            .font(.app(.caption2))
-                        Text(verbatim: "\(issue.number)")
-                            .font(.app(.caption2))
-                    }
-                    .foregroundStyle(.secondary)
-                }
-
-                // Image attachment indicator
-                if let imgs = card.link.promptImagePaths, !imgs.isEmpty {
-                    Image(systemName: "photo")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.secondary)
-                }
-
-                // Remote execution indicator
-                if card.link.isRemote {
-                    Image(systemName: "cloud")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.teal)
-                }
+                CardBadgesRow(card: card)
             }
         }
         .padding(10)
@@ -425,6 +372,70 @@ struct RateLimitBadge: View {
                 .font(.app(.caption))
                 .padding(8)
                 .fixedSize()
+        }
+    }
+}
+
+// MARK: - Card Badges Row (reused by CardView + SearchCardRow)
+
+/// Displays tmux, PR, rate limit, issue, image, and remote indicators for a card.
+struct CardBadgesRow: View {
+    let card: KanbanCodeCard
+
+    var body: some View {
+        // Tmux indicator (green when attached, shows count for 2+)
+        if let tmux = card.link.tmuxLink {
+            HStack(spacing: 2) {
+                Image(systemName: "terminal")
+                    .font(.app(.caption2))
+                    .foregroundStyle(.green)
+                if tmux.terminalCount > 1 {
+                    Text(verbatim: "\(tmux.terminalCount)")
+                        .font(.app(size: 9, weight: .bold))
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+
+        // PR badge(s) — worst status across all PRs
+        if let primary = card.link.prLink {
+            let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
+            PRBadge(status: card.link.worstPRStatus, prNumber: primary.number, unresolvedThreads: totalThreads)
+            if card.link.prLinks.count > 1 {
+                Text(verbatim: "+\(card.link.prLinks.count - 1)")
+                    .font(.app(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        // Rate limit badge
+        if card.isRateLimited {
+            RateLimitBadge()
+        }
+
+        // Issue indicator
+        if let issue = card.link.issueLink {
+            HStack(spacing: 2) {
+                Image(systemName: "circle.circle")
+                    .font(.app(.caption2))
+                Text(verbatim: "\(issue.number)")
+                    .font(.app(.caption2))
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        // Image attachment indicator
+        if let imgs = card.link.promptImagePaths, !imgs.isEmpty {
+            Image(systemName: "photo")
+                .font(.app(.caption2))
+                .foregroundStyle(.secondary)
+        }
+
+        // Remote execution indicator
+        if card.link.isRemote {
+            Image(systemName: "cloud")
+                .font(.app(.caption2))
+                .foregroundStyle(.teal)
         }
     }
 }

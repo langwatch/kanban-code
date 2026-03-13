@@ -534,17 +534,24 @@ struct SearchCardRow: View {
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HighlightedText(text: card.displayTitle, terms: queryTerms)
                     .font(.app(.body))
                     .lineLimit(1)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    AssistantIcon(assistant: card.link.effectiveAssistant)
+                        .frame(width: 10, height: 10)
+                        .opacity(0.6)
+
                     if let project = card.projectName {
                         Text(project)
                             .font(.app(.caption))
                             .foregroundStyle(.secondary)
                     }
+
+                    CardBadgesRow(card: card)
+
                     Text(card.relativeTime)
                         .font(.app(.caption))
                         .foregroundStyle(.tertiary)

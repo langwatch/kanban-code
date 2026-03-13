@@ -490,6 +490,18 @@ final class TerminalCache {
     func has(_ sessionName: String) -> Bool {
         terminals[sessionName] != nil
     }
+
+    /// Focus the terminal for a session directly (bypasses NSViewRepresentable update).
+    func focusTerminal(for sessionName: String) {
+        guard let terminal = terminals[sessionName] else { return }
+        DispatchQueue.main.async {
+            terminal.window?.makeFirstResponder(terminal)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak terminal] in
+            guard let terminal, terminal.window?.firstResponder !== terminal else { return }
+            terminal.window?.makeFirstResponder(terminal)
+        }
+    }
 }
 
 // MARK: - Multi-terminal container (manages all terminals for a card)
@@ -508,12 +520,14 @@ struct TerminalContainerView: NSViewRepresentable, Equatable {
     var grabFocus: Bool = false
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        // Ultra-strict: only sessions matter. grabFocus changes should NOT
+        // trigger updateNSView — we handle focus separately.
         lhs.sessions == rhs.sessions
             && lhs.activeSession == rhs.activeSession
-            && lhs.grabFocus == rhs.grabFocus
     }
 
     func makeNSView(context: Context) -> TerminalContainerNSView {
+        KanbanCodeLog.info("terminal-view", "makeNSView: sessions=\(sessions) active=\(activeSession)")
         let container = TerminalContainerNSView()
         for session in sessions {
             container.ensureTerminal(for: session)
@@ -523,6 +537,7 @@ struct TerminalContainerView: NSViewRepresentable, Equatable {
     }
 
     func updateNSView(_ nsView: TerminalContainerNSView, context: Context) {
+        KanbanCodeLog.info("terminal-view", "updateNSView called: sessions=\(sessions) active=\(activeSession) grabFocus=\(grabFocus)")
         // When sessions are empty (terminal not yet created), just clean up and return.
         guard !sessions.isEmpty, !activeSession.isEmpty else {
             nsView.removeTerminalsNotIn([])
@@ -539,6 +554,7 @@ struct TerminalContainerView: NSViewRepresentable, Equatable {
     }
 
     static func dismantleNSView(_ nsView: TerminalContainerNSView, coordinator: ()) {
+        KanbanCodeLog.info("terminal-view", "dismantleNSView — detaching all terminals")
         // Detach terminals from this container but do NOT terminate them.
         // They live on in TerminalCache and will be reparented when the drawer reopens.
         nsView.detachAll()
@@ -648,6 +664,7 @@ final class TerminalContainerNSView: NSView {
                 + abs(sub.frame.width - inset.width)
                 + abs(sub.frame.height - inset.height)
             if delta >= 1.0 {
+                KanbanCodeLog.info("terminal-layout", "RESIZE delta=\(String(format: "%.1f", delta))px old=\(sub.frame) new=\(inset) sessions=\(managedSessions)")
                 sub.frame = inset
             }
         }

@@ -1298,7 +1298,7 @@ struct ContentView: View {
     // MARK: - Keyboard Shortcuts
 
     private var shortcutContext: AppShortcutContext {
-        AppShortcutContext(from: store.state)
+        AppShortcutContext(from: store.state, terminalTabActive: detailTab == .terminal)
     }
 
     @ViewBuilder
@@ -1328,6 +1328,16 @@ struct ContentView: View {
             }
         }
         .keyboardShortcut(AppShortcut.toggleExpanded.key, modifiers: AppShortcut.toggleExpanded.modifiers)
+        .hidden()
+
+        // Cmd+T — new terminal tab (only when detail open on terminal tab)
+        Button("") {
+            if AppShortcut.newTerminal.isActive(in: shortcutContext),
+               let cardId = store.state.selectedCardId {
+                createExtraTerminal(cardId: cardId)
+            }
+        }
+        .keyboardShortcut(AppShortcut.newTerminal.key, modifiers: AppShortcut.newTerminal.modifiers)
         .hidden()
 
         // Board navigation — guarded by context

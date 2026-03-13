@@ -603,6 +603,12 @@ struct CardDetailView: View {
                     .opacity(allLiveSessions.isEmpty || showOverlay ? 0 : 1)
                     .onChange(of: terminalGrabFocus) {
                         if terminalGrabFocus {
+                            // Handle focus directly via TerminalCache — bypasses NSViewRepresentable
+                            // update cycle entirely, since grabFocus is excluded from Equatable.
+                            let session = effectiveActiveSession ?? allLiveSessions.first ?? ""
+                            if !session.isEmpty {
+                                TerminalCache.shared.focusTerminal(for: session)
+                            }
                             DispatchQueue.main.async { terminalGrabFocus = false }
                         }
                     }
