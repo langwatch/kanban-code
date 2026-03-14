@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.1.19](https://github.com/langwatch/kanban-code/compare/v0.1.18...v0.1.19) (2026-03-14)
+
+
+### Features
+
+* add drag and drop to list view ([413c5bc](https://github.com/langwatch/kanban-code/commit/413c5bc96f456fe4236217c2fe3c9108a347a37e))
+* add drag and drop to list view ([67dd18d](https://github.com/langwatch/kanban-code/commit/67dd18d6cd40cca0bf3618ca76b7814e01d6e758))
+* add expanded mode for card detail inspector and image drag-and-drop ([5aec3f3](https://github.com/langwatch/kanban-code/commit/5aec3f32dda9e01bec6f59848656414413d61177))
+* add Gemini hooks, enable/disable assistants, fix activity detection and notifications ([aa3e1b9](https://github.com/langwatch/kanban-code/commit/aa3e1b945ec45b090df3d32e533b8a4b7f50731b))
+* add multi-coding-assistant support (Claude Code + Gemini CLI) ([24211bc](https://github.com/langwatch/kanban-code/commit/24211bc7597447b0a35c5328d8e99815e8af0760))
+* centralize keyboard shortcuts with context-aware conditions ([b9c7bae](https://github.com/langwatch/kanban-code/commit/b9c7bae1f8c23b80fe4ee323793d343614bebd5e))
+* Cmd+1-9 switches terminal tabs when drawer is open ([4c7c34b](https://github.com/langwatch/kanban-code/commit/4c7c34b8d2b4d033047757d7a45008ff1347e20e))
+* Cmd+T new terminal, search badges, terminal flicker logging ([7f03cc7](https://github.com/langwatch/kanban-code/commit/7f03cc71ef256e32df54158a0628456c6b2e864a))
+* improve terminal tab UX with double-click rename, drag reorder, and shell names ([baf4464](https://github.com/langwatch/kanban-code/commit/baf4464f9619cf4de2b55cd43d6aba06bb25f3ce))
+* multi-coding-assistant support (Claude Code + Gemini CLI) ([d58dd50](https://github.com/langwatch/kanban-code/commit/d58dd503c7549d153127c2ca030ec81b3f6b8c4a))
+* Parse inline markdown in session history assistant turns ([d0cbb9d](https://github.com/langwatch/kanban-code/commit/d0cbb9d6f4bf36d1e17e9fa4d0cd5ee092d92d7e))
+* Parse inline markdown in session history assistant turns ([a77839f](https://github.com/langwatch/kanban-code/commit/a77839f56d8b5cd0493992602e286fa6550d5600))
+* persist expanded mode, board split, and list section collapse ([bcaef03](https://github.com/langwatch/kanban-code/commit/bcaef035fc9cd5788294fed377c5c89344485b50))
+* terminal tab folder names, Cmd+W close tab, Cmd+T focus ([4cb7884](https://github.com/langwatch/kanban-code/commit/4cb78847b2423f4737fee746a2363395ec280428))
+* terminal tab rename, per-project remote toggle, worktree branch input ([b09dd97](https://github.com/langwatch/kanban-code/commit/b09dd97a5f30faf655981e6999701a188dcc2c68))
+* transform search overlay into VS Code-style command palette ([ab35bea](https://github.com/langwatch/kanban-code/commit/ab35beaafd613e18880e008c6d6cedc2109eecb0))
+* use custom icons for assistants and decouple assistant from card creation ([a30fc47](https://github.com/langwatch/kanban-code/commit/a30fc47db8a5060fb8b2e6c824f2bb618aef95a0))
+* Windows port (Tauri + React) ([8c0a60e](https://github.com/langwatch/kanban-code/commit/8c0a60ef81e9db61ededaf6c44e2327a06367afd))
+* **windows:** queued prompts, search, font size, issues, onboarding wizard ([72e435c](https://github.com/langwatch/kanban-code/commit/72e435ce4a632317749946c7bb079243101bcf9c))
+
+
+### Bug Fixes
+
+* archived cards no longer reappear after session discovery ([2d6e6c1](https://github.com/langwatch/kanban-code/commit/2d6e6c12ac8d572efbbcaa90f3b8f30d492dd04e))
+* cards manually moved to backlog stay there despite activity ([6f950d7](https://github.com/langwatch/kanban-code/commit/6f950d7493647e06318c74efaf59f2825f52b20b))
+* detect CLIs installed via nvm/volta/fnm and add assistants to settings ([ee47c3a](https://github.com/langwatch/kanban-code/commit/ee47c3a22ca6c1fc3836e3af6e8853730cc60052))
+* filter Claude Code internal metadata from session display ([9ee4f8b](https://github.com/langwatch/kanban-code/commit/9ee4f8b75145c51093e1e0bb4df1627c999e4f57))
+* Gemini prompt detection, error messages, and session linking ([2997c20](https://github.com/langwatch/kanban-code/commit/2997c20414b9872ccdbb611d32557c6148708688))
+* Gemini remote execution and special character handling ([cad77b7](https://github.com/langwatch/kanban-code/commit/cad77b76bb3a9e1a7cef1c7cc54e36e3f57236d2))
+* Gemini remote shell wrapper crashes and temp file warnings ([cdefbe0](https://github.com/langwatch/kanban-code/commit/cdefbe0d688e079c1264eb95bc49941834185926))
+* make Gemini sparkle icon bolder and fix hardcoded prompt character ([1c57ce6](https://github.com/langwatch/kanban-code/commit/1c57ce655d0e161ca7c21ca98c75838aa59d122b))
+* match Claude CLI's path encoding by also stripping dots ([08fd5c0](https://github.com/langwatch/kanban-code/commit/08fd5c04da4d74f495f309aa61702754bfde6853))
+* move assistant picker to footer row in New Task dialog ([45902e0](https://github.com/langwatch/kanban-code/commit/45902e04f2726088226a9abeea48ce0339afbf24))
+* parse inline markdown per-line to preserve multiline structure ([a791b5b](https://github.com/langwatch/kanban-code/commit/a791b5b4b12330b54edf9028b5ef32405166d65b))
+* persist last-chosen assistant in New Task dialog ([e3cbdcb](https://github.com/langwatch/kanban-code/commit/e3cbdcb2cde9d9199462e8f621a47b3bf999df51))
+* prevent cursor jumping to end in prompt editor during re-renders ([1616d9c](https://github.com/langwatch/kanban-code/commit/1616d9ca80cc9d2c676b11a4c66ce6b5059f30ff))
+* prevent terminal flicker during background state updates ([4d591a3](https://github.com/langwatch/kanban-code/commit/4d591a3aff7f692968aa9495eea5a1145be7d818))
+* queued prompt empty on restart and auto-send while editing ([6cb0499](https://github.com/langwatch/kanban-code/commit/6cb0499610d120c9dd765801221fd063a78acc44))
+* resolve Cmd+Enter conflict between detail expand and deep search ([e8b2b7f](https://github.com/langwatch/kanban-code/commit/e8b2b7f61c961e8842a297ed0e743114ea1e741e))
+* retry terminal focus after 500ms for heavy cards ([5e3ab18](https://github.com/langwatch/kanban-code/commit/5e3ab1801b5c7758ecbce1590cc0cc2f662fb113))
+* selected project takes priority over last-used in new task dialog ([e22329d](https://github.com/langwatch/kanban-code/commit/e22329d0fe08cd4c7c45174b6e6e08f0efbeb8e0))
+* swap order of path encoding to match Claude CLI (dots first, then slashes) ([1912958](https://github.com/langwatch/kanban-code/commit/1912958e81775d7a0ad5ff2b4c754966ed7d3aed))
+* swap order of path encoding to match Claude CLI (slashes first, then dots) ([3237755](https://github.com/langwatch/kanban-code/commit/32377552d5e67f6d072388a07e689edd7931d1f2))
+* sync status toolbar icon uses primary color when files in sync ([87e19b2](https://github.com/langwatch/kanban-code/commit/87e19b2e8e0bb518718f4337b4a24c0b6230a368))
+* terminal scroll works in full area, not just upper portion ([a931436](https://github.com/langwatch/kanban-code/commit/a931436a4f14740a67e34d142721717352a2fe70))
+* terminal tab rename uses dialog, add branch name field ([c110648](https://github.com/langwatch/kanban-code/commit/c110648f765ae2d44667854f7d244a654a0120d4))
+* use assistant-specific icons everywhere and fix Gemini history loading ([e6bbad5](https://github.com/langwatch/kanban-code/commit/e6bbad579469260f08d79d753379f59336bb46a1))
+* **windows:** GitHub-style thin white border lines in dark mode ([e5c329e](https://github.com/langwatch/kanban-code/commit/e5c329e857df301a65e119935575d2466905b2ec))
+* **windows:** GitHub-style thin white border lines in dark mode ([ec89b35](https://github.com/langwatch/kanban-code/commit/ec89b351a55487352f8c31febd398a47526a0b13))
+
+
+### Performance
+
+* cache worktrees by mtime and pre-compute cards array ([5d6a46f](https://github.com/langwatch/kanban-code/commit/5d6a46feb08492eb4fd1e4e9f2b5e1d9e074529e))
+* eliminate terminal flicker with time-budgeted batch feeding ([6dc9eb8](https://github.com/langwatch/kanban-code/commit/6dc9eb8aaf647fa359fb8b66f0f0f6c25a749c62))
+* optimize reconciliation loop from ~1s to ~0.4s ([7c0a098](https://github.com/langwatch/kanban-code/commit/7c0a0986cd1ef9323a8aa938c13c085e5e2324e8))
+
+
+### Documentation
+
+* add Windows installation and usage instructions to README ([a0e0a95](https://github.com/langwatch/kanban-code/commit/a0e0a954a08f32f9c5103158e3905dde42346e69))
+
 ## [0.1.18](https://github.com/langwatch/kanban-code/compare/v0.1.17...v0.1.18) (2026-03-07)
 
 
