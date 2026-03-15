@@ -45,8 +45,9 @@ specs/
 │   ├── search.feature            # BM25 full-text search across sessions
 │   └── archive.feature           # All Sessions column and session revival
 │
-├── terminal/                      # Terminal and session history
+├── terminal/                      # Terminal, browser, and session history
 │   ├── embedded-terminal.feature # Native terminal emulator in card detail
+│   ├── embedded-browser.feature  # Embedded browser tabs in card detail
 │   └── session-history.feature   # Conversation transcript view
 │
 ├── review/                        # PR and code review tracking

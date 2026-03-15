@@ -152,6 +152,10 @@ struct CardDetailView: View {
     @State private var terminalPaths: [String: String] = [:]  // sessionName → last path component
     @State private var pathPollTask: Task<Void, Never>?
 
+    // Browser tabs
+    @State private var browserTabs: [BrowserTab] = []
+    @State private var selectedBrowserTabId: String?
+
     /// Launch lock older than 30s is stale — stop showing spinner, show terminal instead
     private var isLaunchStale: Bool {
         Date.now.timeIntervalSince(card.link.updatedAt) > 30
@@ -244,6 +248,8 @@ struct CardDetailView: View {
             prBody = nil
             isLoadingPRBody = false
             selectedTerminalSession = nil
+            selectedBrowserTabId = nil
+            browserTabs = []
             terminalGrabFocus = false
             // Reset tab to a valid one for this card (skip auto-focus)
             suppressTerminalFocus = true
@@ -299,6 +305,7 @@ struct CardDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .kanbanSelectTerminalTab)) { notif in
             guard let index = notif.userInfo?["index"] as? Int else { return }
             selectedTab = .terminal
+            selectedBrowserTabId = nil
             if index == 0 {
                 selectedTerminalSession = nil
             } else {
@@ -438,9 +445,9 @@ struct CardDetailView: View {
 
     // MARK: - Terminal View
 
-    /// Whether the Claude tab is selected (nil = Claude tab).
+    /// Whether the Claude tab is selected (nil = Claude tab, no browser tab selected).
     private var isClaudeTabSelected: Bool {
-        selectedTerminalSession == nil
+        selectedTerminalSession == nil && selectedBrowserTabId == nil
     }
 
     /// The tmux session name for the live Claude terminal, if any.
@@ -475,10 +482,20 @@ struct CardDetailView: View {
         return selectedTerminalSession
     }
 
+    /// Snapshot of tab bar state for action button visibility.
+    private var tabBarActionState: TabBarActionState {
+        TabBarActionState(
+            selectedTerminalSession: selectedTerminalSession,
+            selectedBrowserTabId: selectedBrowserTabId,
+            claudeTmuxSession: claudeTmuxSession,
+            shellSessions: shellSessions
+        )
+    }
+
     /// Whether the tab bar should be visible.
     private var showTabBar: Bool {
         card.link.tmuxLink != nil || card.link.sessionLink != nil ||
-        card.link.isLaunching == true
+        card.link.isLaunching == true || !browserTabs.isEmpty
     }
 
     @ViewBuilder
@@ -508,6 +525,14 @@ struct CardDetailView: View {
                             .opacity(draggingTab == sessionName ? 0.3 : 1.0)
                         }
 
+                        ForEach(browserTabs, id: \.id) { tab in
+                            browserTab(
+                                tab: tab,
+                                isSelected: selectedBrowserTabId == tab.id
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+
                         if dropTargetTab == "_end_", draggingTab != nil {
                             tabDropIndicator
                         }
@@ -530,7 +555,7 @@ struct CardDetailView: View {
 
                     // + button outside capsule, like Finder
                     Button(action: onCreateTerminal) {
-                        Image(systemName: "plus")
+                        Image(systemName: "terminal")
                             .font(.app(.caption))
                     }
                     .buttonStyle(.borderless)
@@ -547,8 +572,24 @@ struct CardDetailView: View {
                         dropTargetTab = targeted ? "_end_" : (dropTargetTab == "_end_" ? nil : dropTargetTab)
                     }
 
-                    // Action buttons with gaps
-                    if let activeTmux = effectiveActiveSession {
+                    // Globe button for new browser tab
+                    Button {
+                        let tab = BrowserTab()
+                        browserTabs.append(tab)
+                        selectedBrowserTabId = tab.id
+                        selectedTerminalSession = nil
+                    } label: {
+                        Image(systemName: "globe")
+                            .font(.app(.caption))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Open new browser tab")
+                    .padding(.leading, 4)
+                    .fixedSize()
+
+                    // Action buttons with gaps — show whenever any tmux session is alive
+                    // (even when a browser tab is selected)
+                    if let activeTmux = tabBarActionState.tmuxSessionForActions {
                         Button {
                             let cmd = "tmux attach -t \(activeTmux)"
                             NSPasteboard.general.clearContents()
@@ -604,7 +645,7 @@ struct CardDetailView: View {
                     )
                     .equatable()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(allLiveSessions.isEmpty || showOverlay ? 0 : 1)
+                    .opacity(allLiveSessions.isEmpty || showOverlay || selectedBrowserTabId != nil ? 0 : 1)
                     .onChange(of: terminalGrabFocus) {
                         if terminalGrabFocus {
                             // Handle focus directly via TerminalCache — bypasses NSViewRepresentable
@@ -618,8 +659,15 @@ struct CardDetailView: View {
                     }
 
                     // Overlay for non-terminal Claude tab states
-                    if showOverlay {
+                    if showOverlay && selectedBrowserTabId == nil {
                         assistantTabOverlay(isLaunching: isLaunching)
+                    }
+
+                    // Browser tab content — use opacity to preserve WKWebView state
+                    ForEach(browserTabs, id: \.id) { tab in
+                        BrowserContentView(tab: tab)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .opacity(selectedBrowserTabId == tab.id ? 1 : 0)
                     }
 
                     // Drop target highlight when dragging an image over the window
@@ -678,6 +726,15 @@ struct CardDetailView: View {
                         Label("New Terminal", systemImage: "terminal")
                     }
                     .buttonStyle(.bordered)
+                    Button {
+                        let tab = BrowserTab()
+                        browserTabs.append(tab)
+                        selectedBrowserTabId = tab.id
+                        selectedTerminalSession = nil
+                    } label: {
+                        Label("New Browser", systemImage: "globe")
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -698,6 +755,7 @@ struct CardDetailView: View {
 
         Button {
             selectedTerminalSession = nil
+            selectedBrowserTabId = nil
             if assistantAlive { terminalGrabFocus = true }
         } label: {
             HStack(spacing: 4) {
@@ -879,6 +937,7 @@ struct CardDetailView: View {
         }
         .onTapGesture(count: 1) {
             selectedTerminalSession = sessionName
+            selectedBrowserTabId = nil
             terminalGrabFocus = true
         }
         .background {
@@ -910,6 +969,84 @@ struct CardDetailView: View {
         .contextMenu {
             Button("Rename") {
                 tabRenameItem = TabRenameItem(sessionName: sessionName, currentName: customName ?? displayName)
+            }
+        }
+    }
+
+    // MARK: - Browser Tab
+
+    @ViewBuilder
+    private func browserTab(tab: BrowserTab, isSelected: Bool) -> some View {
+        let displayName = tab.pageTitle.isEmpty ? "New Tab" : String(tab.pageTitle.prefix(12))
+        let isHovered = hoveredTab == tab.id
+
+        HStack(spacing: 4) {
+            HStack {
+                if isHovered {
+                    Button {
+                        closeBrowserTab(tab)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.app(size: 8, weight: .bold))
+                            .foregroundStyle(.primary.opacity(0.6))
+                            .frame(width: 14, height: 14)
+                            .background {
+                                if hoveredCloseBtn == tab.id {
+                                    Circle().fill(Color.primary.opacity(0.12))
+                                }
+                            }
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.borderless)
+                    .onHover { hoveredCloseBtn = $0 ? tab.id : nil }
+                    .help("Close browser tab")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Image(systemName: "globe")
+                .font(.app(.caption2))
+                .padding(.vertical, 2)
+            Text(displayName)
+                .font(.app(.caption))
+                .lineLimit(1)
+                .padding(.vertical, 2)
+
+            Spacer()
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .contentShape(Capsule())
+        .onTapGesture(count: 1) {
+            selectedBrowserTabId = tab.id
+            selectedTerminalSession = nil
+        }
+        .background {
+            if isSelected {
+                Capsule().fill(.background)
+                    .shadow(color: .black.opacity(0.1), radius: 1, y: 1)
+            } else if isHovered {
+                Capsule().fill(Color.primary.opacity(0.04))
+            }
+        }
+        .onHover { hoveredTab = $0 ? tab.id : (hoveredTab == tab.id ? nil : hoveredTab) }
+    }
+
+    /// Close a browser tab and fall back to the previous tab if it was selected.
+    private func closeBrowserTab(_ tab: BrowserTab) {
+        let wasSelected = selectedBrowserTabId == tab.id
+        browserTabs.removeAll { $0.id == tab.id }
+
+        if wasSelected {
+            if let last = browserTabs.last {
+                selectedBrowserTabId = last.id
+            } else if let lastShell = shellSessions.last {
+                selectedBrowserTabId = nil
+                selectedTerminalSession = lastShell
+            } else {
+                selectedBrowserTabId = nil
+                selectedTerminalSession = nil
             }
         }
     }

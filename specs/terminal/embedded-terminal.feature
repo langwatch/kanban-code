@@ -121,7 +121,7 @@ Feature: Embedded Terminal Emulator
 
   Scenario: Creating extra terminal when Claude is dead
     Given a card has primary dead (no live Claude session)
-    When I click the "+" button to create a new terminal
+    When I click the terminal icon button (terminal) to create a new terminal
     Then a new extra terminal should be created
     And it should appear as a new tab in the tab bar
 

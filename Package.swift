@@ -14,6 +14,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.0.0"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
+        .package(url: "https://github.com/swiftlang/swift-testing", from: "0.15.0"),
     ],
     targets: [
         .executableTarget(
@@ -32,12 +33,12 @@ let package = Package(
         ),
         .testTarget(
             name: "KanbanCodeCoreTests",
-            dependencies: ["KanbanCodeCore"],
+            dependencies: ["KanbanCodeCore", .product(name: "Testing", package: "swift-testing")],
             path: "Tests/KanbanCodeCoreTests"
         ),
         .testTarget(
             name: "KanbanCodeTests",
-            dependencies: ["KanbanCode", "KanbanCodeCore"],
+            dependencies: ["KanbanCode", "KanbanCodeCore", .product(name: "Testing", package: "swift-testing")],
             path: "Tests/KanbanCodeTests"
         ),
     ]
