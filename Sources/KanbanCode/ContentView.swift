@@ -206,6 +206,17 @@ struct ContentView: View {
             boardStore?.dispatch(action)
         }
 
+        // Restore persisted detail expansion and card selection before first render
+        // to avoid flicker. @AppStorage values are available synchronously.
+        let persistedExpanded = UserDefaults.standard.bool(forKey: "detailExpanded")
+        let persistedCardId = UserDefaults.standard.string(forKey: "selectedCardId") ?? ""
+        if persistedExpanded {
+            boardStore.dispatch(.setDetailExpanded(true))
+        }
+        if !persistedCardId.isEmpty {
+            boardStore.dispatch(.selectCard(cardId: persistedCardId))
+        }
+
         _store = State(initialValue: boardStore)
         _orchestrator = State(initialValue: orch)
         self.settingsStore = settings
@@ -216,6 +227,11 @@ struct ContentView: View {
             .appendingPathComponent(".kanban-code/hook-events.jsonl")
         self.settingsFilePath = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".kanban-code/settings.json")
+
+        // Set sidebar visibility synchronously too
+        if persistedExpanded && UserDefaults.standard.bool(forKey: "showBoardInExpanded") {
+            _sidebarVisibility = State(initialValue: .doubleColumn)
+        }
     }
 
     private static func loadEnabledAssistants() -> [CodingAssistant] {
@@ -942,13 +958,6 @@ struct ContentView: View {
                         selectedProjectPersisted = ""
                     }
                 }
-                // Restore persisted detail expansion and sidebar
-                if detailExpandedPersisted {
-                    store.dispatch(.setDetailExpanded(true))
-                    if showBoardInExpanded {
-                        sidebarVisibility = .doubleColumn
-                    }
-                }
                 // Register TerminalCache relay for KanbanCodeCore effects
                 TerminalCacheRelay.removeHandler = { name in
                     TerminalCache.shared.remove(name)
@@ -956,11 +965,6 @@ struct ContentView: View {
                 systemTray.setup(store: store)
                 await store.loadSettingsAndCache()
                 await store.reconcile()
-                // Restore persisted card selection
-                if !selectedCardIdPersisted.isEmpty,
-                   store.state.cards.contains(where: { $0.id == selectedCardIdPersisted }) {
-                    store.dispatch(.selectCard(cardId: selectedCardIdPersisted))
-                }
                 systemTray.update()
                 orchestrator.start()
             }
