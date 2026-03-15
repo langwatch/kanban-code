@@ -93,9 +93,9 @@ enum AppShortcut: CaseIterable {
         case .openPaletteK, .openPaletteP, .openCommandMode:
             return true
 
-        // Expand detail only when detail is open AND palette is closed
+        // Toggle between kanban and expanded+sidebar mode
         case .toggleExpanded:
-            return ctx.detailOpen && !ctx.paletteOpen
+            return !ctx.paletteOpen
 
         // New terminal only when detail is open on terminal tab AND palette is closed
         case .newTerminal:

@@ -106,13 +106,6 @@ struct ContentView: View {
         BoardViewMode(rawValue: boardViewModeRaw) ?? .kanban
     }
 
-    private var boardViewModeBinding: Binding<BoardViewMode> {
-        Binding(
-            get: { boardViewMode },
-            set: { boardViewModeRaw = $0.rawValue }
-        )
-    }
-
     private var viewModePicker: some View {
         Picker("View", selection: viewModePickerBinding) {
             ForEach(BoardViewMode.allCases, id: \.self) { mode in
@@ -124,12 +117,18 @@ struct ContentView: View {
         .labelsHidden()
     }
 
-    /// Binding for the view mode picker (only shown in normal, non-expanded mode).
+    /// Binding for the view mode picker — toggles between kanban and expanded+sidebar.
     private var viewModePickerBinding: Binding<BoardViewMode?> {
         Binding(
-            get: { boardViewMode },
+            get: { isExpandedDetail ? .list : .kanban },
             set: { newMode in
                 guard let newMode else { return }
+                if newMode == .list {
+                    isExpandedDetail = true
+                    showBoardInExpanded = true
+                } else {
+                    isExpandedDetail = false
+                }
                 boardViewModeRaw = newMode.rawValue
             }
         )
@@ -316,65 +315,6 @@ struct ContentView: View {
                 handleColumnBackgroundClick(column)
             }
         )
-    }
-
-    private var listBoardView: some View {
-        ListBoardView(
-            store: store,
-            onStartCard: { cardId in startCard(cardId: cardId) },
-            onResumeCard: { cardId in resumeCard(cardId: cardId) },
-            onForkCard: { cardId in pendingForkCardId = cardId },
-            onCopyResumeCmd: { cardId in
-                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
-                var cmd = ""
-                if let projectPath = card.link.projectPath {
-                    cmd += "cd \(projectPath) && "
-                }
-                if let sessionId = card.link.sessionLink?.sessionId {
-                    cmd += "claude --resume \(sessionId)"
-                }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(cmd, forType: .string)
-            },
-            onCleanupWorktree: { cardId in Task { await cleanupWorktree(cardId: cardId) } },
-            canCleanupWorktree: { cardId in
-                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return false }
-                return canCleanupWorktree(for: card)
-            },
-            onArchiveCard: { cardId in archiveCard(cardId: cardId) },
-            onDeleteCard: { cardId in pendingDeleteCardId = cardId },
-            availableProjects: projectList,
-            onMoveToProject: { cardId, projectPath in
-                let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                pendingMoveToProject = (cardId: cardId, projectPath: projectPath, projectName: name)
-            },
-            onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
-            enabledAssistants: assistantRegistry.available,
-            onMigrateAssistant: { cardId, target in
-                pendingMigration = (cardId: cardId, targetAssistant: target)
-            },
-            onRefreshBacklog: { Task { await store.refreshBacklog() } },
-            onDropCard: { cardId, column in handleDrop(cardId: cardId, to: column) },
-            canDropCard: { card, column in
-                CardDropIntent.resolve(card, to: column).isAllowed
-            },
-            onNewTask: { showNewTask = true },
-            onCardClicked: { cardId in
-                if store.state.cards.first(where: { $0.id == cardId })?.link.tmuxLink != nil {
-                    shouldFocusTerminal = true
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var activeBoardView: some View {
-        switch boardViewMode {
-        case .kanban:
-            boardView
-        case .list:
-            listBoardView
-        }
     }
 
     /// List view for sidebar — no top padding, marked as sidebar context.
@@ -574,15 +514,33 @@ struct ContentView: View {
         }
     }
 
+    /// Empty state shown in expanded mode when no card is selected.
+    private var expandedEmptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 48))
+                .foregroundStyle(.quaternary)
+            Text("Select a session or start a new one")
+                .font(.app(.title3))
+                .foregroundStyle(.secondary)
+            Text("⌘N to create a new task")
+                .font(.app(.caption))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var boardWithOverlays: some View {
         Group {
-            if isExpandedDetail,
-               let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
-                // Expanded: CardDetailView fills the detail column directly
-                makeCardDetailView(card: card)
+            if isExpandedDetail {
+                if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
+                    makeCardDetailView(card: card)
+                } else {
+                    expandedEmptyState
+                }
             } else {
-                // Normal: board with inspector
-                activeBoardView
+                // Normal: kanban board with inspector
+                boardView
                     .ignoresSafeArea(edges: .top)
                     .inspector(isPresented: showInspector) {
                         inspectorContent
@@ -602,12 +560,13 @@ struct ContentView: View {
                 if !store.state.detailExpanded {
                     showBoardInExpanded = false
                     sidebarVisibility = .detailOnly
+                    boardViewModeRaw = BoardViewMode.kanban.rawValue
                 }
                 detailExpandedPersisted = store.state.detailExpanded
             }
             .onChange(of: showBoardInExpanded) {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    sidebarVisibility = (isExpandedDetail && showBoardInExpanded && store.state.selectedCardId != nil)
+                    sidebarVisibility = (isExpandedDetail && showBoardInExpanded)
                         ? .doubleColumn : .detailOnly
                 }
             }
@@ -1164,13 +1123,6 @@ struct ContentView: View {
                     }
 
                     ToolbarItem(placement: .primaryAction) {
-                        Button { isExpandedDetail = false } label: {
-                            Image(systemName: "arrow.down.right.and.arrow.up.left")
-                        }
-                        .help("Contract (⌘⏎)")
-                    }
-
-                    ToolbarItem(placement: .primaryAction) {
                         if let path = card.link.worktreeLink?.path ?? card.link.projectPath {
                             Button {
                                 EditorDiscovery.open(path: path, bundleId: editorBundleId)
@@ -1413,7 +1365,14 @@ struct ContentView: View {
             if AppShortcut.deepSearch.isActive(in: ctx) {
                 deepSearchTrigger.toggle()
             } else if AppShortcut.toggleExpanded.isActive(in: ctx) {
-                isExpandedDetail.toggle()
+                if isExpandedDetail {
+                    isExpandedDetail = false
+                    boardViewModeRaw = BoardViewMode.kanban.rawValue
+                } else {
+                    isExpandedDetail = true
+                    showBoardInExpanded = true
+                    boardViewModeRaw = BoardViewMode.list.rawValue
+                }
             }
         }
         .keyboardShortcut(AppShortcut.toggleExpanded.key, modifiers: AppShortcut.toggleExpanded.modifiers)
@@ -1460,19 +1419,20 @@ struct ContentView: View {
             CommandItem("Open Settings", icon: "gear", shortcut: "⌘,") {
                 NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             },
-            CommandItem("Toggle View Mode", icon: boardViewMode == .kanban ? "list.bullet" : "square.split.2x1") { [self] in
-                boardViewModeRaw = (boardViewMode == .kanban ? BoardViewMode.list : .kanban).rawValue
+            CommandItem("Toggle View Mode", icon: isExpandedDetail ? "square.split.2x1" : "list.bullet", shortcut: "⌘↩") { [self] in
+                if isExpandedDetail {
+                    isExpandedDetail = false
+                    boardViewModeRaw = BoardViewMode.kanban.rawValue
+                } else {
+                    isExpandedDetail = true
+                    showBoardInExpanded = true
+                    boardViewModeRaw = BoardViewMode.list.rawValue
+                }
             },
             CommandItem("New Task", icon: "plus", shortcut: "⌘N") { [self] in
                 presentNewTask()
             },
         ]
-
-        if store.state.selectedCardId != nil {
-            cmds.append(CommandItem("Toggle Expanded Mode", icon: "arrow.up.left.and.arrow.down.right", shortcut: "⌘↩") { [self] in
-                isExpandedDetail.toggle()
-            })
-        }
 
         // Project switching
         let visibleProjects = store.state.configuredProjects.filter(\.visible)

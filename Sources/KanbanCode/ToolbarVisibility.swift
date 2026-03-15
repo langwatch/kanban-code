@@ -6,23 +6,19 @@ struct ToolbarVisibility {
     let hasSelectedCard: Bool
 
     /// New task, refresh, dark mode, project selector — shown when sidebar is NOT visible.
-    /// When the sidebar is open these controls live inline inside the sidebar.
+    /// When the sidebar is open these controls live in the sidebar toolbar.
     var showBoardControls: Bool {
         !(isExpandedDetail && showBoardInExpanded)
     }
 
-    /// Kanban/list segmented picker — only in normal (non-expanded) mode.
-    var showViewModePicker: Bool {
-        !isExpandedDetail
-    }
+    /// Kanban/list segmented picker — always visible (toggles between kanban and expanded+sidebar).
+    var showViewModePicker: Bool { true }
 
-    /// Inspector toggle (sidebar.right) — only in non-expanded mode.
-    /// In expanded mode the card detail IS the content, no inspector to toggle.
-    var showInspectorToggle: Bool {
-        !isExpandedDetail
-    }
+    /// Inspector toggle (sidebar.right) — always visible.
+    /// In expanded mode it deselects the card, showing the empty state.
+    var showInspectorToggle: Bool { true }
 
-    /// Expanded card info (title, tab picker, contract, editor, actions).
+    /// Expanded card info (title, tab picker, editor, actions).
     var showExpandedCardInfo: Bool {
         isExpandedDetail && hasSelectedCard
     }
