@@ -72,6 +72,8 @@ struct KanbanCodeApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate, @unchecked Sendable {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Analytics.setup()
+
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first {

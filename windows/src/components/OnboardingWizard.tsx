@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { capture } from "../analytics";
 import {
   checkDependencies,
   getSettings,
@@ -36,10 +37,17 @@ export default function OnboardingWizard({
     }
   };
 
-  const next = () => setStep((s) => Math.min(s + 1, TOTAL_STEPS - 1));
+  const stepNames = ["welcome", "claude_code", "dependencies", "add_project", "complete"];
+
+  const next = () => {
+    const nextStep = Math.min(step + 1, TOTAL_STEPS - 1);
+    capture("onboarding_step", { step: stepNames[nextStep] });
+    setStep(nextStep);
+  };
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
   const finish = async () => {
+    capture("onboarding_completed");
     if (settings) {
       await saveSettings({ ...settings, hasCompletedOnboarding: true });
     }

@@ -5,6 +5,7 @@ import NewTaskDialog from "./components/NewTaskDialog";
 import OnboardingWizard from "./components/OnboardingWizard";
 import SearchOverlay from "./components/SearchOverlay";
 import SettingsView from "./components/SettingsView";
+import { initAnalytics } from "./analytics";
 import { getSettings, initBoardEventListener, useBoardStore } from "./store/boardStore";
 import { useTheme, t } from "./theme";
 
@@ -71,6 +72,7 @@ export default function App() {
   }, [theme, toggle]);
 
   useEffect(() => {
+    initAnalytics();
     refresh();
     initBoardEventListener();
     getSettings()
