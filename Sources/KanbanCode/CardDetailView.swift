@@ -146,6 +146,7 @@ struct CardDetailView: View {
     @State private var suppressTerminalFocus: Bool = false
     @State private var tabRenameItem: TabRenameItem?
     @State private var draggingTab: String?
+    @State private var hoveredTab: String?
     @State private var dropTargetTab: String?
     @State private var terminalPaths: [String: String] = [:]  // sessionName → last path component
     @State private var pathPollTask: Task<Void, Never>?
@@ -486,105 +487,92 @@ struct CardDetailView: View {
             let showOverlay = isClaudeTabSelected && effectiveActiveSession == nil
 
             VStack(spacing: 0) {
-                // Tab bar: [Claude] [shell tabs...] [+]  ···spacer···  [copy tmux attach]
-                HStack(spacing: 4) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            // Assistant tab — always first
-                            assistantTab(isSelected: isClaudeTabSelected, isLaunching: isLaunching)
+                // Finder-style tab bar — single row
+                HStack(spacing: 0) {
+                    // Tab capsule — fills available space
+                    HStack(spacing: 1) {
+                        assistantTab(isSelected: isClaudeTabSelected, isLaunching: isLaunching)
+                            .frame(maxWidth: .infinity)
 
-                            // Shell session tabs
-                            ForEach(shellSessions, id: \.self) { sessionName in
-                                // Drop insertion indicator before this tab
-                                if dropTargetTab == sessionName, let drag = draggingTab, drag != sessionName {
-                                    tabDropIndicator
-                                }
-
-                                shellTab(
-                                    sessionName: sessionName,
-                                    isSelected: selectedTerminalSession == sessionName
-                                )
-                                .opacity(draggingTab == sessionName ? 0.3 : 1.0)
-                            }
-
-                            // Drop indicator at end (when targeting the + button)
-                            if dropTargetTab == "_end_", draggingTab != nil {
+                        ForEach(shellSessions, id: \.self) { sessionName in
+                            if dropTargetTab == sessionName, let drag = draggingTab, drag != sessionName {
                                 tabDropIndicator
                             }
 
-                            Button(action: onCreateTerminal) {
-                                Image(systemName: "plus")
-                                    .font(.app(.caption))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Open new terminal")
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let dropped = items.first else { return false }
-                                onReorderTerminal(dropped, nil)
-                                draggingTab = nil
-                                dropTargetTab = nil
-                                return true
-                            } isTargeted: { targeted in
-                                dropTargetTab = targeted ? "_end_" : (dropTargetTab == "_end_" ? nil : dropTargetTab)
-                            }
+                            shellTab(
+                                sessionName: sessionName,
+                                isSelected: selectedTerminalSession == sessionName
+                            )
+                            .frame(maxWidth: .infinity)
+                            .opacity(draggingTab == sessionName ? 0.3 : 1.0)
                         }
-                        .animation(.easeInOut(duration: 0.2), value: dropTargetTab)
-                        .onChange(of: dropTargetTab) {
-                            // When drag leaves all targets (cancelled or dropped outside),
-                            // clear draggingTab after a short delay
-                            if dropTargetTab == nil, draggingTab != nil {
-                                Task {
-                                    try? await Task.sleep(for: .milliseconds(300))
-                                    if dropTargetTab == nil {
-                                        draggingTab = nil
-                                    }
+
+                        if dropTargetTab == "_end_", draggingTab != nil {
+                            tabDropIndicator
+                        }
+                    }
+                    .padding(3)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .animation(.easeInOut(duration: 0.2), value: dropTargetTab)
+                    .onChange(of: dropTargetTab) {
+                        if dropTargetTab == nil, draggingTab != nil {
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(300))
+                                if dropTargetTab == nil {
+                                    draggingTab = nil
                                 }
                             }
                         }
                     }
 
-                    Spacer()
+                    // + button outside capsule, like Finder
+                    Button(action: onCreateTerminal) {
+                        Image(systemName: "plus")
+                            .font(.app(.caption))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Open new terminal")
+                    .padding(.leading, 8)
+                    .fixedSize()
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let dropped = items.first else { return false }
+                        onReorderTerminal(dropped, nil)
+                        draggingTab = nil
+                        dropTargetTab = nil
+                        return true
+                    } isTargeted: { targeted in
+                        dropTargetTab = targeted ? "_end_" : (dropTargetTab == "_end_" ? nil : dropTargetTab)
+                    }
 
-                    // Copy tmux attach — only for live terminal tabs
+                    // Action buttons with gaps
                     if let activeTmux = effectiveActiveSession {
                         Button {
                             let cmd = "tmux attach -t \(activeTmux)"
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(cmd, forType: .string)
                         } label: {
-                            HStack(spacing: 3) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.app(.caption2))
-                                Text("Copy tmux attach")
-                                    .font(.app(.caption))
-                            }
+                            Label("Copy tmux attach", systemImage: "doc.on.doc")
+                                .font(.app(.caption))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(.borderless)
                         .help("Copy: tmux attach -t \(activeTmux)")
+                        .padding(.leading, 16)
+                        .fixedSize()
 
                         Button {
                             queuedPromptItem = QueuedPromptItem(existingPrompt: nil)
                         } label: {
-                            HStack(spacing: 3) {
-                                Image(systemName: "text.badge.plus")
-                                    .font(.app(.caption2))
-                                Text("Queue Prompt")
-                                    .font(.app(.caption))
-                            }
+                            Label("Queue Prompt", systemImage: "text.badge.plus")
+                                .font(.app(.caption))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        .buttonStyle(.borderless)
                         .help("Queue a prompt to send to Claude later")
+                        .padding(.leading, 16)
+                        .fixedSize()
                     }
                 }
-                .padding(.leading, 16)
-                .padding(.trailing, 8)
-                .padding(.vertical, 4)
-
-                Divider()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
 
                 // Queued prompts bar
                 if let prompts = card.link.queuedPrompts, !prompts.isEmpty {
@@ -701,47 +689,50 @@ struct CardDetailView: View {
         let isDead = !assistantAlive && !isLaunching
         let tabLabel = assistant.displayName
 
-        HStack(spacing: 0) {
-            Button {
-                selectedTerminalSession = nil
-                if assistantAlive { terminalGrabFocus = true }
-            } label: {
-                HStack(spacing: 4) {
-                    AssistantIcon(assistant: assistant)
-                        .frame(width: CGFloat(12).scaled, height: CGFloat(12).scaled)
-                    Text(tabLabel)
-                        .font(.app(.caption))
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .opacity(isDead ? 0.5 : 1.0)
+        let tabId = "_assistant_"
+        let isHovered = hoveredTab == tabId
 
-            // X button only when assistant has a live tmux session
-            if assistantAlive {
-                Button {
-                    if let session = claudeTmuxSession {
-                        onKillTerminal(session)
+        Button {
+            selectedTerminalSession = nil
+            if assistantAlive { terminalGrabFocus = true }
+        } label: {
+            HStack(spacing: 4) {
+                // Close button on left, only on hover
+                if assistantAlive && isHovered {
+                    Button {
+                        if let session = claudeTmuxSession {
+                            onKillTerminal(session)
+                        }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.app(size: 8, weight: .bold))
+                            .foregroundStyle(.secondary)
                     }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.app(size: 8, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
+                    .buttonStyle(.borderless)
+                    .help("Stop \(assistant.displayName) session")
                 }
-                .buttonStyle(.borderless)
-                .help("Stop \(assistant.displayName) session")
+
+                AssistantIcon(assistant: assistant)
+                    .frame(width: CGFloat(12).scaled, height: CGFloat(12).scaled)
+                Text(tabLabel)
+                    .font(.app(.caption))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .opacity(isDead ? 0.5 : 1.0)
+        .background {
+            if isSelected {
+                Capsule().fill(.background)
+                    .shadow(color: .black.opacity(0.1), radius: 1, y: 1)
+            } else if isHovered {
+                Capsule().fill(Color.primary.opacity(0.04))
             }
         }
-        .background(
-            isSelected ? Color.accentColor.opacity(0.15) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
-        )
+        .onHover { hoveredTab = $0 ? tabId : (hoveredTab == tabId ? nil : hoveredTab) }
     }
 
     /// Overlay shown on the assistant tab when there's no live terminal.
@@ -818,46 +809,51 @@ struct CardDetailView: View {
             return Self.userShellName
         }()
 
-        HStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Image(systemName: "terminal")
-                    .font(.app(.caption2))
-                Text(displayName)
-                    .font(.app(.caption))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                tabRenameItem = TabRenameItem(sessionName: sessionName, currentName: customName ?? displayName)
-            }
-            .onTapGesture(count: 1) {
-                selectedTerminalSession = sessionName
-                terminalGrabFocus = true
+        let isHovered = hoveredTab == sessionName
+
+        HStack(spacing: 4) {
+            // Close button on left, only on hover
+            if isHovered {
+                Button {
+                    onKillTerminal(sessionName)
+                    if selectedTerminalSession == sessionName {
+                        let remaining = shellSessions.filter { $0 != sessionName }
+                        selectedTerminalSession = remaining.first
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.app(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Close terminal")
             }
 
-            Button {
-                onKillTerminal(sessionName)
-                if selectedTerminalSession == sessionName {
-                    let remaining = shellSessions.filter { $0 != sessionName }
-                    selectedTerminalSession = remaining.first
-                }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.app(size: 8, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .help("Close terminal")
+            Image(systemName: "terminal")
+                .font(.app(.caption2))
+            Text(displayName)
+                .font(.app(.caption))
+                .lineLimit(1)
         }
-        .background(
-            isSelected ? Color.accentColor.opacity(0.15) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
-        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .contentShape(Capsule())
+        .onTapGesture(count: 2) {
+            tabRenameItem = TabRenameItem(sessionName: sessionName, currentName: customName ?? displayName)
+        }
+        .onTapGesture(count: 1) {
+            selectedTerminalSession = sessionName
+            terminalGrabFocus = true
+        }
+        .background {
+            if isSelected {
+                Capsule().fill(.background)
+                    .shadow(color: .black.opacity(0.1), radius: 1, y: 1)
+            } else if isHovered {
+                Capsule().fill(Color.primary.opacity(0.04))
+            }
+        }
+        .onHover { hoveredTab = $0 ? sessionName : (hoveredTab == sessionName ? nil : hoveredTab) }
         .onDrag {
             draggingTab = sessionName
             return NSItemProvider(object: sessionName as NSString)

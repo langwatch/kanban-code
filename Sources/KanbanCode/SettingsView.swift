@@ -835,7 +835,7 @@ struct ProjectsSettingsView: View {
                     .disabled(newExcludedPath.isEmpty)
                 }
 
-                Text("Sessions from excluded paths won't appear in All Projects view")
+                Text("Sessions from excluded paths won't appear in All Projects view. Wildcards supported (e.g. langwatch-skill-*)")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

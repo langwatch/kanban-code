@@ -185,10 +185,16 @@ public final class BoardState: @unchecked Sendable {
         let cardPath = card.link.projectPath ?? card.session?.projectPath
         guard let cardPath else { return false }
         let normalized = ProjectDiscovery.normalizePath(cardPath)
+        let name = (normalized as NSString).lastPathComponent
         for excluded in excludedPaths {
-            let normalizedExcluded = ProjectDiscovery.normalizePath(excluded)
-            if normalized == normalizedExcluded || normalized.hasPrefix(normalizedExcluded + "/") {
-                return true
+            if excluded.contains("*") || excluded.contains("?") {
+                if fnmatch(excluded, normalized, 0) == 0 { return true }
+                if fnmatch(excluded, name, 0) == 0 { return true }
+            } else {
+                let normalizedExcluded = ProjectDiscovery.normalizePath(excluded)
+                if normalized == normalizedExcluded || normalized.hasPrefix(normalizedExcluded + "/") {
+                    return true
+                }
             }
         }
         return false

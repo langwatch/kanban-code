@@ -55,6 +55,7 @@ struct ContentView: View {
     @State private var terminalHadFocusBeforeSearch = false
     @State private var deepSearchTrigger = false
     @AppStorage("showBoardInExpanded") private var showBoardInExpanded = false
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showNewTask = false
     @State private var showOnboarding = false
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .auto
@@ -123,27 +124,13 @@ struct ContentView: View {
         .labelsHidden()
     }
 
-    /// Binding that returns nil (nothing highlighted) when expanded with board hidden.
+    /// Binding for the view mode picker (only shown in normal, non-expanded mode).
     private var viewModePickerBinding: Binding<BoardViewMode?> {
         Binding(
-            get: {
-                if isExpandedDetail && !showBoardInExpanded && store.state.selectedCardId != nil {
-                    return nil // no segment highlighted
-                }
-                return boardViewMode
-            },
+            get: { boardViewMode },
             set: { newMode in
                 guard let newMode else { return }
-                if isExpandedDetail {
-                    if showBoardInExpanded && newMode == boardViewMode {
-                        showBoardInExpanded = false
-                    } else {
-                        boardViewModeRaw = newMode.rawValue
-                        showBoardInExpanded = true
-                    }
-                } else {
-                    boardViewModeRaw = newMode.rawValue
-                }
+                boardViewModeRaw = newMode.rawValue
             }
         )
     }
@@ -390,146 +377,221 @@ struct ContentView: View {
         }
     }
 
-    /// Inspector width when expanded — full screen or 80% if board is visible alongside.
-    private var expandedInspectorWidth: CGFloat {
-        let screenWidth = NSScreen.main?.frame.width ?? 10000
-        return showBoardInExpanded ? screenWidth * 0.8 : screenWidth
+    /// List view for sidebar — no top padding, marked as sidebar context.
+    private var sidebarListView: some View {
+        ListBoardView(
+            store: store,
+            onStartCard: { cardId in startCard(cardId: cardId) },
+            onResumeCard: { cardId in resumeCard(cardId: cardId) },
+            onForkCard: { cardId in pendingForkCardId = cardId },
+            onCopyResumeCmd: { cardId in
+                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
+                var cmd = ""
+                if let projectPath = card.link.projectPath {
+                    cmd += "cd \(projectPath) && "
+                }
+                if let sessionId = card.link.sessionLink?.sessionId {
+                    cmd += "claude --resume \(sessionId)"
+                }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(cmd, forType: .string)
+            },
+            onCleanupWorktree: { cardId in Task { await cleanupWorktree(cardId: cardId) } },
+            canCleanupWorktree: { cardId in
+                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return false }
+                return canCleanupWorktree(for: card)
+            },
+            onArchiveCard: { cardId in archiveCard(cardId: cardId) },
+            onDeleteCard: { cardId in pendingDeleteCardId = cardId },
+            availableProjects: projectList,
+            onMoveToProject: { cardId, projectPath in
+                let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
+                pendingMoveToProject = (cardId: cardId, projectPath: projectPath, projectName: name)
+            },
+            onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
+            enabledAssistants: assistantRegistry.available,
+            onMigrateAssistant: { cardId, target in
+                pendingMigration = (cardId: cardId, targetAssistant: target)
+            },
+            onRefreshBacklog: { Task { await store.refreshBacklog() } },
+            onDropCard: { cardId, column in handleDrop(cardId: cardId, to: column) },
+            canDropCard: { card, column in
+                CardDropIntent.resolve(card, to: column).isAllowed
+            },
+            onNewTask: { showNewTask = true },
+            onCardClicked: { cardId in
+                if store.state.cards.first(where: { $0.id == cardId })?.link.tmuxLink != nil {
+                    shouldFocusTerminal = true
+                }
+            },
+            inSidebar: true
+        )
+    }
+
+    /// Sidebar content for expanded mode — always list view.
+    /// Toolbar items only included when sidebar is visible to avoid duplication in window toolbar.
+    private var sidebarContent: some View {
+        sidebarListView
+            .toolbar {
+                if showBoardInExpanded {
+                    ToolbarItemGroup(placement: .automatic) {
+                        Button { presentNewTask() } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .help("New task (⌘N)")
+
+                        Button { Task { await store.reconcile() } } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(store.state.isLoading)
+                        .help("Refresh sessions")
+
+                        Button {
+                            appearanceMode = appearanceMode.next
+                            applyAppearance()
+                        } label: {
+                            Image(systemName: appearanceMode.icon)
+                        }
+                        .help(appearanceMode.helpText)
+                    }
+                }
+            }
+    }
+
+    /// Shared factory for CardDetailView — used by both the inspector and expanded mode.
+    private func makeCardDetailView(card: KanbanCodeCard) -> CardDetailView {
+        CardDetailView(
+            card: card,
+            sessionStore: assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore,
+            selectedTab: $detailTab,
+            onResume: {
+                if card.link.sessionLink != nil {
+                    resumeCard(cardId: card.id)
+                } else {
+                    startCard(cardId: card.id)
+                }
+            },
+            onRename: { name in
+                store.dispatch(.renameCard(cardId: card.id, name: name))
+            },
+            onFork: { keepWorktree in forkCard(cardId: card.id, keepWorktree: keepWorktree) },
+            onDismiss: { store.dispatch(.selectCard(cardId: nil)) },
+            onUnlink: { linkType in
+                store.dispatch(.unlinkFromCard(cardId: card.id, linkType: linkType))
+            },
+            onAddBranch: { branch in
+                store.dispatch(.addBranchToCard(cardId: card.id, branch: branch))
+            },
+            onAddIssue: { number in
+                store.dispatch(.addIssueLinkToCard(cardId: card.id, issueNumber: number))
+            },
+            onAddPR: { number in
+                store.dispatch(.addPRToCard(cardId: card.id, prNumber: number))
+            },
+            onCleanupWorktree: {
+                Task { await cleanupWorktree(cardId: card.id) }
+            },
+            canCleanupWorktree: canCleanupWorktree(for: card),
+            onDeleteCard: {
+                pendingDeleteCardId = card.id
+            },
+            onCreateTerminal: {
+                createExtraTerminal(cardId: card.id)
+            },
+            onKillTerminal: { sessionName in
+                store.dispatch(.killTerminal(cardId: card.id, sessionName: sessionName))
+            },
+            onRenameTerminal: { sessionName, label in
+                store.dispatch(.renameTerminalTab(cardId: card.id, sessionName: sessionName, label: label))
+            },
+            onReorderTerminal: { sessionName, beforeSession in
+                store.dispatch(.reorderTerminalTab(cardId: card.id, sessionName: sessionName, beforeSession: beforeSession))
+            },
+            onPRMerged: { prNumber in
+                store.dispatch(.markPRMerged(cardId: card.id, prNumber: prNumber))
+            },
+            onCancelLaunch: {
+                store.dispatch(.cancelLaunch(cardId: card.id))
+            },
+            onAddQueuedPrompt: { prompt in
+                store.dispatch(.addQueuedPrompt(cardId: card.id, prompt: prompt))
+            },
+            onUpdateQueuedPrompt: { promptId, body, sendAuto in
+                store.dispatch(.updateQueuedPrompt(cardId: card.id, promptId: promptId, body: body, sendAutomatically: sendAuto))
+            },
+            onRemoveQueuedPrompt: { promptId in
+                store.dispatch(.removeQueuedPrompt(cardId: card.id, promptId: promptId))
+            },
+            onSendQueuedPrompt: { promptId in
+                store.dispatch(.sendQueuedPrompt(cardId: card.id, promptId: promptId))
+            },
+            onEditingQueuedPrompt: { promptId in
+                if let prev = editingQueuedPromptId {
+                    orchestrator.clearPromptEditing(prev)
+                }
+                editingQueuedPromptId = promptId
+                if let promptId {
+                    orchestrator.markPromptEditing(promptId)
+                }
+            },
+            onDiscover: {
+                Task {
+                    store.dispatch(.setBusy(cardId: card.id, busy: true))
+                    if let updatedLink = await orchestrator.discoverBranchesForCard(cardId: card.id) {
+                        store.dispatch(.createManualTask(updatedLink))
+                    }
+                    await store.reconcile()
+                    store.dispatch(.setBusy(cardId: card.id, busy: false))
+                }
+            },
+            onUpdatePrompt: { body, imagePaths in
+                store.dispatch(.updatePrompt(cardId: card.id, body: body, imagePaths: imagePaths))
+            },
+            availableProjects: projectList,
+            onMoveToProject: { projectPath in
+                let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
+                pendingMoveToProject = (cardId: card.id, projectPath: projectPath, projectName: name)
+            },
+            onMoveToFolder: { selectFolderForMove(cardId: card.id) },
+            enabledAssistants: assistantRegistry.available,
+            onMigrateAssistant: { target in
+                pendingMigration = (cardId: card.id, targetAssistant: target)
+            },
+            actionsMenuProvider: actionsMenuProvider,
+            focusTerminal: $shouldFocusTerminal,
+            isExpanded: Binding(
+                get: { isExpandedDetail },
+                set: { isExpandedDetail = $0 }
+            ),
+            isDroppingImage: $isDroppingImage
+        )
     }
 
     @ViewBuilder
     private var inspectorContent: some View {
         if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
-            CardDetailView(
-                card: card,
-                sessionStore: assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore,
-                selectedTab: $detailTab,
-                onResume: {
-                    if card.link.sessionLink != nil {
-                        resumeCard(cardId: card.id)
-                    } else {
-                        startCard(cardId: card.id)
-                    }
-                },
-                onRename: { name in
-                    store.dispatch(.renameCard(cardId: card.id, name: name))
-                },
-                onFork: { keepWorktree in forkCard(cardId: card.id, keepWorktree: keepWorktree) },
-                onDismiss: { store.dispatch(.selectCard(cardId: nil)) },
-                onUnlink: { linkType in
-                    store.dispatch(.unlinkFromCard(cardId: card.id, linkType: linkType))
-                },
-                onAddBranch: { branch in
-                    store.dispatch(.addBranchToCard(cardId: card.id, branch: branch))
-                },
-                onAddIssue: { number in
-                    store.dispatch(.addIssueLinkToCard(cardId: card.id, issueNumber: number))
-                },
-                onAddPR: { number in
-                    store.dispatch(.addPRToCard(cardId: card.id, prNumber: number))
-                },
-                onCleanupWorktree: {
-                    Task { await cleanupWorktree(cardId: card.id) }
-                },
-                canCleanupWorktree: canCleanupWorktree(for: card),
-                onDeleteCard: {
-                    pendingDeleteCardId = card.id
-                },
-                onCreateTerminal: {
-                    createExtraTerminal(cardId: card.id)
-                },
-                onKillTerminal: { sessionName in
-                    store.dispatch(.killTerminal(cardId: card.id, sessionName: sessionName))
-                },
-                onRenameTerminal: { sessionName, label in
-                    store.dispatch(.renameTerminalTab(cardId: card.id, sessionName: sessionName, label: label))
-                },
-                onReorderTerminal: { sessionName, beforeSession in
-                    store.dispatch(.reorderTerminalTab(cardId: card.id, sessionName: sessionName, beforeSession: beforeSession))
-                },
-                onPRMerged: { prNumber in
-                    store.dispatch(.markPRMerged(cardId: card.id, prNumber: prNumber))
-                },
-                onCancelLaunch: {
-                    store.dispatch(.cancelLaunch(cardId: card.id))
-                },
-                onAddQueuedPrompt: { prompt in
-                    store.dispatch(.addQueuedPrompt(cardId: card.id, prompt: prompt))
-                },
-                onUpdateQueuedPrompt: { promptId, body, sendAuto in
-                    store.dispatch(.updateQueuedPrompt(cardId: card.id, promptId: promptId, body: body, sendAutomatically: sendAuto))
-                },
-                onRemoveQueuedPrompt: { promptId in
-                    store.dispatch(.removeQueuedPrompt(cardId: card.id, promptId: promptId))
-                },
-                onSendQueuedPrompt: { promptId in
-                    store.dispatch(.sendQueuedPrompt(cardId: card.id, promptId: promptId))
-                },
-                onEditingQueuedPrompt: { promptId in
-                    // Clear previous editing mark if any
-                    if let prev = editingQueuedPromptId {
-                        orchestrator.clearPromptEditing(prev)
-                    }
-                    editingQueuedPromptId = promptId
-                    if let promptId {
-                        orchestrator.markPromptEditing(promptId)
-                    }
-                },
-                onDiscover: {
-                    Task {
-                        store.dispatch(.setBusy(cardId: card.id, busy: true))
-                        if let updatedLink = await orchestrator.discoverBranchesForCard(cardId: card.id) {
-                            // Sync to in-memory state so reconcile() picks up cleared watermark
-                            store.dispatch(.createManualTask(updatedLink))
-                        }
-                        await store.reconcile()
-                        store.dispatch(.setBusy(cardId: card.id, busy: false))
-                    }
-                },
-                onUpdatePrompt: { body, imagePaths in
-                    store.dispatch(.updatePrompt(cardId: card.id, body: body, imagePaths: imagePaths))
-                },
-                availableProjects: projectList,
-                onMoveToProject: { projectPath in
-                    let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                    pendingMoveToProject = (cardId: card.id, projectPath: projectPath, projectName: name)
-                },
-                onMoveToFolder: { selectFolderForMove(cardId: card.id) },
-                enabledAssistants: assistantRegistry.available,
-                onMigrateAssistant: { target in
-                    pendingMigration = (cardId: card.id, targetAssistant: target)
-                },
-                actionsMenuProvider: actionsMenuProvider,
-                focusTerminal: $shouldFocusTerminal,
-                isExpanded: Binding(
-                    get: { isExpandedDetail },
-                    set: { isExpandedDetail = $0 }
-                ),
-                isDroppingImage: $isDroppingImage
-            )
-            .inspectorColumnWidth(
-                min: isExpandedDetail ? expandedInspectorWidth : 600,
-                ideal: isExpandedDetail ? expandedInspectorWidth : 800,
-                max: isExpandedDetail ? expandedInspectorWidth : 1000
-            )
+            makeCardDetailView(card: card)
         }
     }
 
     private var boardWithOverlays: some View {
         Group {
-            if isExpandedDetail && !showBoardInExpanded && store.state.selectedCardId != nil {
-                Spacer()
-                    .frame(width: 0)
-                    .clipped()
+            if isExpandedDetail,
+               let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
+                // Expanded: CardDetailView fills the detail column directly
+                makeCardDetailView(card: card)
             } else {
+                // Normal: board with inspector
                 activeBoardView
+                    .ignoresSafeArea(edges: .top)
+                    .inspector(isPresented: showInspector) {
+                        inspectorContent
+                            .inspectorColumnWidth(min: 600, ideal: 800, max: 1000)
+                    }
             }
         }
-            .ignoresSafeArea(edges: .top)
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .navigationTitle("")
-            .inspector(isPresented: showInspector) {
-                inspectorContent
-            }
             .onChange(of: store.state.selectedCardId) {
                 if let cardId = store.state.selectedCardId,
                    let card = store.state.cards.first(where: { $0.id == cardId }) {
@@ -539,8 +601,19 @@ struct ContentView: View {
             .onChange(of: store.state.detailExpanded) {
                 if !store.state.detailExpanded {
                     showBoardInExpanded = false
+                    sidebarVisibility = .detailOnly
                 }
                 detailExpandedPersisted = store.state.detailExpanded
+            }
+            .onChange(of: showBoardInExpanded) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    sidebarVisibility = (isExpandedDetail && showBoardInExpanded && store.state.selectedCardId != nil)
+                        ? .doubleColumn : .detailOnly
+                }
+            }
+            .onChange(of: sidebarVisibility) {
+                // Sync built-in sidebar toggle back to our state
+                showBoardInExpanded = (sidebarVisibility != .detailOnly)
             }
             .overlay {
                 if showSearch {
@@ -1010,36 +1083,50 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
+            sidebarContent
+                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 420)
+        } detail: {
         boardWithHandlers
             .toolbar {
-                ToolbarItemGroup(placement: .navigation) {
-                    Button { presentNewTask() } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .help("New task (⌘N)")
+                // Use tested ToolbarVisibility model to drive all conditions
+                let tbVis = ToolbarVisibility(
+                    isExpandedDetail: isExpandedDetail,
+                    showBoardInExpanded: showBoardInExpanded,
+                    hasSelectedCard: store.state.selectedCardId != nil
+                )
 
-                    Button { Task { await store.reconcile() } } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(store.state.isLoading)
-                    .help("Refresh sessions")
+                if tbVis.showBoardControls {
+                    ToolbarItemGroup(placement: .navigation) {
+                        Button { presentNewTask() } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .help("New task (⌘N)")
 
-                    Button {
-                        appearanceMode = appearanceMode.next
-                        applyAppearance()
-                    } label: {
-                        Image(systemName: appearanceMode.icon)
+                        Button { Task { await store.reconcile() } } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(store.state.isLoading)
+                        .help("Refresh sessions")
+
+                        Button {
+                            appearanceMode = appearanceMode.next
+                            applyAppearance()
+                        } label: {
+                            Image(systemName: appearanceMode.icon)
+                        }
+                        .help(appearanceMode.helpText)
                     }
-                    .help(appearanceMode.helpText)
+
+                    ToolbarItem(placement: .navigation) {
+                        projectSelectorMenu
+                    }
                 }
 
-                ToolbarItem(placement: .navigation) {
-                    projectSelectorMenu
-                }
-
-                ToolbarItem(placement: .navigation) {
-                    viewModePicker
+                if tbVis.showViewModePicker {
+                    ToolbarItem(placement: .navigation) {
+                        viewModePicker
+                    }
                 }
 
                 ToolbarItem(placement: .navigation) {
@@ -1048,7 +1135,7 @@ struct ContentView: View {
                     }
                 }
 
-                if isExpandedDetail, let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
+                if tbVis.showExpandedCardInfo, let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }) {
                     ToolbarItemGroup(placement: .navigation) {
                         HStack {
                             Text("⠀⠀" + card.displayTitle)
@@ -1116,23 +1203,25 @@ struct ContentView: View {
                     .help("Search sessions (⌘K / ⌘P)")
                 }
 
-                ToolbarSpacer(.fixed, placement: .primaryAction)
+                if tbVis.showInspectorToggle {
+                    ToolbarSpacer(.fixed, placement: .primaryAction)
 
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        if store.state.selectedCardId != nil {
-                            store.dispatch(.selectCard(cardId: nil))
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            if store.state.selectedCardId != nil {
+                                store.dispatch(.selectCard(cardId: nil))
+                            }
+                        } label: {
+                            Image(systemName: "sidebar.right")
                         }
-                    } label: {
-                        Image(systemName: "sidebar.right")
+                        .disabled(store.state.selectedCardId == nil)
+                        .opacity(store.state.selectedCardId != nil ? 1.0 : 0.3)
+                        .help("Toggle session details")
                     }
-                    .disabled(store.state.selectedCardId == nil)
-                    .opacity(store.state.selectedCardId != nil ? 1.0 : 0.3)
-                    .help("Toggle session details")
                 }
             }
             .background { shortcutButtons }
-        } // NavigationStack
+        } // detail
         .id(uiTextSize) // Force full re-render when UI scale changes
     }
 

@@ -23,6 +23,7 @@ struct ListBoardView: View {
     var canDropCard: (KanbanCodeCard, KanbanCodeColumn) -> Bool = { _, _ in true }
     var onNewTask: () -> Void = {}
     var onCardClicked: (String) -> Void = { _ in }
+    var inSidebar: Bool = false
     @AppStorage("listBoardCollapsedColumns") private var collapsedColumnsRaw = ""
 
     private var sections: [ListBoardSection] {
@@ -51,14 +52,12 @@ struct ListBoardView: View {
 
     private func scrollView(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 ForEach(sections, id: \.column) { section in
                     sectionView(for: section)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 52)
-            .padding(.bottom, 16)
+            .padding(.top, inSidebar ? 0 : 52)
         }
         .onChange(of: store.state.selectedCardId) {
             guard let selectedId = store.state.selectedCardId else { return }
@@ -232,12 +231,11 @@ private struct ListBoardSectionView: View {
                 }
             }
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(
+                Rectangle()
+                    .fill(
                         isTargeted
-                            ? (isCurrentDropAllowed ? Color.accentColor.opacity(0.4) : Color.red.opacity(0.55))
-                            : Color.clear,
-                        lineWidth: isTargeted ? 2 : 0
+                            ? (isCurrentDropAllowed ? Color.accentColor.opacity(0.15) : Color.red.opacity(0.15))
+                            : Color.clear
                     )
             )
             .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
@@ -255,46 +253,35 @@ private struct ListBoardSectionView: View {
     @ViewBuilder
     private var sectionBody: some View {
         if section.cards.isEmpty {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.primary.opacity(0.03))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(
-                            isTargeted
-                                ? (isCurrentDropAllowed ? Color.accentColor.opacity(0.4) : Color.red.opacity(0.55))
-                                : Color.secondary.opacity(0.12),
-                            style: StrokeStyle(lineWidth: 1, dash: [5, 4])
-                        )
-                )
-                .frame(height: 52)
-                .overlay {
-                    if isTargeted, let draggingCard = dragState.draggingCard, dragState.sourceColumn != section.column, isCurrentDropAllowed {
-                        Text(draggingCard.displayTitle)
-                            .font(.app(.caption))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                    } else {
-                        Text("No cards")
-                            .font(.app(.caption))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .coordinateSpace(name: "list_section_\(section.column.rawValue)")
-                .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
-                .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
-                    column: section.column,
-                    cardFrames: cardFrames,
-                    dragState: dragState,
-                    isTargeted: $isTargeted,
-                    canDropCard: canDropCard,
-                    onMoveCard: onMoveCard,
-                    onReorderCard: onReorderCard
-                ))
+            HStack {
+                Text("No cards")
+                    .font(.app(.caption))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .overlay(
+                Rectangle()
+                    .fill(
+                        isTargeted
+                            ? (isCurrentDropAllowed ? Color.accentColor.opacity(0.15) : Color.red.opacity(0.15))
+                            : Color.clear
+                    )
+            )
+            .coordinateSpace(name: "list_section_\(section.column.rawValue)")
+            .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
+            .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
+                column: section.column,
+                cardFrames: cardFrames,
+                dragState: dragState,
+                isTargeted: $isTargeted,
+                canDropCard: canDropCard,
+                onMoveCard: onMoveCard,
+                onReorderCard: onReorderCard
+            ))
         } else {
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 ForEach(section.cards) { card in
                     if dragState.reorderTargetId == card.id && dragState.reorderAbove {
                         ReorderIndicator()
@@ -336,28 +323,9 @@ private struct ListBoardSectionView: View {
                         ReorderIndicator()
                     }
                 }
-
-                if isTargeted, dragState.reorderTargetId == nil,
-                   let draggingCard = dragState.draggingCard, dragState.sourceColumn != section.column,
-                   isCurrentDropAllowed {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(draggingCard.displayTitle)
-                            .font(.app(.body, weight: .medium))
-                            .lineLimit(1)
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(Color.accentColor.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                    )
-                    .opacity(0.7)
-                }
             }
-            .padding(8)
-            .glassColumn()
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
             .coordinateSpace(name: "list_section_\(section.column.rawValue)")
             .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
             .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
@@ -382,59 +350,58 @@ private struct ListSectionHeader: View {
     let onToggleCollapse: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onToggleCollapse) {
-                HStack(spacing: 10) {
-                    Image(systemName: "chevron.right")
-                        .font(.app(size: 10, weight: .bold))
-                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                        .foregroundStyle(.secondary)
+        Button(action: onToggleCollapse) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(column.accentColor)
+                    .frame(width: 8, height: 8)
 
-                    Circle()
-                        .fill(column.accentColor)
-                        .frame(width: 8, height: 8)
+                Text(column.displayName)
+                    .font(.app(.headline))
+                    .foregroundStyle(.primary)
 
-                    Text(column.displayName)
-                        .font(.app(.headline))
-                        .foregroundStyle(.primary)
+                Spacer()
 
-                    Text("\(count)")
-                        .font(.app(.caption))
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.secondary.opacity(0.16)))
-                        .foregroundStyle(.secondary)
-
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if let onRefreshBacklog {
-                Button {
-                    onRefreshBacklog()
-                } label: {
-                    if isRefreshingBacklog {
-                        ProgressView()
-                            .controlSize(.mini)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.app(.caption))
+                if let onRefreshBacklog {
+                    Button {
+                        onRefreshBacklog()
+                    } label: {
+                        if isRefreshingBacklog {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.app(.caption))
+                        }
                     }
+                    .buttonStyle(.borderless)
+                    .help("Refresh GitHub issues")
+                    .disabled(isRefreshingBacklog)
                 }
-                .buttonStyle(.borderless)
-                .help("Refresh GitHub issues")
-                .disabled(isRefreshingBacklog)
-                .padding(.leading, 10)
+
+                Text("\(count)")
+                    .font(.app(.caption))
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                    .foregroundStyle(.secondary)
+
+                Image(systemName: "chevron.right")
+                    .font(.app(size: 10, weight: .bold))
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                    .foregroundStyle(.tertiary)
             }
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 14)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
     }
 }
 
@@ -525,29 +492,13 @@ private struct ListCardRowView: View {
     var enabledAssistants: [CodingAssistant] = []
     var onMigrateAssistant: (CodingAssistant) -> Void = { _ in }
 
-    private var supportingText: String? {
-        let candidates = [
-            card.link.issueLink?.title,
-            card.link.prLink?.title,
-            card.link.promptBody,
-        ]
-        return candidates.first(where: { text in
-            guard let text, !text.isEmpty else { return false }
-            return text != card.displayTitle
-        }) ?? nil
-    }
-
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(card.column.accentColor)
-                .frame(width: 9, height: 9)
-                .padding(.top, 6)
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                // Row 1: title + badge + time
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(card.displayTitle)
-                        .font(.app(.body, weight: .medium))
+                        .font(.app(.subheadline))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
@@ -563,69 +514,22 @@ private struct ListCardRowView: View {
                         .lineLimit(1)
                 }
 
-                if let supportingText {
-                    Text(supportingText)
-                        .font(.app(.caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-
+                // Row 2: metadata badges
                 HStack(spacing: 6) {
+                    CardBadgesRow(card: card)
+
                     if let projectName = card.projectName {
                         Label(projectName, systemImage: "folder")
-                            .font(.app(.caption))
+                            .font(.app(.caption2))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
 
                     if let branch = card.link.worktreeLink?.branch {
                         Label(branch, systemImage: "arrow.triangle.branch")
-                            .font(.app(.caption))
+                            .font(.app(.caption2))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                    }
-
-                    if card.link.cardLabel == .session {
-                        AssistantIcon(assistant: card.link.effectiveAssistant)
-                            .frame(width: CGFloat(13).scaled, height: CGFloat(13).scaled)
-                            .foregroundStyle(Color.primary.opacity(0.4))
-                    }
-
-                    if let tmux = card.link.tmuxLink {
-                        HStack(spacing: 2) {
-                            Image(systemName: "terminal")
-                                .font(.app(.caption2))
-                            if tmux.terminalCount > 1 {
-                                Text(verbatim: "\(tmux.terminalCount)")
-                                    .font(.app(size: 9, weight: .bold))
-                            }
-                        }
-                        .foregroundStyle(.green)
-                    }
-
-                    if let primary = card.link.prLink {
-                        let totalThreads = card.link.prLinks.compactMap(\.unresolvedThreads).reduce(0, +)
-                        PRBadge(status: card.link.worstPRStatus, prNumber: primary.number, unresolvedThreads: totalThreads)
-                    }
-
-                    if card.isRateLimited {
-                        RateLimitBadge()
-                    }
-
-                    if let issue = card.link.issueLink {
-                        HStack(spacing: 2) {
-                            Image(systemName: "circle.circle")
-                                .font(.app(.caption2))
-                            Text(verbatim: "\(issue.number)")
-                                .font(.app(.caption2))
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-
-                    if card.link.isRemote {
-                        Image(systemName: "cloud")
-                            .font(.app(.caption2))
-                            .foregroundStyle(.teal)
                     }
                 }
             }
@@ -633,32 +537,24 @@ private struct ListCardRowView: View {
             if card.showSpinner {
                 ProgressView()
                     .controlSize(.small)
-                    .padding(.top, 2)
             } else if card.column == .backlog {
                 Button(action: onStart) {
                     Image(systemName: "play.fill")
                         .font(.app(size: 10))
                         .foregroundStyle(Color.green.opacity(0.8))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 6)
-                        .background(Color.green.opacity(0.08), in: Capsule())
-                        .background(.ultraThinMaterial, in: Capsule())
                 }
                 .buttonStyle(.borderless)
                 .help("Start task")
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(.controlBackgroundColor).opacity(0.4))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isSelected ? Color.accentColor.opacity(0.32) : Color.clear, lineWidth: 1)
-        )
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture { onSelect() }
         .contextMenu {
             if card.column == .backlog {
