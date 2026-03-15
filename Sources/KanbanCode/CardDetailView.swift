@@ -94,10 +94,13 @@ struct CardDetailView: View {
 
     @AppStorage("preferredEditorBundleId") private var editorBundleId: String = "dev.zed.Zed"
     @AppStorage("sessionDetailFontSize") private var sessionDetailFontSize: Double = 12
+    @AppStorage("preferChatView") private var preferChatView = false
 
     @State private var turns: [ConversationTurn] = []
     @State private var isLoadingHistory = false
     @State private var hasMoreTurns = false
+    @State private var chatDraftText = ""
+    @State private var chatDraftImages: [Data] = []
     @State private var isLoadingMore = false
     @Binding var selectedTab: DetailTab
     @State private var showRenameSheet = false
@@ -289,13 +292,13 @@ struct CardDetailView: View {
         .onChange(of: card.link.sessionLink?.sessionPath) {
             // When a session path appears (e.g., after launch discovers the session),
             // restart the watcher so history starts updating live.
-            guard selectedTab == .history else { return }
+            guard selectedTab == .history || (selectedTab == .terminal && preferChatView) else { return }
             guard card.link.sessionLink?.sessionPath != nil else { return }
             startHistoryWatcher()
             Task { await loadHistory() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeHistoryChanged)) { _ in
-            guard selectedTab == .history else { return }
+            guard selectedTab == .history || (selectedTab == .terminal && preferChatView) else { return }
             // Debounce: only reload if >0.5s since last reload
             let now = Date()
             guard now.timeIntervalSince(lastReloadTime) > 0.5 else { return }
@@ -614,6 +617,7 @@ struct CardDetailView: View {
                         .padding(.leading, 16)
                         .fixedSize()
                     }
+
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 0)
@@ -633,44 +637,76 @@ struct CardDetailView: View {
                     Divider()
                 }
 
-                // Content area: single TerminalContainerView + overlay for non-terminal states
+                // Content area: either ChatView or TerminalContainerView (not both)
                 ZStack {
-                    // Always mount the terminal container — never tear down on state changes.
-                    // Hiding with opacity instead of `if` prevents SwiftUI from destroying
-                    // the NSView during background reconciliation/activity updates.
-                    TerminalContainerView(
-                        sessions: allLiveSessions,
-                        activeSession: effectiveActiveSession ?? allLiveSessions.first ?? "",
-                        grabFocus: terminalGrabFocus
-                    )
-                    .equatable()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(allLiveSessions.isEmpty || showOverlay || selectedBrowserTabId != nil ? 0 : 1)
-                    .onChange(of: terminalGrabFocus) {
-                        if terminalGrabFocus {
-                            // Handle focus directly via TerminalCache — bypasses NSViewRepresentable
-                            // update cycle entirely, since grabFocus is excluded from Equatable.
-                            let session = effectiveActiveSession ?? allLiveSessions.first ?? ""
-                            if !session.isEmpty {
-                                TerminalCache.shared.focusTerminal(for: session)
-                            }
-                            DispatchQueue.main.async { terminalGrabFocus = false }
+                    if preferChatView {
+                        // Chat mode: no terminal mounted (saves CPU, fixes scroll)
+                        ChatView(
+                            turns: turns,
+                            isLoading: isLoadingHistory,
+                            activityState: card.activityState,
+                            assistant: card.link.effectiveAssistant,
+                            hasMoreTurns: hasMoreTurns,
+                            isLoadingMore: isLoadingMore,
+                            tmuxSessionName: card.link.tmuxLink?.sessionName,
+                            onSendPrompt: { text, imagePaths in
+                                let prompt = QueuedPrompt(
+                                    id: UUID().uuidString,
+                                    body: text,
+                                    sendAutomatically: true,
+                                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
+                                )
+                                onAddQueuedPrompt(prompt)
+                                onSendQueuedPrompt(prompt.id)
+                            },
+                            onLoadMore: { Task { await loadMoreHistory() } },
+                            onFork: { onFork(true) },
+                            onCheckpoint: { turn in
+                                checkpointTurn = turn
+                                showCheckpointConfirm = true
+                            },
+                            draftText: $chatDraftText,
+                            draftImages: $chatDraftImages
+                        )
+                        .task(id: "chatview-\(card.id)") {
+                            await loadHistory()
+                            startHistoryWatcher()
                         }
-                    }
+                    } else {
+                        // Terminal mode
+                        TerminalContainerView(
+                            sessions: allLiveSessions,
+                            activeSession: effectiveActiveSession ?? allLiveSessions.first ?? "",
+                            grabFocus: terminalGrabFocus
+                        )
+                        .equatable()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .opacity(allLiveSessions.isEmpty || showOverlay || selectedBrowserTabId != nil ? 0 : 1)
+                        .onChange(of: terminalGrabFocus) {
+                            if terminalGrabFocus {
+                                let session = effectiveActiveSession ?? allLiveSessions.first ?? ""
+                                if !session.isEmpty {
+                                    TerminalCache.shared.focusTerminal(for: session)
+                                }
+                                DispatchQueue.main.async { terminalGrabFocus = false }
+                            }
+                        }
 
-                    // Overlay for non-terminal Claude tab states
-                    if showOverlay && selectedBrowserTabId == nil {
-                        assistantTabOverlay(isLaunching: isLaunching)
-                    }
+                        // Overlay for non-terminal Claude tab states
+                        if showOverlay && selectedBrowserTabId == nil {
+                            assistantTabOverlay(isLaunching: isLaunching)
+                        }
 
-                    // Browser tab content — use opacity to preserve WKWebView state
-                    ForEach(browserTabs, id: \.id) { tab in
-                        BrowserContentView(tab: tab)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .opacity(selectedBrowserTabId == tab.id ? 1 : 0)
-                    }
+                        // Browser tab content — use opacity to preserve WKWebView state
+                        ForEach(browserTabs, id: \.id) { tab in
+                            BrowserContentView(tab: tab)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .opacity(selectedBrowserTabId == tab.id ? 1 : 0)
+                        }
 
-                    // Drop target highlight when dragging an image over the window
+                    } // else (terminal mode)
+
+                    // Drop target — works in both chat and terminal mode
                     if isDroppingImage && !allLiveSessions.isEmpty {
                         RoundedRectangle(cornerRadius: 6)
                             .strokeBorder(Color.accentColor, lineWidth: 2)
@@ -680,7 +716,7 @@ struct CardDetailView: View {
                                     Image(systemName: "photo.on.rectangle.angled")
                                         .font(.app(size: 28))
                                         .foregroundStyle(Color.accentColor)
-                                    Text("Drop image to send")
+                                    Text(preferChatView ? "Drop image to attach" : "Drop image to send")
                                         .font(.app(.caption, weight: .medium))
                                         .foregroundStyle(.white)
                                 }
@@ -689,6 +725,21 @@ struct CardDetailView: View {
                             .allowsHitTesting(false)
                             .transition(.opacity)
                     }
+                }
+                // Floating chat/terminal toggle
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        preferChatView.toggle()
+                    } label: {
+                        Image(systemName: preferChatView ? "terminal" : "bubble.left.and.text.bubble.right")
+                            .font(.system(size: 15))
+                            .frame(width: 36, height: 36)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular, in: .circle)
+                    .help(preferChatView ? "Show terminal" : "Show chat")
+                    .padding(10)
                 }
             }
             .onChange(of: card.link.tmuxLink) {
@@ -1826,12 +1877,14 @@ struct CardDetailView: View {
     // MARK: - History loading
 
     private static let pageSize = 80
+    private static let chatPageSize = 30
 
     private func loadHistory() async {
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
         if turns.isEmpty { isLoadingHistory = true }
-        // Preserve expanded window: if user loaded more than pageSize, keep that many
-        let loadCount = max(Self.pageSize, turns.count)
+        // Chat view uses smaller page size since Markdown rendering is heavier
+        let baseSize = preferChatView ? Self.chatPageSize : Self.pageSize
+        let loadCount = max(baseSize, turns.count)
         do {
             if card.link.effectiveAssistant == .gemini {
                 // Gemini uses JSON format — load all turns via session store

@@ -40,6 +40,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
         textView.onImagePaste = onImagePaste
+        textView.placeholderString = placeholder
 
         scrollView.documentView = textView
 
@@ -62,8 +63,10 @@ struct PromptEditor: NSViewRepresentable {
         textView.font = font
 
         // Update placeholder
+        textView.placeholderString = placeholder
         context.coordinator.placeholder = placeholder
         context.coordinator.updatePlaceholder(textView)
+        textView.needsDisplay = true
 
         // Recalculate intrinsic height after text/font changes
         scrollView.recalcIntrinsicHeight()
@@ -136,6 +139,30 @@ final class PromptEditorScrollView: NSScrollView {
 final class SubmitTextView: NSTextView {
     var onSubmit: () -> Void = {}
     var onImagePaste: ((Data) -> Void)?
+    var placeholderString: String = ""
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        // Draw placeholder when empty and not first responder (or always when empty)
+        if string.isEmpty && !placeholderString.isEmpty {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.placeholderTextColor,
+                .font: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            ]
+            let inset = textContainerInset
+            let rect = NSRect(
+                x: inset.width + 5,
+                y: inset.height,
+                width: bounds.width - inset.width * 2 - 10,
+                height: bounds.height - inset.height * 2
+            )
+            placeholderString.draw(in: rect, withAttributes: attrs)
+        }
+    }
+
+    override var needsDisplay: Bool {
+        didSet { /* ensure redraw when text changes for placeholder */ }
+    }
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36 // Return key

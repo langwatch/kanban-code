@@ -17,58 +17,70 @@ public enum TranscriptReader {
     }
 
     /// Read the last `maxTurns` conversation turns from a .jsonl file.
-    /// Reads the file efficiently: scans all lines but only parses the last N turns fully.
+    /// Always reads from the tail of the file — seeks to end minus estimated bytes,
+    /// drops the first partial line, and parses from there.
     public static func readTail(from filePath: String, maxTurns: Int = 80) async throws -> ReadResult {
         guard FileManager.default.fileExists(atPath: filePath) else {
             return ReadResult(turns: [], totalLineCount: 0, hasMore: false)
         }
 
         let url = URL(fileURLWithPath: filePath)
+        let attrs = try FileManager.default.attributesOfItem(atPath: filePath)
+        let fileSize = (attrs[.size] as? UInt64) ?? 0
+
+        guard fileSize > 0 else {
+            return ReadResult(turns: [], totalLineCount: 0, hasMore: false)
+        }
+
+        // ~20KB per turn estimate, clamped to prevent overflow
+        let clampedTurns = UInt64(min(maxTurns, 10_000))
+        let tailSize = min(clampedTurns * 20 * 1024, fileSize)
+
+        return try await readTailBytes(url: url, fileSize: fileSize, tailSize: tailSize, maxTurns: maxTurns)
+    }
+
+    /// Fast tail read: seek to end - tailSize, read lines from there.
+    private static func readTailBytes(url: URL, fileSize: UInt64, tailSize: UInt64, maxTurns: Int) async throws -> ReadResult {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
-        // First pass: count turns and record line offsets for the last N
+        let seekPos = fileSize - tailSize
+        try handle.seek(toOffset: seekPos)
+        let tailData = handle.readDataToEndOfFile()
+
+        guard let tailString = String(data: tailData, encoding: .utf8) else {
+            return ReadResult(turns: [], totalLineCount: 0, hasMore: false)
+        }
+
+        var lines = tailString.components(separatedBy: "\n")
+        // First line is likely partial (we seeked mid-line), drop it
+        if seekPos > 0 { lines.removeFirst() }
+
         var turnLineInfos: [(lineNumber: Int, line: String)] = []
-        var lineNumber = 0
-        var totalTurnCount = 0
-
-        for try await line in handle.bytes.lines {
-            lineNumber += 1
+        for (i, line) in lines.enumerated() {
             guard !line.isEmpty, line.contains("\"type\"") else { continue }
-
-            // Quick check: is this a user/assistant line?
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = obj["type"] as? String,
                   type == "user" || type == "assistant" else { continue }
-
-            // Skip caveat wrapper messages entirely
             if type == "user" && JsonlParser.isCaveatMessage(obj) { continue }
-
-            totalTurnCount += 1
-            turnLineInfos.append((lineNumber, line))
-            // Keep only the last maxTurns entries in the ring
-            if turnLineInfos.count > maxTurns {
-                turnLineInfos.removeFirst()
-            }
+            // lineNumber is approximate (relative to tail chunk)
+            turnLineInfos.append((i + 1, line))
         }
 
-        // Second pass: parse only the turns we're keeping
-        let startIndex = totalTurnCount - turnLineInfos.count
+        // Keep only last maxTurns
+        let kept = turnLineInfos.suffix(maxTurns)
         var turns: [ConversationTurn] = []
-        turns.reserveCapacity(turnLineInfos.count)
+        turns.reserveCapacity(kept.count)
 
-        for (i, info) in turnLineInfos.enumerated() {
+        for (i, info) in kept.enumerated() {
             guard let data = info.line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = obj["type"] as? String else { continue }
 
-            // Stdout responses display as assistant-style turns
             let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : type
-
             let blocks: [ContentBlock]
             let textPreview: String
-
             if type == "user" {
                 blocks = extractUserBlocks(from: obj)
                 textPreview = Self.buildTextPreview(blocks: blocks, role: role)
@@ -76,11 +88,9 @@ public enum TranscriptReader {
                 blocks = extractAssistantBlocks(from: obj)
                 textPreview = Self.buildTextPreview(blocks: blocks, role: role)
             }
-
             let timestamp = obj["timestamp"] as? String
-
             turns.append(ConversationTurn(
-                index: startIndex + i,
+                index: i,
                 lineNumber: info.lineNumber,
                 role: role,
                 textPreview: textPreview,
@@ -91,8 +101,8 @@ public enum TranscriptReader {
 
         return ReadResult(
             turns: turns,
-            totalLineCount: lineNumber,
-            hasMore: totalTurnCount > turnLineInfos.count
+            totalLineCount: -1, // unknown without full scan
+            hasMore: turnLineInfos.count > maxTurns || seekPos > 0
         )
     }
 
