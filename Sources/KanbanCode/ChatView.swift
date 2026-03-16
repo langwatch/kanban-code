@@ -23,28 +23,66 @@ struct ChatView: View {
     @Binding var draftImages: [Data]
 
     @State private var isBusyFromPane = false
+    @State private var dismissedBusy = false
     @Binding var pendingMessage: String?
 
     /// Use pane output as ground truth, falling back to hook state only if no tmux session.
     private var isAssistantBusy: Bool {
+        if dismissedBusy { return false }
         if tmuxSessionName != nil { return isBusyFromPane }
         return activityState == .activelyWorking
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatMessageList(
-                turns: turns,
-                assistant: assistant,
-                hasMoreTurns: hasMoreTurns,
-                isAssistantBusy: isAssistantBusy,
-                tmuxSessionName: tmuxSessionName,
-                isBusyFromPane: $isBusyFromPane,
-                pendingMessage: pendingMessage,
-                onLoadMore: onLoadMore,
-                onFork: onFork,
-                onCheckpoint: onCheckpoint
-            )
+            ZStack(alignment: .bottom) {
+                ChatMessageList(
+                    turns: turns,
+                    assistant: assistant,
+                    hasMoreTurns: hasMoreTurns,
+                    tmuxSessionName: tmuxSessionName,
+                    isBusyFromPane: $isBusyFromPane,
+                    pendingMessage: pendingMessage,
+                    onLoadMore: onLoadMore,
+                    onFork: onFork,
+                    onCheckpoint: onCheckpoint
+                )
+
+                // Working indicator — left-aligned pill, same bg as page
+                if isAssistantBusy {
+                    HStack {
+                        Spacer(minLength: 0)
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("\(assistant.displayName) is working...")
+                                .font(.app(.callout))
+                                .foregroundStyle(.secondary)
+                            Button {
+                                dismissedBusy = true
+                                if let session = tmuxSessionName {
+                                    Task {
+                                        try? await TmuxAdapter().sendInterrupt(sessionName: session)
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20, height: 20)
+                                    .background(Color.primary.opacity(0.06), in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Stop (Ctrl+C)")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color(.windowBackgroundColor), in: Capsule())
+                        .frame(maxWidth: chatMaxWidth, alignment: .leading)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.bottom, 2)
+                }
+            }
 
             ChatInputBar(
                 assistant: assistant,
@@ -68,6 +106,13 @@ struct ChatView: View {
                 }
             }
         }
+        .onChange(of: isBusyFromPane) {
+            // If Claude starts working again after dismiss (e.g. background agents),
+            // allow the indicator to come back
+            if isBusyFromPane && dismissedBusy {
+                dismissedBusy = false
+            }
+        }
     }
 
 }
@@ -78,7 +123,6 @@ private struct ChatMessageList: View {
     let turns: [ConversationTurn]
     let assistant: CodingAssistant
     var hasMoreTurns: Bool = false
-    var isAssistantBusy: Bool = false
     var tmuxSessionName: String?
     @Binding var isBusyFromPane: Bool
     var pendingMessage: String?
@@ -157,11 +201,8 @@ private struct ChatMessageList: View {
                         .id("pending")
                     }
 
-                    // Always reserve space for working indicator + breathing room
-                    WorkingIndicator(assistant: assistant)
-                        .frame(maxWidth: chatMaxWidth)
-                        .frame(maxWidth: .infinity)
-                        .opacity(isAssistantBusy ? 1 : 0)
+                    // Bottom spacer for scroll anchor
+                    Color.clear.frame(height: 8)
                         .id("bottom-spacer")
                 }
                 .padding(.horizontal, 16)
@@ -177,11 +218,6 @@ private struct ChatMessageList: View {
                 }
                 lastSeenLineNumber = newLast
                 lastSeenCount = turns.count
-            }
-            .onChange(of: isAssistantBusy) {
-                if isAssistantBusy && isAtBottom {
-                    scrollToBottom(proxy: proxy, delay: false)
-                }
             }
             .onChange(of: pendingMessage) {
                 if pendingMessage != nil {

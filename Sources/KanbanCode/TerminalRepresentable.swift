@@ -18,27 +18,21 @@ final class BatchedTerminalView: LocalProcessTerminalView {
     private var pendingData: [UInt8] = []
     private var flushScheduled = false
 
-    // 4ms batching window: LocalProcess dispatches dataReceived via
-    // DispatchQueue.main.sync, so plain .async flushes interleave with
-    // sync calls — each read gets its own flush, defeating batching.
-    // asyncAfter lets many sync'd reads pile up before firing.
-    // (Reduced from 8ms — 4ms is enough for reads to accumulate and
-    // gives faster visual response for small outputs.)
-    private static let batchDelay: DispatchTimeInterval = .milliseconds(4)
+    // With our forked SwiftTerm using async dispatch, dataReceived arrives
+    // on main thread without blocking the pty read thread. We batch with
+    // a short delay so multiple async deliveries coalesce before processing.
+    private static let batchDelay: DispatchTimeInterval = .milliseconds(8)
 
-    // Process in a loop with a time budget: keep feeding 128KB chunks
-    // until we've spent ~8ms on the main thread, then yield. SwiftTerm's
-    // queuePendingDisplay() throttles rendering to 60fps (16.67ms) so
-    // spending up to 8ms in feed() still leaves headroom for layout.
-    // With 1M context sessions streaming huge outputs, larger chunks
-    // mean fewer display updates and less flicker.
-    private static let chunkSize = 128 * 1024
-    private static let maxBlockSeconds: Double = 0.008  // 8ms
+    // 8KB chunks so we check the time budget frequently. A single feed()
+    // on complex escape sequences can take 5-10ms per 128KB — with 8KB
+    // chunks we check every ~0.5ms and can yield before 4ms.
+    private static let chunkSize = 8 * 1024
+    private static let maxBlockSeconds: Double = 0.003  // 3ms
 
-    // Track position in pendingData to avoid O(n) removeFirst copies.
     private var pendingOffset = 0
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
+        // Main thread only (via async from our forked LocalProcess). No locks needed.
         pendingData.append(contentsOf: slice)
         guard !flushScheduled else { return }
         flushScheduled = true
@@ -55,6 +49,7 @@ final class BatchedTerminalView: LocalProcessTerminalView {
             return
         }
 
+        let totalPending = pendingData.count - pendingOffset
         let start = CACurrentMediaTime()
 
         while pendingOffset < pendingData.count {
@@ -64,8 +59,12 @@ final class BatchedTerminalView: LocalProcessTerminalView {
             feed(byteArray: chunk)
             pendingOffset += count
 
-            if pendingOffset < pendingData.count && CACurrentMediaTime() - start > Self.maxBlockSeconds {
-                // Yield to runloop so the UI stays responsive
+            let elapsed = CACurrentMediaTime() - start
+            if pendingOffset < pendingData.count && elapsed > Self.maxBlockSeconds {
+                if elapsed > 0.010 {
+                    // Log when we exceed 10ms — helps debug freezes
+                    print("[Terminal] feed took \(Int(elapsed * 1000))ms for \(pendingOffset)/\(totalPending + pendingOffset) bytes, yielding")
+                }
                 DispatchQueue.main.async { [weak self] in
                     self?.processNextChunk()
                 }
@@ -73,7 +72,12 @@ final class BatchedTerminalView: LocalProcessTerminalView {
             }
         }
 
-        // All data consumed — reset buffer
+        let elapsed = CACurrentMediaTime() - start
+        if elapsed > 0.010 {
+            print("[Terminal] feed completed in \(Int(elapsed * 1000))ms for \(totalPending) bytes")
+        }
+
+        // All consumed — reset
         pendingData.removeAll(keepingCapacity: true)
         pendingOffset = 0
         flushScheduled = false

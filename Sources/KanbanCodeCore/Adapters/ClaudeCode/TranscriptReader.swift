@@ -8,6 +8,12 @@ public enum TranscriptReader {
         public let turns: [ConversationTurn]
         public let totalLineCount: Int
         public let hasMore: Bool
+
+        public init(turns: [ConversationTurn], totalLineCount: Int, hasMore: Bool) {
+            self.turns = turns
+            self.totalLineCount = totalLineCount
+            self.hasMore = hasMore
+        }
     }
 
     /// Read all conversation turns from a .jsonl file (legacy — use readTail for large files).

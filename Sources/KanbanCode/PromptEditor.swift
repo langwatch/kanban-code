@@ -170,7 +170,11 @@ final class SubmitTextView: NSTextView {
         let hasShift = event.modifierFlags.contains(.shift)
 
         if isReturn && !hasShift {
-            // Enter without Shift → submit
+            // Flush current text to the binding before submitting,
+            // so the send handler has the latest value.
+            if let delegate = self.delegate as? PromptEditor.Coordinator {
+                delegate.parent.text = self.string
+            }
             onSubmit()
             return
         }

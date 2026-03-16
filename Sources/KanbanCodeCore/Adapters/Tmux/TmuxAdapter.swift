@@ -83,6 +83,13 @@ public final class TmuxAdapter: TmuxManagerPort, @unchecked Sendable {
         }
     }
 
+    /// Send Ctrl+C to interrupt the running process in a tmux session.
+    public func sendInterrupt(sessionName: String) async throws {
+        let _ = try await ShellCommand.run(
+            tmuxPath, arguments: ["send-keys", "-t", sessionName, "C-c"]
+        )
+    }
+
     /// Exit tmux copy/scroll mode if active, so send-keys reaches the application.
     public func exitScrollMode(sessionName: String) async throws {
         // Send 'q' to exit copy mode. If not in copy mode, 'q' is harmless

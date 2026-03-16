@@ -1,5 +1,5 @@
 {
-  "originHash" : "abd58d28e01a3f1b35b01f568e34844b9f09b0d71acd83bfe1681cde42ee15de",
+  "originHash" : "c8d32bb8a674be480e6271bfe88a8d6fd959f7a30f8c8083365487275da3d88c",
   "pins" : [
     {
       "identity" : "networkimage",
@@ -53,15 +53,6 @@
       "state" : {
         "revision" : "399f76dcd91e4c688ca2301fa24a8cc6d9927211",
         "version" : "0.99.0"
-      }
-    },
-    {
-      "identity" : "swiftterm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/migueldeicaza/SwiftTerm",
-      "state" : {
-        "revision" : "b1262db5b6bea699a8260a8c66999436c508ca56",
-        "version" : "1.11.2"
       }
     }
   ],

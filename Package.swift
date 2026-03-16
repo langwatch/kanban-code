@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "KanbanCodeCore", targets: ["KanbanCodeCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.0.0"),
+        .package(path: "LocalPackages/SwiftTerm"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
         .package(url: "https://github.com/swiftlang/swift-testing", from: "0.15.0"),
     ],

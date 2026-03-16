@@ -1835,9 +1835,63 @@ struct CardDetailView: View {
         let menu = NSMenu()
 
         if isExpanded {
-            menu.addActionItem("View Details", image: "info.circle") { [self] in
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded = false }
+            // Card info section — replaces the inspector header in expanded mode
+            if let branch = card.link.worktreeLink?.branch ?? card.link.discoveredBranches?.first, !branch.isEmpty {
+                let branchItem = NSMenuItem(title: "Branch: \(branch)", action: nil, keyEquivalent: "")
+                branchItem.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)
+                let branchSub = NSMenu()
+                branchSub.addActionItem("Copy Branch Name") { [self] in copyToClipboard(branch) }
+                if card.link.worktreeLink != nil {
+                    branchSub.addActionItem("Unlink Branch") { [self] in onUnlink(.worktree) }
+                }
+                branchItem.submenu = branchSub
+                menu.addItem(branchItem)
             }
+            for pr in card.link.prLinks {
+                let detail = pr.status.map { " · \($0.rawValue)" } ?? ""
+                let prItem = NSMenuItem(title: "PR: #\(pr.number)\(detail)", action: nil, keyEquivalent: "")
+                prItem.image = NSImage(systemSymbolName: "arrow.triangle.pull", accessibilityDescription: nil)
+                let prSub = NSMenu()
+                if let url = pr.url.flatMap({ URL(string: $0) }) {
+                    prSub.addActionItem("Open on GitHub") { NSWorkspace.shared.open(url) }
+                }
+                prSub.addActionItem("Copy PR Number") { [self] in copyToClipboard("#\(pr.number)") }
+                prSub.addActionItem("Unlink PR") { [self] in onUnlink(.pr(number: pr.number)) }
+                prItem.submenu = prSub
+                menu.addItem(prItem)
+            }
+            if let issue = card.link.issueLink {
+                let issueItem = NSMenuItem(title: "Issue: #\(issue.number)", action: nil, keyEquivalent: "")
+                issueItem.image = NSImage(systemSymbolName: "circle.circle", accessibilityDescription: nil)
+                let issueSub = NSMenu()
+                if let url = (issue.url ?? githubBaseURL.map { GitRemoteResolver.issueURL(base: $0, number: issue.number) }).flatMap({ URL(string: $0) }) {
+                    issueSub.addActionItem("Open on GitHub") { NSWorkspace.shared.open(url) }
+                }
+                issueSub.addActionItem("Copy Issue Number") { [self] in copyToClipboard("#\(issue.number)") }
+                issueSub.addActionItem("Unlink Issue") { [self] in onUnlink(.issue) }
+                issueItem.submenu = issueSub
+                menu.addItem(issueItem)
+            }
+            if let projectPath = card.link.projectPath {
+                let projItem = NSMenuItem(title: (projectPath as NSString).lastPathComponent, action: nil, keyEquivalent: "")
+                projItem.image = NSImage(systemSymbolName: "folder.badge.gearshape", accessibilityDescription: nil)
+                let projSub = NSMenu()
+                projSub.addActionItem("Copy Path") { [self] in copyToClipboard(projectPath) }
+                projSub.addActionItem("Open in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: projectPath) }
+                projItem.submenu = projSub
+                menu.addItem(projItem)
+            }
+            if let sessionId = card.link.sessionLink?.sessionId {
+                let sessionItem = NSMenuItem(title: String(sessionId.prefix(12)) + "…", action: nil, keyEquivalent: "")
+                if let img = AssistantIcon.menuImage(for: card.link.effectiveAssistant) {
+                    sessionItem.image = img
+                }
+                let sessionSub = NSMenu()
+                sessionSub.addActionItem("Copy Session ID") { [self] in copyToClipboard(sessionId) }
+                sessionItem.submenu = sessionSub
+                menu.addItem(sessionItem)
+            }
+            menu.addActionItem("Add Link", image: "plus") { [self] in showAddLink = true }
             menu.addItem(NSMenuItem.separator())
         }
 
@@ -1942,29 +1996,32 @@ struct CardDetailView: View {
     private func loadHistory() async {
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
         if turns.isEmpty { isLoadingHistory = true }
-        // Chat view uses smaller page size since Markdown rendering is heavier
         let baseSize = preferChatView ? Self.chatPageSize : Self.pageSize
         let loadCount = max(baseSize, turns.count)
+        let assistant = card.link.effectiveAssistant
+        let store = sessionStore
+        let lastLineNumber = turns.last?.lineNumber ?? 0
+        let isEmpty = turns.isEmpty
+
         do {
-            if card.link.effectiveAssistant == .gemini {
-                // Gemini uses JSON format — load all turns via session store
-                let allTurns = try await sessionStore.readTranscript(sessionPath: path)
-                turns = allTurns
-                hasMoreTurns = false
-            } else {
-                // Claude uses JSONL — paginated loading with stable incremental reload
-                let result = try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
-                if turns.isEmpty {
-                    // Initial load — use the full result
-                    turns = result.turns
-                    hasMoreTurns = result.hasMore
+            // File I/O + JSON parsing runs OFF the main actor to avoid freezing
+            let parsed = try await Task.detached { () -> TranscriptReader.ReadResult in
+                if assistant == .gemini {
+                    let allTurns = try await store.readTranscript(sessionPath: path)
+                    return TranscriptReader.ReadResult(turns: allTurns, totalLineCount: -1, hasMore: false)
                 } else {
-                    // Live reload — only append new turns so existing views stay stable
-                    let lastLineNumber = turns.last?.lineNumber ?? 0
-                    let newTurns = result.turns.filter { $0.lineNumber > lastLineNumber }
-                    if !newTurns.isEmpty {
-                        turns.append(contentsOf: newTurns)
-                    }
+                    return try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
+                }
+            }.value
+
+            // Back on main actor — update @State
+            if isEmpty {
+                turns = parsed.turns
+                hasMoreTurns = parsed.hasMore
+            } else {
+                let newTurns = parsed.turns.filter { $0.lineNumber > lastLineNumber }
+                if !newTurns.isEmpty {
+                    turns.append(contentsOf: newTurns)
                 }
             }
         } catch {
@@ -1978,10 +2035,11 @@ struct CardDetailView: View {
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
 
         isLoadingMore = true
-        // Load more by requesting a bigger tail — doubles the current window
         let newCount = turns.count + (preferChatView ? Self.chatPageSize : Self.pageSize)
         do {
-            let result = try await TranscriptReader.readTail(from: path, maxTurns: newCount)
+            let result = try await Task.detached {
+                try await TranscriptReader.readTail(from: path, maxTurns: newCount)
+            }.value
             turns = result.turns
             hasMoreTurns = result.hasMore
         } catch {
