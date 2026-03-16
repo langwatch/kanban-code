@@ -341,12 +341,14 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
                 return
             }
             guard let prompts = link.queuedPrompts,
-                  let prompt = prompts.first(where: { $0.sendAutomatically && !editingQueuedPromptIds.contains($0.id) }) else {
+                  let first = prompts.first,
+                  first.sendAutomatically && !editingQueuedPromptIds.contains(first.id) else {
                 let qCount = link.queuedPrompts?.count ?? 0
-                let autoCount = link.queuedPrompts?.filter(\.sendAutomatically).count ?? 0
-                KanbanCodeLog.info("notify", "Auto-send: no eligible prompt for \(sessionId.prefix(8)) (queued: \(qCount), auto: \(autoCount), editing: \(editingQueuedPromptIds))")
+                let firstAuto = link.queuedPrompts?.first?.sendAutomatically ?? false
+                KanbanCodeLog.info("notify", "Auto-send: no eligible prompt for \(sessionId.prefix(8)) (queued: \(qCount), firstIsAuto: \(firstAuto), editing: \(editingQueuedPromptIds))")
                 return
             }
+            let prompt = first
             guard link.tmuxLink?.sessionName != nil else {
                 KanbanCodeLog.info("notify", "Auto-send skipped: no tmux session for \(sessionId.prefix(8))")
                 return

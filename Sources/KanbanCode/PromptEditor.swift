@@ -53,6 +53,9 @@ struct PromptEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: PromptEditorScrollView, context: Context) {
         guard let textView = scrollView.documentView as? SubmitTextView else { return }
+        // CRITICAL: Update the coordinator's parent reference so textDidChange
+        // writes to the CURRENT card's binding, not a stale one from makeCoordinator.
+        context.coordinator.parent = self
         // Force update when the identity changes (e.g. switched to a different card).
         let identityChanged = context.coordinator.lastIdentity != identity
         if identityChanged {

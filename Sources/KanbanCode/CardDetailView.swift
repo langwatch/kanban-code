@@ -13,11 +13,11 @@ enum DetailTab: String {
 
     static func initialTab(for card: KanbanCodeCard) -> DetailTab {
         if card.link.tmuxLink != nil { return .terminal }
-        if card.link.sessionLink != nil { return .history }
+        if card.link.sessionLink != nil { return .terminal }
         if card.link.issueLink != nil { return .issue }
         if !card.link.prLinks.isEmpty { return .pullRequest }
         if card.link.promptBody != nil { return .prompt }
-        return .history
+        return .terminal
     }
 }
 
@@ -559,6 +559,47 @@ struct CardDetailView: View {
     }
 
     @ViewBuilder
+    private var chatViewForCurrentCard: some View {
+        ChatView(
+            turns: turns,
+            isLoading: isLoadingHistory,
+            activityState: card.activityState,
+            assistant: card.link.effectiveAssistant,
+            hasMoreTurns: hasMoreTurns,
+            isLoadingMore: isLoadingMore,
+            tmuxSessionName: card.link.tmuxLink?.sessionName,
+            cardId: card.id,
+            onSendPrompt: { text, imagePaths in
+                let prompt = QueuedPrompt(
+                    id: UUID().uuidString,
+                    body: text,
+                    sendAutomatically: true,
+                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
+                )
+                onAddQueuedPrompt(prompt)
+                onSendQueuedPrompt(prompt.id)
+            },
+            onQueuePrompt: { body, sendAuto, imagePaths in
+                let prompt = QueuedPrompt(
+                    body: body,
+                    sendAutomatically: sendAuto,
+                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
+                )
+                onAddQueuedPrompt(prompt)
+            },
+            onLoadMore: { Task { await loadMoreHistory() } },
+            onFork: { onFork(true) },
+            onCheckpoint: { turn in
+                checkpointTurn = turn
+                showCheckpointConfirm = true
+            },
+            draftText: chatDraftText,
+            draftImages: chatDraftImages,
+            pendingMessage: $chatPendingMessage
+        )
+    }
+
+    @ViewBuilder
     private var terminalView: some View {
         if showTabBar {
             let isLaunching = card.link.isLaunching == true && !isLaunchStale
@@ -704,42 +745,7 @@ struct CardDetailView: View {
                 ZStack {
                     if preferChatView {
                         // Chat mode: no terminal mounted (saves CPU, fixes scroll)
-                        ChatView(
-                            turns: turns,
-                            isLoading: isLoadingHistory,
-                            activityState: card.activityState,
-                            assistant: card.link.effectiveAssistant,
-                            hasMoreTurns: hasMoreTurns,
-                            isLoadingMore: isLoadingMore,
-                            tmuxSessionName: card.link.tmuxLink?.sessionName,
-                            onSendPrompt: { text, imagePaths in
-                                let prompt = QueuedPrompt(
-                                    id: UUID().uuidString,
-                                    body: text,
-                                    sendAutomatically: true,
-                                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
-                                )
-                                onAddQueuedPrompt(prompt)
-                                onSendQueuedPrompt(prompt.id)
-                            },
-                            onQueuePrompt: { body, sendAuto, imagePaths in
-                                let prompt = QueuedPrompt(
-                                    body: body,
-                                    sendAutomatically: sendAuto,
-                                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
-                                )
-                                onAddQueuedPrompt(prompt)
-                            },
-                            onLoadMore: { Task { await loadMoreHistory() } },
-                            onFork: { onFork(true) },
-                            onCheckpoint: { turn in
-                                checkpointTurn = turn
-                                showCheckpointConfirm = true
-                            },
-                            draftText: chatDraftText,
-                            draftImages: chatDraftImages,
-                            pendingMessage: $chatPendingMessage
-                        )
+                        chatViewForCurrentCard
                         .task(id: "chatview-\(card.id)") {
                             await loadHistory()
                             startHistoryWatcher()
@@ -802,6 +808,9 @@ struct CardDetailView: View {
                 .overlay(alignment: .topTrailing) {
                     Button {
                         preferChatView.toggle()
+                        if !preferChatView {
+                            terminalGrabFocus = true
+                        }
                     } label: {
                         Image(systemName: preferChatView ? "terminal" : "bubble.left.and.text.bubble.right")
                             .font(.system(size: 15))

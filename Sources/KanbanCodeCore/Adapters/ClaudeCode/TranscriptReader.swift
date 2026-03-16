@@ -78,8 +78,13 @@ public enum TranscriptReader {
             guard let data = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = obj["type"] as? String,
-                  type == "user" || type == "assistant" else { continue }
+                  type == "user" || type == "assistant" || type == "queue-operation" else { continue }
             if type == "user" && JsonlParser.isCaveatMessage(obj) { continue }
+            // queue-operation enqueue: user sent a prompt via the queue — treat as user turn
+            if type == "queue-operation" {
+                guard let op = obj["operation"] as? String, op == "enqueue",
+                      let content = obj["content"] as? String, !content.isEmpty else { continue }
+            }
             turnLineInfos.append((lineByteOffset, line))
         }
 
@@ -93,13 +98,21 @@ public enum TranscriptReader {
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = obj["type"] as? String else { continue }
 
-            let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : type
+            let role: String
             let blocks: [ContentBlock]
             let textPreview: String
-            if type == "user" {
+            if type == "queue-operation" {
+                // Queued prompt — render as user message
+                role = "user"
+                let content = obj["content"] as? String ?? ""
+                blocks = [ContentBlock(kind: .text, text: content)]
+                textPreview = content
+            } else if type == "user" {
+                role = JsonlParser.isLocalCommandStdout(obj) ? "assistant" : type
                 blocks = extractUserBlocks(from: obj)
                 textPreview = Self.buildTextPreview(blocks: blocks, role: role)
             } else {
+                role = type
                 blocks = extractAssistantBlocks(from: obj)
                 textPreview = Self.buildTextPreview(blocks: blocks, role: role)
             }
@@ -322,13 +335,24 @@ public enum TranscriptReader {
             if let stdout = JsonlParser.parseLocalCommandStdout(text) {
                 return [ContentBlock(kind: .text, text: stdout)]
             }
+            // Count images in the content array
+            var imageCount = 0
+            if let message = obj["message"] as? [String: Any],
+               let content = message["content"] as? [[String: Any]] {
+                imageCount = content.filter { ($0["type"] as? String) == "image" }.count
+            }
             // Strip any remaining metadata tags from mixed-content messages
             let cleaned = JsonlParser.stripMetadataTags(text)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleaned.isEmpty {
-                return [ContentBlock(kind: .text, text: cleaned)]
+            var result: [ContentBlock] = []
+            if imageCount > 0 {
+                let label = imageCount == 1 ? "📎 1 image attached" : "📎 \(imageCount) images attached"
+                result.append(ContentBlock(kind: .text, text: label))
             }
-            return []
+            if !cleaned.isEmpty {
+                result.append(ContentBlock(kind: .text, text: cleaned))
+            }
+            return result
         }
 
         // Check for tool_result blocks in message.content
@@ -338,6 +362,7 @@ public enum TranscriptReader {
         }
 
         var blocks: [ContentBlock] = []
+        var imageCount = 0
         for block in content {
             guard let blockType = block["type"] as? String else { continue }
             switch blockType {
@@ -345,11 +370,12 @@ public enum TranscriptReader {
                 if let text = block["text"] as? String, !text.isEmpty {
                     blocks.append(ContentBlock(kind: .text, text: text))
                 }
+            case "image":
+                imageCount += 1
             case "tool_result":
                 let toolUseId = block["tool_use_id"] as? String
                 let resultText: String
                 if let content = block["content"] as? String {
-                    // Keep full content (up to 10KB) for chat view; history view truncates via lineLimit
                     resultText = String(content.prefix(10_240))
                 } else if let contentArr = block["content"] as? [[String: Any]] {
                     resultText = contentArr.compactMap { $0["text"] as? String }.joined(separator: "\n").prefix(10_240).description
@@ -360,6 +386,10 @@ public enum TranscriptReader {
             default:
                 break
             }
+        }
+        if imageCount > 0 {
+            let label = imageCount == 1 ? "📎 1 image attached" : "📎 \(imageCount) images attached"
+            blocks.insert(ContentBlock(kind: .text, text: label), at: 0)
         }
         return blocks
     }

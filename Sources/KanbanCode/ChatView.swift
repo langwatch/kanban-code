@@ -15,6 +15,7 @@ struct ChatView: View {
     var hasMoreTurns: Bool = false
     var isLoadingMore: Bool = false
     var tmuxSessionName: String?
+    var cardId: String = ""
     var onSendPrompt: (String, [String]) -> Void = { _, _ in }
     var onQueuePrompt: ((String, Bool, [String]) -> Void)? // (body, sendAutomatically, imagePaths)
     var onLoadMore: (() -> Void)?
@@ -107,7 +108,7 @@ struct ChatView: View {
             ChatInputBar(
                 assistant: assistant,
                 isReady: !isAssistantBusy,
-                cardId: tmuxSessionName ?? "",
+                cardId: cardId,
                 onSend: { text, images in
                     pendingMessage = text
                     onSendPrompt(text, images)
@@ -168,33 +169,68 @@ private struct ChatMessageList: View {
 
                     let groupInfo = Self.computeGroupInfo(turns: turns)
                     let toolResults = Self.computeToolResults(turns: turns)
+                    let turnGroups = Self.groupConsecutiveToolTurns(turns: turns)
 
-                    ForEach(turns, id: \.lineNumber) { turn in
-                        ChatMessageView(
-                            turn: turn,
-                            assistant: assistant,
-                            toolResultMap: toolResults[turn.lineNumber] ?? [:],
-                            isLastInGroup: groupInfo[turn.lineNumber] ?? true,
-                            onCopy: { text in
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(text, forType: .string)
-                            },
-                            onFork: onFork,
-                            onCheckpoint: onCheckpoint,
-                            onSendAnswer: onSendAnswer
-                        )
-                        .equatable()
-                        .id(turn.lineNumber)
-                        .padding(.vertical, 1)
-                        .onAppear {
-                            if turn.lineNumber == turns.last?.lineNumber {
-                                isAtBottom = true
-                                hasNewMessages = false
+                    ForEach(turnGroups.indices, id: \.self) { gi in
+                        let group = turnGroups[gi]
+                        if group.count > 1 {
+                            // Multiple consecutive tool-only turns — single shared bubble
+                            let toolTurns = group.filter { $0.role == "assistant" }
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(toolTurns.indices, id: \.self) { ti in
+                                    ChatMessageView(
+                                        turn: toolTurns[ti],
+                                        assistant: assistant,
+                                        toolResultMap: toolResults[toolTurns[ti].lineNumber] ?? [:],
+                                        isLastInGroup: false,
+                                        onCopy: { text in
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString(text, forType: .string)
+                                        },
+                                        onFork: onFork,
+                                        onCheckpoint: onCheckpoint,
+                                        onSendAnswer: onSendAnswer,
+                                        suppressBackground: true
+                                    )
+                                    .equatable()
+                                    .id(toolTurns[ti].lineNumber)
+                                }
                             }
-                        }
-                        .onDisappear {
-                            if turn.lineNumber == turns.last?.lineNumber {
-                                isAtBottom = false
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.primary.opacity(0.04))
+                                    .padding(.leading, -8)
+                            )
+                            .frame(maxWidth: chatMaxWidth, alignment: .leading)
+                            .padding(.vertical, 4)
+                        } else {
+                            let turn = group[0]
+                            ChatMessageView(
+                                turn: turn,
+                                assistant: assistant,
+                                toolResultMap: toolResults[turn.lineNumber] ?? [:],
+                                isLastInGroup: groupInfo[turn.lineNumber] ?? true,
+                                onCopy: { text in
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(text, forType: .string)
+                                },
+                                onFork: onFork,
+                                onCheckpoint: onCheckpoint,
+                                onSendAnswer: onSendAnswer
+                            )
+                            .equatable()
+                            .id(turn.lineNumber)
+                            .padding(.vertical, 4)
+                            .onAppear {
+                                if turn.lineNumber == turns.last?.lineNumber {
+                                    isAtBottom = true
+                                    hasNewMessages = false
+                                }
+                            }
+                            .onDisappear {
+                                if turn.lineNumber == turns.last?.lineNumber {
+                                    isAtBottom = false
+                                }
                             }
                         }
                     }
@@ -376,6 +412,62 @@ private struct ChatMessageList: View {
         }
         return result
     }
+
+    /// Group consecutive assistant turns that contain only tool calls (no visible text)
+    /// into arrays so the list can render them in a single box.
+    private static func groupConsecutiveToolTurns(turns: [ConversationTurn]) -> [[ConversationTurn]] {
+        var groups: [[ConversationTurn]] = []
+        var currentToolRun: [ConversationTurn] = []
+        // Invisible user turns (only tool_result, no text) that sit between tool-only
+        // assistant turns — buffer them so they don't break the tool group.
+        var bufferedInvisibleUsers: [ConversationTurn] = []
+
+        for turn in turns {
+            if turn.role == "assistant" && isToolOnlyTurn(turn) {
+                // Flush buffered invisible users into the tool run
+                currentToolRun.append(contentsOf: bufferedInvisibleUsers)
+                bufferedInvisibleUsers = []
+                currentToolRun.append(turn)
+            } else if turn.role == "user" && isToolResultOnlyTurn(turn) && !currentToolRun.isEmpty {
+                // Buffer invisible user turn — might be between consecutive tool calls
+                bufferedInvisibleUsers.append(turn)
+            } else {
+                if !currentToolRun.isEmpty {
+                    groups.append(currentToolRun)
+                    currentToolRun = []
+                }
+                // Flush any buffered invisible users as their own group
+                for u in bufferedInvisibleUsers { groups.append([u]) }
+                bufferedInvisibleUsers = []
+                groups.append([turn])
+            }
+        }
+        if !currentToolRun.isEmpty {
+            groups.append(currentToolRun)
+        }
+        for u in bufferedInvisibleUsers { groups.append([u]) }
+        return groups
+    }
+
+    private static func isToolResultOnlyTurn(_ turn: ConversationTurn) -> Bool {
+        guard turn.role == "user" else { return false }
+        return !turn.contentBlocks.contains {
+            if case .text = $0.kind { return !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            return false
+        }
+    }
+
+    private static func isToolOnlyTurn(_ turn: ConversationTurn) -> Bool {
+        guard turn.role == "assistant" else { return false }
+        let visible = turn.contentBlocks.filter { block in
+            switch block.kind {
+            case .text: return !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .toolResult: return false
+            default: return true
+            }
+        }
+        return !visible.isEmpty && visible.allSatisfy { if case .toolUse = $0.kind { return true }; return false }
+    }
 }
 
 // MARK: - Chat Message View
@@ -389,6 +481,7 @@ struct ChatMessageView: View, Equatable {
     var onFork: (() -> Void)?
     var onCheckpoint: ((ConversationTurn) -> Void)?
     var onSendAnswer: ((String) -> Void)?
+    var suppressBackground: Bool = false
     @State private var isHovered = false
 
     nonisolated static func == (lhs: ChatMessageView, rhs: ChatMessageView) -> Bool {
@@ -425,23 +518,28 @@ struct ChatMessageView: View, Equatable {
 
     var body: some View {
         if hasContent {
-            HStack {
-                Spacer(minLength: 0)
-                VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
-                    if turn.role == "user" {
-                        userBubble
-                    } else {
-                        assistantMessage
-                    }
+            if suppressBackground {
+                // Inside a grouped tool box — no centering wrapper, no frame constraint
+                assistantMessage
+            } else {
+                HStack {
+                    Spacer(minLength: 0)
+                    VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
+                        if turn.role == "user" {
+                            userBubble
+                        } else {
+                            assistantMessage
+                        }
 
-                    if isLastInGroup {
-                        messageActions
+                        if isLastInGroup {
+                            messageActions
+                        }
                     }
+                    .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
+                    .contentShape(Rectangle())
+                    .onHover { isHovered = $0 }
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
-                .contentShape(Rectangle())
-                .onHover { isHovered = $0 }
-                Spacer(minLength: 0)
             }
         }
     }
@@ -468,6 +566,10 @@ struct ChatMessageView: View, Equatable {
                             .font(.app(.caption))
                             .italic()
                             .foregroundStyle(.secondary)
+                    } else if block.text.hasPrefix("📎") {
+                        Text(block.text)
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
                     } else {
                         Text(block.text)
                             .font(.app(.body))
@@ -490,55 +592,108 @@ struct ChatMessageView: View, Equatable {
     // MARK: Assistant message
 
     private var assistantMessage: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let pairedBlocks = pairToolResults()
+        let pairedBlocks = pairToolResults()
+        // Build a flat list of rendered items, tagging each as tool or not
+        let items: [(isToolUse: Bool, paired: PairedBlock)] = pairedBlocks.compactMap { paired in
+            switch paired.block.kind {
+            case .toolResult: return nil
+            case .text:
+                let trimmed = paired.block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { return nil }
+                return (false, paired)
+            case .toolUse: return (true, paired)
+            default: return (false, paired)
+            }
+        }
+        // Group consecutive tool uses
+        let groups = items.reduce(into: [(isToolGroup: Bool, items: [(isToolUse: Bool, paired: PairedBlock)])]()) { groups, item in
+            if item.isToolUse, let last = groups.last, last.isToolGroup {
+                groups[groups.count - 1].items.append(item)
+            } else {
+                groups.append((isToolGroup: item.isToolUse, items: [item]))
+            }
+        }
 
-            ForEach(pairedBlocks.indices, id: \.self) { i in
-                let paired = pairedBlocks[i]
-                switch paired.block.kind {
-                case .text:
-                    if paired.block.text.containsMarkdown {
-                        Markdown(paired.block.text)
-                            .markdownTheme(chatMarkdownTheme)
-                            .textSelection(.enabled)
-                    } else {
-                        Text(paired.block.text)
-                            .font(.system(size: 13))
-                            .textSelection(.enabled)
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(groups.indices, id: \.self) { gi in
+                let group = groups[gi]
+                if group.isToolGroup {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(group.items.indices, id: \.self) { ti in
+                            if ti > 0 { Divider().padding(.leading, 8) }
+                            if case .toolUse(let name, _, _) = group.items[ti].paired.block.kind {
+                                ToolCallCard(
+                                    name: name,
+                                    displayText: group.items[ti].paired.block.text,
+                                    rawInputJSON: group.items[ti].paired.block.rawInputJSON,
+                                    resultText: group.items[ti].paired.resultBlock?.text,
+                                    showBackground: false
+                                )
+                            }
+                        }
                     }
-                case .toolUse(let name, _, _):
-                    ToolCallCard(
-                        name: name,
-                        displayText: paired.block.text,
-                        rawInputJSON: paired.block.rawInputJSON,
-                        resultText: paired.resultBlock?.text
-                    )
-                case .toolResult:
-                    EmptyView()
-                case .thinking:
-                    ThinkingCard(text: paired.block.text)
-                case .planModeEnter:
-                    Text("Entered plan mode")
-                        .font(.app(.caption))
-                        .italic()
-                        .foregroundStyle(.tertiary)
-                case .planModeExit(let plan):
-                    PlanModeExitCard(plan: plan, resultText: paired.resultBlock?.text, onAnswer: onSendAnswer)
-                case .askUserQuestion(let questions, _):
-                    AskUserQuestionCard(
-                        questions: questions,
-                        resultText: paired.resultBlock?.text,
-                        onAnswer: onSendAnswer
-                    )
-                case .agentCall(let description, let subagentType, _):
-                    AgentCallCard(
-                        description: description,
-                        subagentType: subagentType,
-                        resultText: paired.resultBlock?.text,
-                        rawInputJSON: paired.block.rawInputJSON
-                    )
+                    .background {
+                        if !suppressBackground {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.primary.opacity(0.04))
+                                .padding(.leading, -8)
+                        }
+                    }
+                } else {
+                    blockView(group.items[0].paired)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func blockView(_ paired: PairedBlock) -> some View {
+        switch paired.block.kind {
+        case .text:
+            let trimmed = paired.block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                if trimmed.containsMarkdown {
+                    Markdown(trimmed)
+                        .markdownTheme(chatMarkdownTheme)
+                        .textSelection(.enabled)
+                } else {
+                    Text(trimmed)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                }
+            }
+        case .toolUse(let name, _, _):
+            ToolCallCard(
+                name: name,
+                displayText: paired.block.text,
+                rawInputJSON: paired.block.rawInputJSON,
+                resultText: paired.resultBlock?.text,
+                showBackground: !suppressBackground
+            )
+        case .toolResult:
+            EmptyView()
+        case .thinking:
+            ThinkingCard(text: paired.block.text)
+        case .planModeEnter:
+            Text("Entered plan mode")
+                .font(.app(.caption))
+                .italic()
+                .foregroundStyle(.tertiary)
+        case .planModeExit(let plan):
+            PlanModeExitCard(plan: plan, resultText: paired.resultBlock?.text, onAnswer: onSendAnswer)
+        case .askUserQuestion(let questions, _):
+            AskUserQuestionCard(
+                questions: questions,
+                resultText: paired.resultBlock?.text,
+                onAnswer: onSendAnswer
+            )
+        case .agentCall(let description, let subagentType, _):
+            AgentCallCard(
+                description: description,
+                subagentType: subagentType,
+                resultText: paired.resultBlock?.text,
+                rawInputJSON: paired.block.rawInputJSON
+            )
         }
     }
 
@@ -647,6 +802,7 @@ struct ToolCallCard: View, Equatable {
     let displayText: String
     let rawInputJSON: Data?
     var resultText: String?
+    var showBackground: Bool = true
     @State private var isExpanded = false
 
     nonisolated static func == (lhs: ToolCallCard, rhs: ToolCallCard) -> Bool {
@@ -676,6 +832,12 @@ struct ToolCallCard: View, Equatable {
             return ("Glob", extractField("pattern") ?? "", nil, nil, false)
         case "Agent":
             return ("Agent", extractField("description") ?? String((extractField("prompt") ?? "").prefix(60)), nil, nil, false)
+        case "WebFetch":
+            let url = extractField("url") ?? ""
+            let short = URL(string: url)?.host ?? url.prefix(60).description
+            return ("WebFetch", short, nil, nil, false)
+        case "WebSearch":
+            return ("WebSearch", extractField("query") ?? "", nil, nil, false)
         default:
             return (name, "", nil, nil, false)
         }
@@ -717,8 +879,7 @@ struct ToolCallCard: View, Equatable {
                 }
                 .font(.app(.callout))
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 8)
-                .padding(.leading, 0)
+                .padding(.trailing, 8)
                 .padding(.vertical, 7)
                 .contentShape(Rectangle())
             }
@@ -732,11 +893,13 @@ struct ToolCallCard: View, Equatable {
                     .frame(maxWidth: chatMaxWidth)
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.primary.opacity(0.04))
-                .padding(.leading, -8)
-        )
+        .background {
+            if showBackground {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.primary.opacity(0.04))
+                    .padding(.leading, -8)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1219,10 +1382,12 @@ struct ChatInputBar: View {
         .padding(.top, 1)
         .padding(.bottom, 12)
         .sheet(isPresented: $showQueueDialog) {
+            let existingImages: [ImageAttachment] = pastedImages.compactMap { ImageAttachment(data: $0) }
             let prefill = QueuedPrompt(body: text, sendAutomatically: true, imagePaths: nil)
             QueuedPromptDialog(
                 isPresented: $showQueueDialog,
                 existingPrompt: prefill,
+                existingImages: existingImages,
                 assistant: assistant,
                 onSave: { body, sendAuto, images in
                     let imagePaths: [String] = images.compactMap { img in

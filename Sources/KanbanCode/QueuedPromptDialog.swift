@@ -15,6 +15,7 @@ struct QueuedPromptDialog: View {
     init(
         isPresented: Binding<Bool>,
         existingPrompt: QueuedPrompt? = nil,
+        existingImages: [ImageAttachment] = [],
         assistant: CodingAssistant = .claude,
         onSave: @escaping (String, Bool, [ImageAttachment]) -> Void
     ) {
@@ -23,12 +24,15 @@ struct QueuedPromptDialog: View {
         self.assistant = assistant
         self.onSave = onSave
         self._promptText = State(initialValue: existingPrompt?.body ?? "")
-        // For existing prompts, use the saved value; for new prompts, use last selection
         let defaultAuto = UserDefaults.standard.object(forKey: "queuedPromptSendAutomatically") as? Bool ?? true
         self._sendAutomatically = State(initialValue: existingPrompt?.sendAutomatically ?? defaultAuto)
-        // Load images from existing prompt's temp paths
-        let loaded: [ImageAttachment] = (existingPrompt?.imagePaths ?? []).compactMap { ImageAttachment.fromPath($0) }
-        self._images = State(initialValue: loaded)
+        // Use passed-in images first, fall back to loading from prompt's temp paths
+        if !existingImages.isEmpty {
+            self._images = State(initialValue: existingImages)
+        } else {
+            let loaded: [ImageAttachment] = (existingPrompt?.imagePaths ?? []).compactMap { ImageAttachment.fromPath($0) }
+            self._images = State(initialValue: loaded)
+        }
     }
 
     var body: some View {

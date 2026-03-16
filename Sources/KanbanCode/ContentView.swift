@@ -1438,8 +1438,25 @@ struct ContentView: View {
         .keyboardShortcut(AppShortcut.newTerminal.key, modifiers: AppShortcut.newTerminal.modifiers)
         .hidden()
 
-        // Board navigation — guarded by context
-        Button("") { if AppShortcut.deselect.isActive(in: shortcutContext) { store.dispatch(.selectCard(cardId: nil)) } }
+        // Escape — context-dependent:
+        // 1. In fullscreen mode: do nothing (don't close the card)
+        // 2. In chat mode with Claude working: send interrupt (Ctrl+C)
+        // 3. Otherwise: deselect card (close drawer)
+        Button("") {
+            guard AppShortcut.deselect.isActive(in: shortcutContext) else { return }
+            // Fullscreen: never close the card with Esc
+            if isExpandedDetail { return }
+            // Chat mode + working: send interrupt instead of closing
+            if let card = store.state.cards.first(where: { $0.id == store.state.selectedCardId }),
+               let session = card.link.tmuxLink?.sessionName,
+               card.activityState == .activelyWorking || card.activityState == .idleWaiting {
+                if UserDefaults.standard.bool(forKey: "preferChatView") {
+                    Task { try? await TmuxAdapter().sendInterrupt(sessionName: session) }
+                    return
+                }
+            }
+            store.dispatch(.selectCard(cardId: nil))
+        }
             .keyboardShortcut(AppShortcut.deselect.key, modifiers: AppShortcut.deselect.modifiers)
             .hidden()
         Button("") { if AppShortcut.deleteCard.isActive(in: shortcutContext) { deleteSelectedCard() } }
