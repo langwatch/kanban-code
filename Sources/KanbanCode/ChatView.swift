@@ -186,13 +186,14 @@ private struct ChatMessageList: View {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
+                                    .opacity(0.5)
                                 Text(pending)
                                     .font(.app(.body))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                                    .opacity(0.5)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
-                            .opacity(0.5)
                             .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
                             .frame(maxWidth: chatMaxWidth, alignment: .trailing)
                             Spacer(minLength: 0)
@@ -201,8 +202,9 @@ private struct ChatMessageList: View {
                         .id("pending")
                     }
 
-                    // Bottom spacer for scroll anchor
-                    Color.clear.frame(height: 8)
+                    // Bottom spacer for scroll anchor — tall enough to keep
+                    // the last message visible above the "working..." bar + input.
+                    Color.clear.frame(height: 60)
                         .id("bottom-spacer")
                 }
                 .padding(.horizontal, 16)
@@ -590,25 +592,30 @@ struct ToolCallCard: View, Equatable {
         lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON
     }
 
-    private func parseSummary() -> (action: String, target: String) {
+    private func parseSummary() -> (action: String, target: String, additions: Int?, deletions: Int?) {
         let path = extractField("file_path").map { ($0 as NSString).lastPathComponent } ?? ""
         switch name {
-        case "Edit": return ("Edit", path)
-        case "Write": return ("Write", path)
-        case "Read": return ("Read", path)
+        case "Edit":
+            let oldStr = extractField("old_string") ?? ""
+            let newStr = extractField("new_string") ?? ""
+            let oldLines = oldStr.isEmpty ? 0 : oldStr.components(separatedBy: "\n").count
+            let newLines = newStr.isEmpty ? 0 : newStr.components(separatedBy: "\n").count
+            return ("Edit", path, newLines, oldLines)
+        case "Write": return ("Write", path, nil, nil)
+        case "Read": return ("Read", path, nil, nil)
         case "Bash":
             let cmd = extractField("command") ?? extractField("description") ?? ""
-            return ("Bash", String(cmd.prefix(80)))
+            return ("Bash", String(cmd.prefix(80)), nil, nil)
         case "Grep":
             let pattern = extractField("pattern") ?? ""
             let inPath = extractField("path").map { " in \(($0 as NSString).lastPathComponent)" } ?? ""
-            return ("Grep", "\"\(pattern)\"\(inPath)")
+            return ("Grep", "\"\(pattern)\"\(inPath)", nil, nil)
         case "Glob":
-            return ("Glob", extractField("pattern") ?? "")
+            return ("Glob", extractField("pattern") ?? "", nil, nil)
         case "Agent":
-            return ("Agent", extractField("description") ?? String((extractField("prompt") ?? "").prefix(60)))
+            return ("Agent", extractField("description") ?? String((extractField("prompt") ?? "").prefix(60)), nil, nil)
         default:
-            return (name, "")
+            return (name, "", nil, nil)
         }
     }
 
@@ -623,9 +630,13 @@ struct ToolCallCard: View, Equatable {
         VStack(alignment: .leading, spacing: 0) {
             Button { isExpanded.toggle() } label: {
                 HStack(spacing: 5) {
-                    let (action, target) = parseSummary()
+                    let (action, target, additions, deletions) = parseSummary()
                     Text(action).fontWeight(.bold)
                     Text(target).lineLimit(1)
+                    if let add = additions, let del = deletions {
+                        Text("+\(add)").foregroundStyle(.green)
+                        Text("-\(del)").foregroundStyle(.red)
+                    }
                     if resultText != nil || rawInputJSON != nil {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10))
