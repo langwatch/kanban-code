@@ -251,6 +251,9 @@ struct AssistantIcon: View {
             SessionIcon()
         case .gemini:
             GeminiSparkle()
+        case .mastracode:
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 14, weight: .semibold))
         }
     }
 
@@ -264,6 +267,8 @@ struct AssistantIcon: View {
             return SessionIcon.resizedForMenu(src, to: size)
         case .gemini:
             return geminiMenuImage(size: size)
+        case .mastracode:
+            return NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: nil)
         }
     }
 

@@ -6,6 +6,7 @@ public enum DependencyChecker {
     public struct Status: Sendable {
         public let claudeAvailable: Bool
         public let geminiAvailable: Bool
+        public let mastracodeAvailable: Bool
         public let hooksInstalled: Bool
         public let pandocAvailable: Bool
         public let wkhtmltoimageAvailable: Bool
@@ -19,7 +20,7 @@ public enum DependencyChecker {
         public let assistantHooks: [CodingAssistant: Bool]
 
         public init(
-            claudeAvailable: Bool, geminiAvailable: Bool = false,
+            claudeAvailable: Bool, geminiAvailable: Bool = false, mastracodeAvailable: Bool = false,
             hooksInstalled: Bool,
             assistantHooks: [CodingAssistant: Bool] = [:],
             pandocAvailable: Bool,
@@ -29,6 +30,7 @@ public enum DependencyChecker {
         ) {
             self.claudeAvailable = claudeAvailable
             self.geminiAvailable = geminiAvailable
+            self.mastracodeAvailable = mastracodeAvailable
             self.hooksInstalled = hooksInstalled
             self.pandocAvailable = pandocAvailable
             self.wkhtmltoimageAvailable = wkhtmltoimageAvailable
@@ -41,12 +43,21 @@ public enum DependencyChecker {
                 ? [.claude: hooksInstalled]
                 : assistantHooks
         }
+
+        public func isAvailable(_ assistant: CodingAssistant) -> Bool {
+            switch assistant {
+            case .claude: claudeAvailable
+            case .gemini: geminiAvailable
+            case .mastracode: mastracodeAvailable
+            }
+        }
     }
 
     /// Check all dependencies concurrently.
     public static func checkAll(settingsStore: SettingsStore) async -> Status {
         async let claude = ShellCommand.isAvailable("claude")
         async let gemini = ShellCommand.isAvailable("gemini")
+        async let mastracode = ShellCommand.isAvailable("mastracode")
         async let pandoc = ShellCommand.isAvailable("pandoc")
         async let wkhtmltoimage = ShellCommand.isAvailable("wkhtmltoimage")
         async let gh = ShellCommand.isAvailable("gh")
@@ -72,6 +83,7 @@ public enum DependencyChecker {
         return await Status(
             claudeAvailable: claude,
             geminiAvailable: gemini,
+            mastracodeAvailable: mastracode,
             hooksInstalled: hooks[.claude] ?? false,
             assistantHooks: hooks,
             pandocAvailable: pandoc,

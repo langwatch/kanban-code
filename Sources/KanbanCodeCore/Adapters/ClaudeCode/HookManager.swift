@@ -17,6 +17,8 @@ public enum HookManager {
             ["Stop", "Notification", "SessionStart", "SessionEnd", "UserPromptSubmit"]
         case .gemini:
             ["AfterAgent", "Notification", "SessionStart", "SessionEnd", "BeforeAgent"]
+        case .mastracode:
+            ["Stop", "Notification", "SessionStart", "SessionEnd", "UserPromptSubmit"]
         }
     }
 
@@ -38,11 +40,20 @@ public enum HookManager {
     public static func isInstalled(for assistant: CodingAssistant, settingsPath: String? = nil) -> Bool {
         let path = settingsPath ?? defaultSettingsPath(for: assistant)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any] else {
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return false
         }
 
+        if assistant == .mastracode {
+            return requiredHooks(for: assistant).allSatisfy { eventName in
+                guard let entries = root[eventName] as? [[String: Any]] else { return false }
+                return entries.contains { entry in
+                    (entry["command"] as? String)?.contains(".kanban-code/hook.sh") == true
+                }
+            }
+        }
+
+        guard let hooks = root["hooks"] as? [String: Any] else { return false }
         return requiredHooks(for: assistant).allSatisfy { eventName in
             guard let groups = hooks[eventName] as? [[String: Any]] else { return false }
             return groups.contains { group in
@@ -80,6 +91,33 @@ public enum HookManager {
             root = existing
         } else {
             root = [:]
+        }
+
+        if assistant == .mastracode {
+            let hookEntry: [String: Any] = [
+                "type": "command",
+                "command": scriptPath,
+                "description": "Kanban Code hook bridge",
+            ]
+
+            for eventName in requiredHooks(for: assistant) {
+                var entries = root[eventName] as? [[String: Any]] ?? []
+                let alreadyInstalled = entries.contains {
+                    ($0["command"] as? String)?.contains(".kanban-code/hook.sh") == true
+                }
+                if !alreadyInstalled {
+                    entries.append(hookEntry)
+                }
+                root[eventName] = entries
+            }
+
+            let fileManager = FileManager.default
+            let dir = (resolvedSettingsPath as NSString).deletingLastPathComponent
+            try fileManager.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: resolvedSettingsPath))
+            return
         }
 
         var hooks = root["hooks"] as? [String: Any] ?? [:]
@@ -139,10 +177,27 @@ public enum HookManager {
         let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
 
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
-              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var hooks = root["hooks"] as? [String: Any] else {
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
+
+        if assistant == .mastracode {
+            for eventName in requiredHooks(for: assistant) {
+                var entries = root[eventName] as? [[String: Any]] ?? []
+                entries.removeAll { ($0["command"] as? String)?.contains(".kanban-code/hook.sh") == true }
+                if entries.isEmpty {
+                    root.removeValue(forKey: eventName)
+                } else {
+                    root[eventName] = entries
+                }
+            }
+
+            let newData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            try newData.write(to: URL(fileURLWithPath: resolvedSettingsPath))
+            return
+        }
+
+        guard var hooks = root["hooks"] as? [String: Any] else { return }
 
         for eventName in requiredHooks(for: assistant) {
             if var groups = hooks[eventName] as? [[String: Any]] {
@@ -230,7 +285,12 @@ public enum HookManager {
 
     /// Settings file path per assistant.
     public static func defaultSettingsPath(for assistant: CodingAssistant) -> String {
-        (NSHomeDirectory() as NSString).appendingPathComponent("\(assistant.configDirName)/settings.json")
+        switch assistant {
+        case .claude, .gemini:
+            (NSHomeDirectory() as NSString).appendingPathComponent("\(assistant.configDirName)/settings.json")
+        case .mastracode:
+            (NSHomeDirectory() as NSString).appendingPathComponent(".mastracode/hooks.json")
+        }
     }
 
     private static func defaultSettingsPath() -> String {

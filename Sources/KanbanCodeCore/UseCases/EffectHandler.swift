@@ -91,7 +91,7 @@ public actor EffectHandler {
             }
         case .sendPromptToTmux(let sessionName, let promptBody, let assistant):
             do {
-                if assistant == .gemini {
+                if assistant.usesPastedPrompt {
                     try await tmuxAdapter?.pastePrompt(to: sessionName, text: promptBody)
                 } else {
                     try await tmuxAdapter?.sendPrompt(to: sessionName, text: promptBody)
@@ -114,7 +114,7 @@ public actor EffectHandler {
                         setClipboard: setClipboard
                     )
                 }
-                if assistant == .gemini {
+                if assistant.usesPastedPrompt {
                     try await tmux.pastePrompt(to: sessionName, text: promptBody)
                 } else {
                     try await tmux.sendPrompt(to: sessionName, text: promptBody)

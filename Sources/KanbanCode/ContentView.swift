@@ -149,6 +149,9 @@ struct ContentView: View {
         let geminiDiscovery = GeminiSessionDiscovery()
         let geminiDetector = GeminiActivityDetector()
         let geminiStore = GeminiSessionStore()
+        let mastraDiscovery = MastracodeSessionDiscovery()
+        let mastraDetector = MastracodeActivityDetector()
+        let mastraStore = MastracodeSessionStore()
 
         let enabledAssistants = Self.loadEnabledAssistants()
         let registry = CodingAssistantRegistry()
@@ -157,6 +160,9 @@ struct ContentView: View {
         }
         if enabledAssistants.contains(.gemini) {
             registry.register(.gemini, discovery: geminiDiscovery, detector: geminiDetector, store: geminiStore)
+        }
+        if enabledAssistants.contains(.mastracode) {
+            registry.register(.mastracode, discovery: mastraDiscovery, detector: mastraDetector, store: mastraStore)
         }
 
         let discovery = CompositeSessionDiscovery(registry: registry)
@@ -271,6 +277,8 @@ struct ContentView: View {
                         assistantRegistry.register(.claude, discovery: ClaudeCodeSessionDiscovery(), detector: ClaudeCodeActivityDetector(), store: ClaudeCodeSessionStore())
                     case .gemini:
                         assistantRegistry.register(.gemini, discovery: GeminiSessionDiscovery(), detector: GeminiActivityDetector(), store: GeminiSessionStore())
+                    case .mastracode:
+                        assistantRegistry.register(.mastracode, discovery: MastracodeSessionDiscovery(), detector: MastracodeActivityDetector(), store: MastracodeSessionStore())
                     }
                 }
             } else {
@@ -2318,9 +2326,9 @@ struct ContentView: View {
                     try? RemoteShellManager.deploy()
                     shellOverride = RemoteShellManager.shellOverridePath()
                     var env = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
-                    // Gemini CLI uses `bash -c` directly (not $SHELL), so prepend
+                    // Node-based CLIs use `bash -c` directly (not $SHELL), so prepend
                     // our remote dir to PATH so it finds our bash wrapper first.
-                    if assistant == .gemini {
+                    if assistant.needsRemotePathShim {
                         let remoteDir = RemoteShellManager.remoteDirPath()
                         env["PATH"] = "\(remoteDir):$PATH"
                     }
@@ -2346,11 +2354,19 @@ struct ContentView: View {
                 }
 
                 // Snapshot existing session files for detection
-                let sessionFileExt = assistant == .gemini ? ".json" : ".jsonl"
+                let sessionFileExt = assistant.sessionFileExtension
                 let configDir = (NSHomeDirectory() as NSString).appendingPathComponent(assistant.configDirName)
                 let claudeProjectsDir = (configDir as NSString).appendingPathComponent("projects")
                 let encodedProject = SessionFileMover.encodeProjectPath(projectPath)
                 let sessionDir = (claudeProjectsDir as NSString).appendingPathComponent(encodedProject)
+                let existingMastraSessionIds: Set<String>
+                if assistant == .mastracode {
+                    let discovery = MastracodeSessionDiscovery()
+                    let sessions = (try? await discovery.discoverSessions()) ?? []
+                    existingMastraSessionIds = Set(sessions.map(\.id))
+                } else {
+                    existingMastraSessionIds = []
+                }
 
                 // When worktree is enabled, also snapshot worktree-related directories
                 // (worktrees create sessions in dirs like <encodedProject>-.claude-worktrees-<name>)
@@ -2362,20 +2378,24 @@ struct ContentView: View {
                     dirsToSnapshot = slugDirs.map { slug in
                         (tmpDir as NSString).appendingPathComponent(slug).appending("/chats")
                     }
-                } else if worktreeName != nil {
+                } else if assistant == .claude, worktreeName != nil {
                     let allDirs = (try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? []
                     dirsToSnapshot = [sessionDir] + allDirs
                         .filter { $0.hasPrefix(encodedProject) && $0 != encodedProject }
                         .map { (claudeProjectsDir as NSString).appendingPathComponent($0) }
+                } else if assistant == .mastracode {
+                    dirsToSnapshot = []
                 } else {
                     dirsToSnapshot = [sessionDir]
                 }
                 var existingFilesByDir: [String: Set<String>] = [:]
-                for dir in dirsToSnapshot {
-                    existingFilesByDir[dir] = Set(
-                        ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [])
-                            .filter { $0.hasSuffix(sessionFileExt) }
-                    )
+                if let sessionFileExt {
+                    for dir in dirsToSnapshot {
+                        existingFilesByDir[dir] = Set(
+                            ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [])
+                                .filter { $0.hasSuffix(sessionFileExt) }
+                        )
+                    }
                 }
 
                 let tmuxName = try await launcher.launch(
@@ -2413,7 +2433,7 @@ struct ContentView: View {
                     }
 
                     if !prompt.isEmpty {
-                        if assistant == .gemini {
+                        if assistant.usesPastedPrompt {
                             try await self.tmuxAdapter.pastePrompt(to: tmuxName, text: prompt)
                         } else {
                             try await self.tmuxAdapter.sendPrompt(to: tmuxName, text: prompt)
@@ -2422,11 +2442,29 @@ struct ContentView: View {
                 }
 
                 // Detect new session by polling for new session file
-                // Worktree launches and Gemini need more attempts (slower startup)
-                let maxAttempts = (worktreeName != nil || assistant == .gemini) ? 12 : 6
+                // Worktree launches and non-Claude assistants need more attempts (slower startup)
+                let maxAttempts = (worktreeName != nil || assistant != .claude) ? 12 : 6
                 var sessionLink: SessionLink?
                 for attempt in 0..<maxAttempts {
                     try? await Task.sleep(for: .milliseconds(500))
+
+                    if assistant == .mastracode {
+                        let discovery = MastracodeSessionDiscovery()
+                        let sessions = (try? await discovery.discoverSessions()) ?? []
+                        let newSession = sessions.first {
+                            !existingMastraSessionIds.contains($0.id)
+                            && ($0.projectPath == projectPath || $0.projectPath == nil)
+                        } ?? sessions.first { !existingMastraSessionIds.contains($0.id) }
+
+                        if let newSession, let sessionPath = newSession.jsonlPath {
+                            KanbanCodeLog.info("launch", "Detected Mastra thread after \(attempt + 1) attempts: \(newSession.id.prefix(8))")
+                            sessionLink = SessionLink(sessionId: newSession.id, sessionPath: sessionPath)
+                            break
+                        }
+                        continue
+                    }
+
+                    guard let sessionFileExt else { continue }
 
                     // Build list of dirs to scan (re-list for worktree — dir may appear mid-poll)
                     let dirsToScan: [String]
@@ -2824,9 +2862,15 @@ struct ContentView: View {
                 let newSessionId = try await cardStore.forkSession(
                     sessionPath: sessionPath, targetDirectory: targetDir
                 )
-                let dir = targetDir ?? (sessionPath as NSString).deletingLastPathComponent
-                let ext = card.link.effectiveAssistant == .gemini ? "json" : "jsonl"
-                let newPath = (dir as NSString).appendingPathComponent("\(newSessionId).\(ext)")
+                let newPath: String
+                if card.link.effectiveAssistant == .mastracode,
+                   let resolved = MastracodeSessionPath.decode(sessionPath) {
+                    newPath = MastracodeSessionPath.encode(databasePath: resolved.databasePath, threadId: newSessionId)
+                } else {
+                    let dir = targetDir ?? (sessionPath as NSString).deletingLastPathComponent
+                    let ext = card.link.effectiveAssistant.sessionFileExtension == ".json" ? "json" : "jsonl"
+                    newPath = (dir as NSString).appendingPathComponent("\(newSessionId).\(ext)")
+                }
                 var newLink = Link(
                     name: (card.link.name ?? card.link.displayTitle) + " (fork)",
                     projectPath: forkProjectPath,
@@ -2904,9 +2948,9 @@ struct ContentView: View {
                     try? RemoteShellManager.deploy()
                     shellOverride = RemoteShellManager.shellOverridePath()
                     var env = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
-                    // Gemini CLI uses `bash -c` directly (not $SHELL), so prepend
+                    // Node-based CLIs use `bash -c` directly (not $SHELL), so prepend
                     // our remote dir to PATH so it finds our bash wrapper first.
-                    if assistant == .gemini {
+                    if assistant.needsRemotePathShim {
                         let remoteDir = RemoteShellManager.remoteDirPath()
                         env["PATH"] = "\(remoteDir):$PATH"
                     }

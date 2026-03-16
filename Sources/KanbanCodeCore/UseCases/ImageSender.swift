@@ -35,6 +35,11 @@ public actor ImageSender {
         pollInterval: Duration = .milliseconds(500),
         timeout: Duration? = nil
     ) async throws {
+        if assistant == .mastracode {
+            try await Task.sleep(for: .seconds(2))
+            return
+        }
+
         // Gemini takes longer to start (ASCII art banner, auth, plan info)
         let effectiveTimeout = timeout ?? (assistant == .gemini ? .seconds(60) : .seconds(30))
         let start = ContinuousClock.now

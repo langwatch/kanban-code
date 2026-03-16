@@ -39,6 +39,7 @@ private final class MockStore: SessionStore, @unchecked Sendable {
     func truncateSession(sessionPath: String, afterTurn: ConversationTurn) async throws {}
     func searchSessions(query: String, paths: [String]) async throws -> [SearchResult] { [] }
     func searchSessionsStreaming(query: String, paths: [String], onResult: @MainActor @Sendable ([SearchResult]) -> Void) async throws {}
+    func backupAndDeleteSession(sessionPath: String) async throws -> String { sessionPath + ".bak" }
 }
 
 // MARK: - Registry Tests
@@ -67,15 +68,17 @@ struct RegistryTests {
         #expect(registry.available == [.claude])
     }
 
-    @Test("Register both assistants")
-    func registerBoth() {
+    @Test("Register all assistants")
+    func registerAll() {
         let registry = CodingAssistantRegistry()
         registry.register(.claude, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
         registry.register(.gemini, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
+        registry.register(.mastracode, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
 
-        #expect(registry.available.count == 2)
+        #expect(registry.available.count == 3)
         #expect(registry.available.contains(.claude))
         #expect(registry.available.contains(.gemini))
+        #expect(registry.available.contains(.mastracode))
     }
 
     @Test("Unregistered assistant returns nil")
@@ -84,6 +87,7 @@ struct RegistryTests {
         #expect(registry.discovery(for: .gemini) == nil)
         #expect(registry.detector(for: .gemini) == nil)
         #expect(registry.store(for: .gemini) == nil)
+        #expect(registry.discovery(for: .mastracode) == nil)
     }
 
     @Test("Available is sorted by rawValue")
@@ -93,9 +97,11 @@ struct RegistryTests {
         registry.register(.gemini, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
         registry.register(.claude, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
 
-        // Should be sorted: claude < gemini alphabetically
+        registry.register(.mastracode, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
+
+        // Should be sorted alphabetically by rawValue
         #expect(registry.available.first == .claude)
-        #expect(registry.available.last == .gemini)
+        #expect(registry.available.last == .mastracode)
     }
 }
 
