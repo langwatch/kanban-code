@@ -16,6 +16,7 @@ struct ChatView: View {
     var isLoadingMore: Bool = false
     var tmuxSessionName: String?
     var onSendPrompt: (String, [String]) -> Void = { _, _ in }
+    var onQueuePrompt: ((String, Bool, [String]) -> Void)? // (body, sendAutomatically, imagePaths)
     var onLoadMore: (() -> Void)?
     var onFork: (() -> Void)?
     var onCheckpoint: ((ConversationTurn) -> Void)?
@@ -91,6 +92,7 @@ struct ChatView: View {
                     pendingMessage = text
                     onSendPrompt(text, images)
                 },
+                onQueuePrompt: onQueuePrompt,
                 text: $draftText,
                 pastedImages: $draftImages
             )
@@ -311,7 +313,7 @@ private struct ChatMessageList: View {
             return turn.contentBlocks.contains { block in
                 switch block.kind {
                 case .text: return !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                case .toolUse: return true
+                case .toolUse, .agentCall, .planModeExit, .askUserQuestion, .planModeEnter: return true
                 case .toolResult: return false
                 case .thinking: return !block.text.isEmpty
                 }
@@ -592,7 +594,7 @@ struct ToolCallCard: View, Equatable {
         lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON
     }
 
-    private func parseSummary() -> (action: String, target: String, additions: Int?, deletions: Int?) {
+    private func parseSummary() -> (action: String, target: String, additions: Int?, deletions: Int?, replaceAll: Bool) {
         let path = extractField("file_path").map { ($0 as NSString).lastPathComponent } ?? ""
         switch name {
         case "Edit":
@@ -600,22 +602,23 @@ struct ToolCallCard: View, Equatable {
             let newStr = extractField("new_string") ?? ""
             let oldLines = oldStr.isEmpty ? 0 : oldStr.components(separatedBy: "\n").count
             let newLines = newStr.isEmpty ? 0 : newStr.components(separatedBy: "\n").count
-            return ("Edit", path, newLines, oldLines)
-        case "Write": return ("Write", path, nil, nil)
-        case "Read": return ("Read", path, nil, nil)
+            let replaceAll = extractBoolField("replace_all")
+            return ("Edit", path, newLines, oldLines, replaceAll)
+        case "Write": return ("Write", path, nil, nil, false)
+        case "Read": return ("Read", path, nil, nil, false)
         case "Bash":
             let cmd = extractField("command") ?? extractField("description") ?? ""
-            return ("Bash", String(cmd.prefix(80)), nil, nil)
+            return ("Bash", String(cmd.prefix(80)), nil, nil, false)
         case "Grep":
             let pattern = extractField("pattern") ?? ""
             let inPath = extractField("path").map { " in \(($0 as NSString).lastPathComponent)" } ?? ""
-            return ("Grep", "\"\(pattern)\"\(inPath)", nil, nil)
+            return ("Grep", "\"\(pattern)\"\(inPath)", nil, nil, false)
         case "Glob":
-            return ("Glob", extractField("pattern") ?? "", nil, nil)
+            return ("Glob", extractField("pattern") ?? "", nil, nil, false)
         case "Agent":
-            return ("Agent", extractField("description") ?? String((extractField("prompt") ?? "").prefix(60)), nil, nil)
+            return ("Agent", extractField("description") ?? String((extractField("prompt") ?? "").prefix(60)), nil, nil, false)
         default:
-            return (name, "", nil, nil)
+            return (name, "", nil, nil, false)
         }
     }
 
@@ -626,16 +629,25 @@ struct ToolCallCard: View, Equatable {
         return value
     }
 
+    private func extractBoolField(_ key: String) -> Bool {
+        guard let data = rawInputJSON,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = json[key] as? Bool else { return false }
+        return value
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { isExpanded.toggle() } label: {
                 HStack(spacing: 5) {
-                    let (action, target, additions, deletions) = parseSummary()
+                    let (action, target, additions, deletions, replaceAll) = parseSummary()
                     Text(action).fontWeight(.bold)
                     Text(target).lineLimit(1)
                     if let add = additions, let del = deletions {
-                        Text("+\(add)").foregroundStyle(.green)
-                        Text("-\(del)").foregroundStyle(.red)
+                        Text("· \(replaceAll ? "all" : "1 edit")")
+                            .foregroundStyle(.tertiary)
+                        Text("+\(add)").foregroundStyle(Color(red: 0.2, green: 0.65, blue: 0.3))
+                        Text("-\(del)").foregroundStyle(Color(red: 0.85, green: 0.25, blue: 0.25))
                     }
                     if resultText != nil || rawInputJSON != nil {
                         Image(systemName: "chevron.right")
@@ -814,10 +826,12 @@ struct ChatInputBar: View {
     let assistant: CodingAssistant
     let isReady: Bool
     var onSend: (String, [String]) -> Void = { _, _ in }
+    var onQueuePrompt: ((String, Bool, [String]) -> Void)?
 
     @Binding var text: String
     @Binding var pastedImages: [Data]
     @FocusState private var isFocused: Bool
+    @State private var showQueueDialog = false
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -869,9 +883,20 @@ struct ChatInputBar: View {
                 .frame(minHeight: 24)
                 .fixedSize(horizontal: false, vertical: true)
 
+                if onQueuePrompt != nil {
+                    Button { showQueueDialog = true } label: {
+                        Image(systemName: "text.badge.plus")
+                            .font(.system(size: 18))
+                            .foregroundStyle(canSend ? Color.primary.opacity(0.5) : Color.primary.opacity(0.15))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .help("Queue prompt")
+                }
+
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 24))
+                        .font(.system(size: 28))
                         .foregroundStyle(canSend ? Color.primary : Color.primary.opacity(0.2))
                 }
                 .buttonStyle(.plain)
@@ -892,6 +917,23 @@ struct ChatInputBar: View {
         .padding(.horizontal, 16)
         .padding(.top, 1)
         .padding(.bottom, 12)
+        .sheet(isPresented: $showQueueDialog) {
+            let prefill = QueuedPrompt(body: text, sendAutomatically: true, imagePaths: nil)
+            QueuedPromptDialog(
+                isPresented: $showQueueDialog,
+                existingPrompt: prefill,
+                assistant: assistant,
+                onSave: { body, sendAuto, images in
+                    let imagePaths: [String] = images.compactMap { img in
+                        var mutable = img
+                        return try? mutable.saveToPersistent()
+                    }
+                    onQueuePrompt?(body, sendAuto, imagePaths)
+                    text = ""
+                    pastedImages = []
+                }
+            )
+        }
         .onAppear { focusInput() }
     }
 

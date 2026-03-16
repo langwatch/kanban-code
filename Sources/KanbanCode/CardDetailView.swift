@@ -718,6 +718,14 @@ struct CardDetailView: View {
                                 onAddQueuedPrompt(prompt)
                                 onSendQueuedPrompt(prompt.id)
                             },
+                            onQueuePrompt: { body, sendAuto, imagePaths in
+                                let prompt = QueuedPrompt(
+                                    body: body,
+                                    sendAutomatically: sendAuto,
+                                    imagePaths: imagePaths.isEmpty ? nil : imagePaths
+                                )
+                                onAddQueuedPrompt(prompt)
+                            },
                             onLoadMore: { Task { await loadMoreHistory() } },
                             onFork: { onFork(true) },
                             onCheckpoint: { turn in
