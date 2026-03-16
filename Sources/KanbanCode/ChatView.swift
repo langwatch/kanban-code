@@ -475,8 +475,6 @@ struct ChatMessageView: View, Equatable {
     // MARK: Actions (below message, visible on hover)
 
     @State private var showCopyCheck = false
-    @State private var showForkConfirm = false
-
     private var messageActions: some View {
         HStack(spacing: 4) {
             // Copy
@@ -499,16 +497,10 @@ struct ChatMessageView: View, Equatable {
                 }
             }
 
-            // Fork (with confirmation)
+            // Fork
             if onFork != nil {
                 ActionButton(icon: "arrow.branch", help: "Fork") {
-                    showForkConfirm = true
-                }
-                .alert("Fork from here?", isPresented: $showForkConfirm) {
-                    Button("Fork", role: .destructive) { onFork?() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("This will create a new session branching from this point.")
+                    onFork?()
                 }
             }
         }

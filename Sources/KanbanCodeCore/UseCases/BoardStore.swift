@@ -1,5 +1,22 @@
 import Foundation
 
+// MARK: - Dialog State
+
+/// Which confirmation dialog is active. Lives in AppState so dialogs survive
+/// view recreation (e.g., when a card moves between kanban columns).
+public enum DialogState: Equatable, Sendable {
+    case none
+    case confirmDelete(cardId: String)
+    case confirmArchive(cardId: String)
+    case confirmFork(cardId: String)
+    case confirmCheckpoint(cardId: String, turnIndex: Int, turnLineNumber: Int)
+    case confirmWorktreeCleanup(cardId: String)
+    case confirmMoveToProject(cardId: String, projectPath: String, projectName: String)
+    case confirmMoveToFolder(cardId: String, folderPath: String, parentProjectPath: String, displayName: String)
+    case confirmMigration(cardId: String, targetAssistant: CodingAssistant)
+    case remoteWorktreeCleanup(cardId: String, remotePath: String, localPath: String, errorMessage: String)
+}
+
 // MARK: - AppState
 
 /// Single source of truth for the entire board.
@@ -46,6 +63,9 @@ public struct AppState: Sendable {
 
     /// Global remote execution settings (from Settings.remote).
     public var globalRemoteSettings: RemoteSettings?
+
+    /// Active confirmation dialog — global so it survives view recreation.
+    public var activeDialog: DialogState = .none
 
     // MARK: - Derived
 
@@ -215,6 +235,10 @@ public enum Action: Sendable {
     case setSelectedProject(String?)
     case setLoading(Bool)
     case setIsRefreshingBacklog(Bool)
+
+    // Dialog
+    case showDialog(DialogState)
+    case dismissDialog
 
     public enum LinkType: Sendable {
         case pr(number: Int), issue, worktree, tmux
@@ -480,6 +504,14 @@ public enum Reducer {
 
         case .setDetailExpanded(let expanded):
             state.detailExpanded = expanded
+            return []
+
+        case .showDialog(let dialog):
+            state.activeDialog = dialog
+            return []
+
+        case .dismissDialog:
+            state.activeDialog = .none
             return []
 
         case .unlinkFromCard(let cardId, let linkType):

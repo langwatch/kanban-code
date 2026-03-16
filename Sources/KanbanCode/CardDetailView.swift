@@ -179,8 +179,7 @@ struct CardDetailView: View {
     @State private var checkpointTurn: ConversationTurn?
     @State private var showCheckpointConfirm = false
 
-    // Fork
-    @State private var showForkConfirm = false
+    // Fork (handled by parent via onFork callback)
 
     // Add link popover
     @State private var showAddLink = false
@@ -490,19 +489,6 @@ struct CardDetailView: View {
                     onRenameTerminal(item.sessionName, newName)
                 }
             )
-        }
-        .alert("Fork Session?", isPresented: $showForkConfirm) {
-            Button("Cancel", role: .cancel) {}
-            if card.link.worktreeLink != nil {
-                Button("Fork (same worktree)") { onFork(true) }
-            }
-            Button("Fork (project root)") { onFork(false) }
-        } message: {
-            if card.link.worktreeLink != nil {
-                Text("This creates a duplicate session you can resume independently. Do you want the forked session to continue from the same worktree or from the project root?")
-            } else {
-                Text("This creates a duplicate session you can resume independently.")
-            }
         }
         .alert("Restore to Turn \(checkpointTurn.map { String($0.index + 1) } ?? "")?", isPresented: $showCheckpointConfirm) {
             Button("Cancel", role: .cancel) {
@@ -1857,7 +1843,7 @@ struct CardDetailView: View {
 
         menu.addActionItem("Rename", image: "pencil") { [self] in showRenameSheet = true }
 
-        let forkItem = menu.addActionItem("Fork Session", image: "arrow.branch") { [self] in showForkConfirm = true }
+        let forkItem = menu.addActionItem("Fork Session", image: "arrow.branch") { [self] in onFork(true) }
         forkItem.isEnabled = card.link.sessionLink?.sessionPath != nil
 
         let cpItem = menu.addActionItem("Checkpoint / Restore", image: "clock.arrow.circlepath") { [self] in

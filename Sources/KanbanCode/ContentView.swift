@@ -284,7 +284,7 @@ struct ContentView: View {
             store: store,
             onStartCard: { cardId in startCard(cardId: cardId) },
             onResumeCard: { cardId in resumeCard(cardId: cardId) },
-            onForkCard: { cardId in pendingForkCardId = cardId },
+            onForkCard: { cardId in store.dispatch(.showDialog(.confirmFork(cardId: cardId))) },
             onCopyResumeCmd: { cardId in
                 guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
                 var cmd = ""
@@ -303,16 +303,16 @@ struct ContentView: View {
                 return canCleanupWorktree(for: card)
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
-            onDeleteCard: { cardId in pendingDeleteCardId = cardId },
+            onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
             availableProjects: projectList,
             onMoveToProject: { cardId, projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                pendingMoveToProject = (cardId: cardId, projectPath: projectPath, projectName: name)
+                store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name)))
             },
             onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { cardId, target in
-                pendingMigration = (cardId: cardId, targetAssistant: target)
+                store.dispatch(.showDialog(.confirmMigration(cardId: cardId, targetAssistant: target)))
             },
             onRefreshBacklog: { Task { await store.refreshBacklog() } },
             canDropCard: { card, column in
@@ -340,7 +340,7 @@ struct ContentView: View {
             store: store,
             onStartCard: { cardId in startCard(cardId: cardId) },
             onResumeCard: { cardId in resumeCard(cardId: cardId) },
-            onForkCard: { cardId in pendingForkCardId = cardId },
+            onForkCard: { cardId in store.dispatch(.showDialog(.confirmFork(cardId: cardId))) },
             onCopyResumeCmd: { cardId in
                 guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
                 var cmd = ""
@@ -359,16 +359,16 @@ struct ContentView: View {
                 return canCleanupWorktree(for: card)
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
-            onDeleteCard: { cardId in pendingDeleteCardId = cardId },
+            onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
             availableProjects: projectList,
             onMoveToProject: { cardId, projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                pendingMoveToProject = (cardId: cardId, projectPath: projectPath, projectName: name)
+                store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name)))
             },
             onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { cardId, target in
-                pendingMigration = (cardId: cardId, targetAssistant: target)
+                store.dispatch(.showDialog(.confirmMigration(cardId: cardId, targetAssistant: target)))
             },
             onRefreshBacklog: { Task { await store.refreshBacklog() } },
             onDropCard: { cardId, column in handleDrop(cardId: cardId, to: column) },
@@ -450,7 +450,7 @@ struct ContentView: View {
             },
             canCleanupWorktree: canCleanupWorktree(for: card),
             onDeleteCard: {
-                pendingDeleteCardId = card.id
+                store.dispatch(.showDialog(.confirmDelete(cardId: card.id)))
             },
             onCreateTerminal: {
                 createExtraTerminal(cardId: card.id)
@@ -507,12 +507,12 @@ struct ContentView: View {
             availableProjects: projectList,
             onMoveToProject: { projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                pendingMoveToProject = (cardId: card.id, projectPath: projectPath, projectName: name)
+                store.dispatch(.showDialog(.confirmMoveToProject(cardId: card.id, projectPath: projectPath, projectName: name)))
             },
             onMoveToFolder: { selectFolderForMove(cardId: card.id) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { target in
-                pendingMigration = (cardId: card.id, targetAssistant: target)
+                store.dispatch(.showDialog(.confirmMigration(cardId: card.id, targetAssistant: target)))
             },
             actionsMenuProvider: actionsMenuProvider,
             focusTerminal: $shouldFocusTerminal,
@@ -708,6 +708,138 @@ struct ContentView: View {
             }
     }
 
+    // MARK: - Global Dialog
+
+    private var dialogTitle: String {
+        switch store.state.activeDialog {
+        case .none: return ""
+        case .confirmDelete: return "Delete Card"
+        case .confirmArchive: return "Archive Card?"
+        case .confirmFork: return "Fork Session?"
+        case .confirmCheckpoint: return "Restore to this point?"
+        case .confirmWorktreeCleanup: return "Cleanup Worktree?"
+        case .confirmMoveToProject: return "Move to Project?"
+        case .confirmMoveToFolder: return "Move to Folder?"
+        case .confirmMigration: return "Migrate Session?"
+        case .remoteWorktreeCleanup: return "Remote Worktree"
+        }
+    }
+
+    @ViewBuilder
+    private var dialogButtons: some View {
+        switch store.state.activeDialog {
+        case .none: EmptyView()
+        case .confirmDelete(let cardId):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Delete", role: .destructive) {
+                let card = store.state.cards.first(where: { $0.id == cardId })
+                let nextId = cardIdAfterDeletion(cardId)
+                store.dispatch(.deleteCard(cardId: cardId))
+                store.dispatch(.dismissDialog)
+                if let nextId { store.dispatch(.selectCard(cardId: nextId)) }
+                offerWorktreeCleanupIfNeeded(card: card)
+            }
+        case .confirmArchive(let cardId):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Archive & Kill Terminals", role: .destructive) {
+                let card = store.state.cards.first(where: { $0.id == cardId })
+                store.dispatch(.archiveCard(cardId: cardId))
+                store.dispatch(.dismissDialog)
+                offerWorktreeCleanupIfNeeded(card: card)
+            }
+        case .confirmFork(let cardId):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            if store.state.cards.first(where: { $0.id == cardId })?.link.worktreeLink != nil {
+                Button("Fork (same worktree)") {
+                    forkCard(cardId: cardId, keepWorktree: true)
+                    store.dispatch(.dismissDialog)
+                }
+            }
+            Button("Fork (project root)") {
+                forkCard(cardId: cardId)
+                store.dispatch(.dismissDialog)
+            }
+        case .confirmCheckpoint(let cardId, _, let turnLineNumber):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Restore", role: .destructive) {
+                Task { await performCheckpoint(cardId: cardId, turnLineNumber: turnLineNumber) }
+                store.dispatch(.dismissDialog)
+            }
+        case .confirmWorktreeCleanup(let cardId):
+            Button("Keep Worktree", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Remove Worktree", role: .destructive) {
+                Task { await cleanupWorktree(cardId: cardId) }
+                store.dispatch(.dismissDialog)
+            }
+        case .confirmMoveToProject(let cardId, let projectPath, _):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Move") {
+                store.dispatch(.moveCardToProject(cardId: cardId, projectPath: projectPath))
+                store.dispatch(.dismissDialog)
+            }
+        case .confirmMoveToFolder(let cardId, let folderPath, let parentProjectPath, _):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Move") {
+                store.dispatch(.moveCardToFolder(cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath))
+                store.dispatch(.dismissDialog)
+            }
+        case .confirmMigration(let cardId, let targetAssistant):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Migrate") {
+                Task { await executeMigration(cardId: cardId, targetAssistant: targetAssistant) }
+                store.dispatch(.dismissDialog)
+            }
+        case .remoteWorktreeCleanup(let cardId, _, let localPath, _):
+            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cleanup Local Copy", role: .destructive) {
+                Task { await executeLocalWorktreeCleanup(cardId: cardId, localPath: localPath) }
+                store.dispatch(.dismissDialog)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dialogMessage: some View {
+        switch store.state.activeDialog {
+        case .none: EmptyView()
+        case .confirmDelete: Text("This will permanently delete this card and its data.")
+        case .confirmArchive: Text("This card has running terminals. Archiving will kill them.")
+        case .confirmFork(let cardId):
+            if store.state.cards.first(where: { $0.id == cardId })?.link.worktreeLink != nil {
+                Text("This creates a duplicate session you can resume independently. Do you want the forked session to continue from the same worktree or from the project root?")
+            } else {
+                Text("This creates a duplicate session you can resume independently.")
+            }
+        case .confirmCheckpoint: Text("Everything after this point will be removed. A .bkp backup will be created.")
+        case .confirmWorktreeCleanup: Text("This card has a worktree. Do you want to remove it?")
+        case .confirmMoveToProject(_, _, let name): Text("Move this card to \(name)?")
+        case .confirmMoveToFolder(_, let folderPath, let parentProjectPath, let displayName):
+            let relative = folderPath.hasPrefix(parentProjectPath + "/")
+                ? String(folderPath.dropFirst(parentProjectPath.count + 1)) : folderPath
+            if folderPath != parentProjectPath {
+                Text("Move session to \(relative) (under \(displayName))?")
+            } else {
+                Text("Move session to \(displayName)?")
+            }
+        case .confirmMigration(let cardId, let targetAssistant):
+            let card = store.state.cards.first(where: { $0.id == cardId })
+            let source = card?.link.effectiveAssistant.displayName ?? "current assistant"
+            Text("Migrate from \(source) to \(targetAssistant.displayName)? A backup will be kept.")
+        case .remoteWorktreeCleanup(_, _, _, let errorMessage): Text(errorMessage)
+        }
+    }
+
+    /// Offer worktree cleanup after archive/delete if applicable.
+    private func offerWorktreeCleanupIfNeeded(card: KanbanCodeCard?) {
+        guard let card, let wt = card.link.worktreeLink,
+              !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/"),
+              canCleanupWorktree(for: card) else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            store.dispatch(.showDialog(.confirmWorktreeCleanup(cardId: card.id)))
+        }
+    }
+
     private var boardWithAlerts: some View {
         boardWithSheets
             .alert(
@@ -731,179 +863,17 @@ struct ContentView: View {
                     Text("The worktree path is on a remote machine:\n\n\(info.remotePath)\n\nThis will SSH to the remote to run git worktree remove, then delete the local synced copy at:\n\n\(info.localPath)")
                 }
             }
+            // Global dialog driven by store.state.activeDialog
             .alert(
-                "Delete Card",
+                dialogTitle,
                 isPresented: Binding(
-                    get: { pendingDeleteCardId != nil },
-                    set: { if !$0 { pendingDeleteCardId = nil } }
+                    get: { store.state.activeDialog != .none },
+                    set: { if !$0 { store.dispatch(.dismissDialog) } }
                 )
             ) {
-                Button("Cancel", role: .cancel) {
-                    pendingDeleteCardId = nil
-                }
-                Button("Delete", role: .destructive) {
-                    if let cardId = pendingDeleteCardId {
-                        let card = store.state.cards.first(where: { $0.id == cardId })
-                        let nextId = cardIdAfterDeletion(cardId)
-                        store.dispatch(.deleteCard(cardId: cardId))
-                        if let nextId {
-                            store.dispatch(.selectCard(cardId: nextId))
-                        }
-                        if let wt = card?.link.worktreeLink, !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/") {
-                            pendingWorktreeCleanupCardId = cardId
-                        }
-                    }
-                    pendingDeleteCardId = nil
-                }
+                dialogButtons
             } message: {
-                Text("This will permanently delete this card and its data.")
-            }
-            .alert(
-                "Archive Card?",
-                isPresented: Binding(
-                    get: { pendingArchiveCardId != nil },
-                    set: { if !$0 { pendingArchiveCardId = nil } }
-                )
-            ) {
-                Button("Cancel", role: .cancel) {
-                    pendingArchiveCardId = nil
-                }
-                Button("Archive & Kill Terminals", role: .destructive) {
-                    if let cardId = pendingArchiveCardId {
-                        let card = store.state.cards.first(where: { $0.id == cardId })
-                        store.dispatch(.archiveCard(cardId: cardId))
-                        if let wt = card?.link.worktreeLink, !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/") {
-                            pendingWorktreeCleanupCardId = cardId
-                        }
-                    }
-                    pendingArchiveCardId = nil
-                }
-            } message: {
-                Text("This card has running terminals. Archiving will kill them.")
-            }
-            .alert(
-                "Fork Session?",
-                isPresented: Binding(
-                    get: { pendingForkCardId != nil },
-                    set: { if !$0 { pendingForkCardId = nil } }
-                )
-            ) {
-                Button("Cancel", role: .cancel) {
-                    pendingForkCardId = nil
-                }
-                if let cardId = pendingForkCardId,
-                   store.state.cards.first(where: { $0.id == cardId })?.link.worktreeLink != nil {
-                    Button("Fork (same worktree)") {
-                        if let cardId = pendingForkCardId { forkCard(cardId: cardId, keepWorktree: true) }
-                        pendingForkCardId = nil
-                    }
-                }
-                Button("Fork (project root)") {
-                    if let cardId = pendingForkCardId { forkCard(cardId: cardId) }
-                    pendingForkCardId = nil
-                }
-            } message: {
-                if pendingForkCardId != nil,
-                   store.state.cards.first(where: { $0.id == pendingForkCardId })?.link.worktreeLink != nil {
-                    Text("This creates a duplicate session you can resume independently. Do you want the forked session to continue from the same worktree or from the project root?")
-                } else {
-                    Text("This creates a duplicate session you can resume independently.")
-                }
-            }
-            .alert(
-                "Move to Project?",
-                isPresented: Binding(
-                    get: { pendingMoveToProject != nil },
-                    set: { if !$0 { pendingMoveToProject = nil } }
-                )
-            ) {
-                Button("Cancel", role: .cancel) {
-                    pendingMoveToProject = nil
-                }
-                Button("Move") {
-                    if let pending = pendingMoveToProject {
-                        store.dispatch(.moveCardToProject(cardId: pending.cardId, projectPath: pending.projectPath))
-                    }
-                    pendingMoveToProject = nil
-                }
-            } message: {
-                if let pending = pendingMoveToProject {
-                    Text("Move this card to \(pending.projectName)?")
-                }
-            }
-            .alert(
-                "Move to Folder?",
-                isPresented: Binding(
-                    get: { pendingMoveToFolder != nil },
-                    set: { if !$0 { pendingMoveToFolder = nil } }
-                )
-            ) {
-                Button("Cancel", role: .cancel) {
-                    pendingMoveToFolder = nil
-                }
-                Button("Move") {
-                    if let pending = pendingMoveToFolder {
-                        store.dispatch(.moveCardToFolder(
-                            cardId: pending.cardId,
-                            folderPath: pending.folderPath,
-                            parentProjectPath: pending.parentProjectPath
-                        ))
-                    }
-                    pendingMoveToFolder = nil
-                }
-            } message: {
-                if let pending = pendingMoveToFolder {
-                    let relative = pending.folderPath.hasPrefix(pending.parentProjectPath + "/")
-                        ? String(pending.folderPath.dropFirst(pending.parentProjectPath.count + 1))
-                        : pending.folderPath
-                    if pending.folderPath != pending.parentProjectPath {
-                        Text("Move session to \(relative) (under \(pending.displayName))?")
-                    } else {
-                        Text("Move session to \(pending.displayName)?")
-                    }
-                }
-            }
-            .alert(
-                "Migrate Session?",
-                isPresented: Binding(
-                    get: { pendingMigration != nil },
-                    set: { if !$0 { pendingMigration = nil } }
-                )
-            ) {
-                Button("Cancel", role: .cancel) {
-                    pendingMigration = nil
-                }
-                Button("Migrate") {
-                    if let pending = pendingMigration {
-                        Task { await executeMigration(cardId: pending.cardId, targetAssistant: pending.targetAssistant) }
-                    }
-                    pendingMigration = nil
-                }
-            } message: {
-                if let pending = pendingMigration {
-                    let card = store.state.cards.first(where: { $0.id == pending.cardId })
-                    let source = card?.link.effectiveAssistant.displayName ?? "current assistant"
-                    Text("Migrate this session from \(source) to \(pending.targetAssistant.displayName)? A backup of the original session will be kept.")
-                }
-            }
-            .alert(
-                "Cleanup Worktree?",
-                isPresented: Binding(
-                    get: { pendingWorktreeCleanupCardId != nil },
-                    set: { if !$0 { pendingWorktreeCleanupCardId = nil } }
-                )
-            ) {
-                Button("Keep Worktree", role: .cancel) {
-                    pendingWorktreeCleanupCardId = nil
-                }
-                Button("Remove Worktree", role: .destructive) {
-                    if let cardId = pendingWorktreeCleanupCardId {
-                        Task { await cleanupWorktree(cardId: cardId) }
-                    }
-                    pendingWorktreeCleanupCardId = nil
-                }
-            } message: {
-                Text("This card has a worktree. Do you want to remove it?")
+                dialogMessage
             }
     }
 
@@ -1176,7 +1146,7 @@ struct ContentView: View {
                     onResumeCard: { card in
                         resumeCard(cardId: card.id)
                     },
-                    onForkCard: { card in pendingForkCardId = card.id },
+                    onForkCard: { card in store.dispatch(.showDialog(.confirmFork(cardId: card.id))) },
                     onCheckpointCard: { card in
                         store.dispatch(.selectCard(cardId: card.id))
                     },
@@ -1836,7 +1806,7 @@ struct ContentView: View {
 
     private func deleteSelectedCard() {
         if let cardId = store.state.selectedCardId {
-            pendingDeleteCardId = cardId
+            store.dispatch(.showDialog(.confirmDelete(cardId: cardId)))
         }
     }
 
@@ -1913,13 +1883,15 @@ struct ContentView: View {
                 navigateCard(.right); return nil
             case .carriageReturn, .newline, .enter:
                 // Confirm pending delete alert via Enter
-                if let cardId = pendingDeleteCardId {
+                if case .confirmDelete(let cardId) = store.state.activeDialog {
+                    let card = store.state.cards.first(where: { $0.id == cardId })
                     let nextId = cardIdAfterDeletion(cardId)
                     store.dispatch(.deleteCard(cardId: cardId))
+                    store.dispatch(.dismissDialog)
                     if let nextId {
                         store.dispatch(.selectCard(cardId: nextId))
                     }
-                    pendingDeleteCardId = nil
+                    offerWorktreeCleanupIfNeeded(card: card)
                     return nil
                 }
                 return event
@@ -2250,15 +2222,10 @@ struct ContentView: View {
     private func archiveCard(cardId: String) {
         guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
         if card.link.tmuxLink != nil {
-            pendingArchiveCardId = cardId
+            store.dispatch(.showDialog(.confirmArchive(cardId: cardId)))
         } else {
             store.dispatch(.archiveCard(cardId: cardId))
-            // Only offer worktree cleanup if the card has an actual worktree directory
-            // and no other active card depends on it
-            if let wt = card.link.worktreeLink, !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/"),
-               canCleanupWorktree(for: card) {
-                pendingWorktreeCleanupCardId = cardId
-            }
+            offerWorktreeCleanupIfNeeded(card: card)
         }
     }
 
@@ -2579,13 +2546,6 @@ struct ContentView: View {
     }
 
     @State private var pendingWorktreeCleanup: WorktreeCleanupInfo?
-    @State private var pendingDeleteCardId: String?
-    @State private var pendingArchiveCardId: String?
-    @State private var pendingForkCardId: String?
-    @State private var pendingMoveToProject: (cardId: String, projectPath: String, projectName: String)?
-    @State private var pendingMoveToFolder: (cardId: String, folderPath: String, parentProjectPath: String, displayName: String)?
-    @State private var pendingMigration: (cardId: String, targetAssistant: CodingAssistant)?
-    @State private var pendingWorktreeCleanupCardId: String?
     @State private var shouldFocusTerminal = false
     @State private var keyMonitor: Any?
 
@@ -2624,10 +2584,10 @@ struct ContentView: View {
 
         if folderPath == parentProjectPath {
             // Moving to a project root — use the regular move flow
-            pendingMoveToProject = (cardId: cardId, projectPath: folderPath, projectName: displayName)
+            store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: folderPath, projectName: displayName)))
         } else {
             // Moving to a subfolder — use the folder-specific flow
-            pendingMoveToFolder = (cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath, displayName: displayName)
+            store.dispatch(.showDialog(.confirmMoveToFolder(cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath, displayName: displayName)))
         }
     }
 
@@ -2636,6 +2596,19 @@ struct ContentView: View {
         guard card.link.sessionLink != nil else { return [] }
         let current = card.link.effectiveAssistant
         return assistantRegistry.available.filter { $0 != current }
+    }
+
+    /// Checkpoint / restore: truncates the session after the given line number.
+    private func performCheckpoint(cardId: String, turnLineNumber: Int) async {
+        guard let card = store.state.cards.first(where: { $0.id == cardId }),
+              let sessionPath = card.link.sessionLink?.sessionPath else { return }
+        let sessionStore = assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore
+        let turn = ConversationTurn(index: 0, lineNumber: turnLineNumber, role: "", textPreview: "")
+        do {
+            try await sessionStore.truncateSession(sessionPath: sessionPath, afterTurn: turn)
+        } catch {
+            store.dispatch(.setError("Checkpoint failed: \(error.localizedDescription)"))
+        }
     }
 
     private func executeMigration(cardId: String, targetAssistant: CodingAssistant) async {
@@ -2718,6 +2691,21 @@ struct ContentView: View {
         guard worktreePath.hasPrefix(remote.remotePath) else { return nil }
         let suffix = String(worktreePath.dropFirst(remote.remotePath.count))
         return remote.localPath + suffix
+    }
+
+    /// Overload for global dialog — constructs a WorktreeCleanupInfo from individual fields.
+    private func executeLocalWorktreeCleanup(cardId: String, localPath: String) async {
+        // Reconstruct the remote path from global remote settings
+        let remote = store.state.globalRemoteSettings
+        let remotePath: String
+        if let remote, localPath.hasPrefix(remote.localPath) {
+            let suffix = String(localPath.dropFirst(remote.localPath.count))
+            remotePath = remote.remotePath + suffix
+        } else {
+            remotePath = localPath
+        }
+        let info = WorktreeCleanupInfo(cardId: cardId, remotePath: remotePath, localPath: localPath, errorMessage: "")
+        await executeLocalWorktreeCleanup(info)
     }
 
     private func executeLocalWorktreeCleanup(_ info: WorktreeCleanupInfo) async {
