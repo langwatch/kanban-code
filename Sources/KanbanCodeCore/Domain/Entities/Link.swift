@@ -526,6 +526,32 @@ public enum LinkSource: String, Codable, Sendable {
     case manual // User-created task
 }
 
+/// Option in an AskUserQuestion prompt.
+public struct AskQuestionOption: Sendable, Equatable {
+    public let label: String
+    public let description: String?
+
+    public init(label: String, description: String? = nil) {
+        self.label = label
+        self.description = description
+    }
+}
+
+/// A single question in an AskUserQuestion prompt.
+public struct AskQuestion: Sendable, Equatable {
+    public let header: String?
+    public let question: String
+    public let options: [AskQuestionOption]
+    public let multiSelect: Bool
+
+    public init(header: String? = nil, question: String, options: [AskQuestionOption] = [], multiSelect: Bool = false) {
+        self.header = header
+        self.question = question
+        self.options = options
+        self.multiSelect = multiSelect
+    }
+}
+
 /// A single content block within a conversation turn.
 public struct ContentBlock: Sendable {
     public enum Kind: Sendable, Equatable {
@@ -533,17 +559,23 @@ public struct ContentBlock: Sendable {
         case toolUse(name: String, input: [String: String], id: String? = nil)
         case toolResult(toolName: String?, toolUseId: String? = nil)
         case thinking
+        // Special tool types with rich rendering
+        case planModeEnter
+        case planModeExit(plan: String)
+        case askUserQuestion(questions: [AskQuestion], id: String?)
+        case agentCall(description: String, subagentType: String?, id: String?)
     }
 
     public let kind: Kind
-    public let text: String // rendered text for display
-    /// Full raw JSON input for tool_use blocks (serialized Data for Sendable safety).
+    public let text: String
     public let rawInputJSON: Data?
+    public let isBackground: Bool
 
-    public init(kind: Kind, text: String, rawInputJSON: Data? = nil) {
+    public init(kind: Kind, text: String, rawInputJSON: Data? = nil, isBackground: Bool = false) {
         self.kind = kind
         self.text = text
         self.rawInputJSON = rawInputJSON
+        self.isBackground = isBackground
     }
 }
 

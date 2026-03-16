@@ -377,8 +377,8 @@ struct ChatMessageView: View, Equatable {
         return turn.contentBlocks.contains { block in
             switch block.kind {
             case .text: return !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .toolUse: return true
-            case .toolResult: return false // shown inline under tool calls
+            case .toolUse, .agentCall, .planModeExit, .askUserQuestion, .planModeEnter: return true
+            case .toolResult: return false
             case .thinking: return !block.text.isEmpty
             }
         }
@@ -482,9 +482,29 @@ struct ChatMessageView: View, Equatable {
                         resultText: paired.resultBlock?.text
                     )
                 case .toolResult:
-                    EmptyView() // results are shown inline under their tool call
+                    EmptyView()
                 case .thinking:
                     ThinkingCard(text: paired.block.text)
+                case .planModeEnter:
+                    Text("Entered plan mode")
+                        .font(.app(.caption))
+                        .italic()
+                        .foregroundStyle(.tertiary)
+                case .planModeExit(let plan):
+                    PlanModeExitCard(plan: plan, resultText: paired.resultBlock?.text)
+                case .askUserQuestion(let questions, _):
+                    AskUserQuestionCard(
+                        questions: questions,
+                        resultText: paired.resultBlock?.text,
+                        onAnswer: { answer in onFork?() /* TODO: wire onAnswer */ }
+                    )
+                case .agentCall(let description, let subagentType, _):
+                    AgentCallCard(
+                        description: description,
+                        subagentType: subagentType,
+                        resultText: paired.resultBlock?.text,
+                        rawInputJSON: paired.block.rawInputJSON
+                    )
                 }
             }
         }
@@ -502,10 +522,17 @@ struct ChatMessageView: View, Equatable {
 
         // Use precomputed tool result map (no allTurns lookup needed)
         for (i, block) in turn.contentBlocks.enumerated() {
-            if case .toolUse(_, _, let id) = block.kind, let useId = id {
-                if let result = toolResultMap[useId] {
-                    paired[i].resultBlock = result
-                }
+            let blockId: String?
+            switch block.kind {
+            case .toolUse(_, _, let id): blockId = id
+            case .askUserQuestion(_, let id): blockId = id
+            case .agentCall(_, _, let id): blockId = id
+            case .planModeExit: blockId = nil // paired by position, not ID
+            case .planModeEnter: blockId = nil
+            default: blockId = nil
+            }
+            if let useId = blockId, let result = toolResultMap[useId] {
+                paired[i].resultBlock = result
             }
         }
 
@@ -798,6 +825,199 @@ struct ThinkingCard: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
                     .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+// MARK: - Plan Mode Exit Card
+
+struct PlanModeExitCard: View {
+    let plan: String
+    let resultText: String?
+    @State private var isExpanded = false
+
+    private var approvalStatus: String? {
+        guard let r = resultText else { return nil }
+        if r.contains("approved") { return "Approved" }
+        if r.contains("rejected") || r.contains("doesn't want") { return "Rejected" }
+        return nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 5) {
+                    Text("Plan").fontWeight(.bold)
+                    if let status = approvalStatus {
+                        Text(status)
+                            .font(.app(.caption))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                status == "Approved"
+                                    ? Color.green.opacity(0.15)
+                                    : Color.red.opacity(0.15),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(status == "Approved" ? .green : .red)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.app(.callout))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Markdown(plan)
+                    .markdownTheme(chatMarkdownTheme)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.primary.opacity(0.04))
+                .padding(.leading, -8)
+        )
+    }
+}
+
+// MARK: - Agent Call Card
+
+struct AgentCallCard: View {
+    let description: String
+    let subagentType: String?
+    let resultText: String?
+    let rawInputJSON: Data?
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 5) {
+                    Text("Agent").fontWeight(.bold)
+                    if let type = subagentType {
+                        Text(type)
+                            .font(.app(.caption))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                    }
+                    Text(description).lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundStyle(.tertiary)
+                }
+                .font(.app(.callout))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded, let result = resultText, !result.isEmpty {
+                Text(result)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(30)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.primary.opacity(0.04))
+                .padding(.leading, -8)
+        )
+    }
+}
+
+// MARK: - Ask User Question Card
+
+struct AskUserQuestionCard: View {
+    let questions: [AskQuestion]
+    let resultText: String?
+    var onAnswer: ((String) -> Void)?
+
+    private var isAnswered: Bool { resultText != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(questions.indices, id: \.self) { i in
+                questionView(questions[i])
+            }
+
+            if !isAnswered {
+                Text("Waiting for response...")
+                    .font(.app(.caption))
+                    .italic()
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.accentColor.opacity(0.04))
+                .strokeBorder(Color.accentColor.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func questionView(_ q: AskQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let header = q.header {
+                Text(header)
+                    .font(.app(.callout))
+                    .fontWeight(.semibold)
+            }
+            Text(q.question)
+                .font(.app(.body))
+
+            ForEach(q.options.indices, id: \.self) { idx in
+                let option = q.options[idx]
+                let isSelected = isAnswered && (resultText?.contains(option.label) == true)
+
+                Button {
+                    if !isAnswered {
+                        onAnswer?(option.label)
+                    }
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.label).fontWeight(.medium)
+                            if let desc = option.description {
+                                Text(desc)
+                                    .foregroundStyle(.secondary)
+                                    .font(.app(.caption))
+                            }
+                        }
+                    }
+                    .font(.app(.body))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isSelected ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.03))
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isAnswered)
+                .opacity(isAnswered && !isSelected ? 0.4 : 1)
             }
         }
     }

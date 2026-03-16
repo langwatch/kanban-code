@@ -423,8 +423,14 @@ public enum TranscriptReader {
         } else {
             // Assistant messages with tool_use blocks — list tool names
             let toolNames = blocks.compactMap { block -> String? in
-                if case .toolUse(let name, _, _) = block.kind { return name }
-                return nil
+                switch block.kind {
+                case .toolUse(let name, _, _): return name
+                case .agentCall: return "Agent"
+                case .planModeEnter: return "EnterPlanMode"
+                case .planModeExit: return "ExitPlanMode"
+                case .askUserQuestion: return "AskUserQuestion"
+                default: return nil
+                }
             }
             if !toolNames.isEmpty {
                 let unique = Array(NSOrderedSet(array: toolNames)) as! [String]
@@ -441,17 +447,54 @@ public enum TranscriptReader {
         let name = block["name"] as? String ?? "unknown"
         let input = block["input"] as? [String: Any] ?? [:]
         let toolId = block["id"] as? String
+        let rawJSON = try? JSONSerialization.data(withJSONObject: input)
+
+        // Special tool types with rich rendering
+        switch name {
+        case "EnterPlanMode":
+            return ContentBlock(kind: .planModeEnter, text: "Entered plan mode")
+
+        case "ExitPlanMode":
+            let plan = input["plan"] as? String ?? ""
+            return ContentBlock(kind: .planModeExit(plan: plan), text: plan, rawInputJSON: rawJSON)
+
+        case "AskUserQuestion":
+            let questions = parseAskQuestions(input)
+            return ContentBlock(kind: .askUserQuestion(questions: questions, id: toolId), text: "Question", rawInputJSON: rawJSON)
+
+        case "Agent":
+            let desc = input["description"] as? String ?? String((input["prompt"] as? String ?? "").prefix(80))
+            let subType = input["subagent_type"] as? String
+            return ContentBlock(kind: .agentCall(description: desc, subagentType: subType, id: toolId), text: desc, rawInputJSON: rawJSON)
+
+        default:
+            break
+        }
 
         let (displayText, inputMap) = extractToolInfo(name: name, input: input)
-
-        // Serialize full input to JSON for the chat view to use
-        let rawJSON = try? JSONSerialization.data(withJSONObject: input)
+        let isBackground = input["run_in_background"] as? Bool ?? false
 
         return ContentBlock(
             kind: .toolUse(name: name, input: inputMap, id: toolId),
             text: displayText,
-            rawInputJSON: rawJSON
+            rawInputJSON: rawJSON,
+            isBackground: isBackground
         )
+    }
+
+    /// Parse AskUserQuestion questions array from tool input.
+    static func parseAskQuestions(_ input: [String: Any]) -> [AskQuestion] {
+        guard let questionsArray = input["questions"] as? [[String: Any]] else { return [] }
+        return questionsArray.compactMap { q in
+            guard let question = q["question"] as? String else { return nil }
+            let header = q["header"] as? String
+            let multiSelect = q["multiSelect"] as? Bool ?? false
+            let options: [AskQuestionOption] = (q["options"] as? [[String: Any]] ?? []).compactMap { opt in
+                guard let label = opt["label"] as? String else { return nil }
+                return AskQuestionOption(label: label, description: opt["description"] as? String)
+            }
+            return AskQuestion(header: header, question: question, options: options, multiSelect: multiSelect)
+        }
     }
 
     /// Extract display text and key input fields for each tool type.

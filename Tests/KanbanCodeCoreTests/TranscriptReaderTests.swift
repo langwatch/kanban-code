@@ -406,4 +406,109 @@ struct TranscriptReaderTests {
         // Should be the LAST 4 turns
         #expect(result.turns.last!.textPreview == "reply 19")
     }
+
+    // MARK: - Special tool parsing tests
+
+    @Test("Parses EnterPlanMode as planModeEnter kind")
+    func enterPlanMode() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        try #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"EnterPlanMode","input":{}}]}}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns.count == 1)
+        if case .planModeEnter = turns[0].contentBlocks[0].kind {
+            #expect(turns[0].contentBlocks[0].text == "Entered plan mode")
+        } else {
+            Issue.record("Expected planModeEnter kind")
+        }
+    }
+
+    @Test("Parses ExitPlanMode with plan content")
+    func exitPlanMode() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        let json = "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"ExitPlanMode\",\"input\":{\"plan\":\"# My Plan\"}}]}}"
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns.count == 1)
+        if case .planModeExit(let plan) = turns[0].contentBlocks[0].kind {
+            #expect(plan.contains("My Plan"))
+        } else {
+            Issue.record("Expected planModeExit kind")
+        }
+    }
+
+    @Test("Parses AskUserQuestion with options")
+    func askUserQuestion() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        let json = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_3","name":"AskUserQuestion","input":{"questions":[{"question":"Pick one","header":"Choice","options":[{"label":"Option A","description":"First option"},{"label":"Option B"}],"multiSelect":false}]}}]}}"#
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns.count == 1)
+        if case .askUserQuestion(let questions, let id) = turns[0].contentBlocks[0].kind {
+            #expect(questions.count == 1)
+            #expect(questions[0].header == "Choice")
+            #expect(questions[0].question == "Pick one")
+            #expect(questions[0].options.count == 2)
+            #expect(questions[0].options[0].label == "Option A")
+            #expect(questions[0].options[0].description == "First option")
+            #expect(questions[0].options[1].label == "Option B")
+            #expect(questions[0].multiSelect == false)
+            #expect(id == "toolu_3")
+        } else {
+            Issue.record("Expected askUserQuestion kind")
+        }
+    }
+
+    @Test("Parses Agent tool_use as agentCall kind")
+    func agentCall() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        try #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_4","name":"Agent","input":{"description":"Search codebase","subagent_type":"Explore","prompt":"Find all uses of foo"}}]}}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns.count == 1)
+        if case .agentCall(let desc, let subType, let id) = turns[0].contentBlocks[0].kind {
+            #expect(desc == "Search codebase")
+            #expect(subType == "Explore")
+            #expect(id == "toolu_4")
+        } else {
+            Issue.record("Expected agentCall kind")
+        }
+    }
+
+    @Test("Parses Bash with run_in_background flag")
+    func backgroundBash() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        try #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_5","name":"Bash","input":{"command":"sleep 10","run_in_background":true}}]}}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns.count == 1)
+        let block = turns[0].contentBlocks[0]
+        #expect(block.isBackground == true)
+        if case .toolUse(let name, _, _) = block.kind {
+            #expect(name == "Bash")
+        } else {
+            Issue.record("Expected toolUse kind for Bash")
+        }
+    }
+
+    @Test("Regular Bash is not background")
+    func regularBash() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        try #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_6","name":"Bash","input":{"command":"ls"}}]}}"#
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let turns = try await TranscriptReader.readTurns(from: path)
+        #expect(turns[0].contentBlocks[0].isBackground == false)
+    }
 }

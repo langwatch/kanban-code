@@ -120,7 +120,7 @@ public final class ClaudeCodeSessionStore: SessionStore, @unchecked Sendable {
                             resultText = "(migrated from another assistant)"
                         }
                         toolCalls.append((id: toolId, name: claudeName, resultText: resultText))
-                    case .thinking:
+                    case .thinking, .planModeEnter, .planModeExit, .askUserQuestion, .agentCall:
                         break
                     case .toolResult(let toolName, _):
                         // If there's an explicit tool result block, attach it to the last tool call

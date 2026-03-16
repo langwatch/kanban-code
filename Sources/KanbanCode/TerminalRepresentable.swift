@@ -166,6 +166,27 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         }
     }
 
+    // MARK: - Paste fix
+
+    /// Override paste to always send bracketed paste codes. With our async+dropping
+    /// batching, the escape sequence that enables bracketedPasteMode may be processed
+    /// late, causing terminal.bracketedPasteMode to be false when the user pastes.
+    /// Claude Code always expects bracketed paste for image detection.
+    override func paste(_ sender: Any) {
+        let clipboard = NSPasteboard.general
+        let text = clipboard.string(forType: .string) ?? ""
+        // Always send bracketed paste codes — Claude Code needs them for image detection.
+        // Raw bytes for \e[200~ and \e[201~ to avoid Swift 6 concurrency issues
+        // with EscapeSequences static properties.
+        let pasteStart: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e] // \e[200~
+        let pasteEnd: [UInt8] = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]   // \e[201~
+        send(data: pasteStart[0...])
+        if !text.isEmpty {
+            send(txt: text)
+        }
+        send(data: pasteEnd[0...])
+    }
+
     // MARK: - Cmd+hover URL detection
 
     private static let urlRegex: NSRegularExpression? = {

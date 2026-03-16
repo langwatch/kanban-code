@@ -578,6 +578,14 @@ struct TurnBlockView: View {
                         toolResultLine(block)
                     case .thinking:
                         thinkingLine(block.text)
+                    case .planModeEnter:
+                        toolUseLine(name: "EnterPlanMode", displayText: "Entered plan mode")
+                    case .planModeExit:
+                        toolUseLine(name: "ExitPlanMode", displayText: "Plan")
+                    case .askUserQuestion:
+                        toolUseLine(name: "AskUserQuestion", displayText: "Question")
+                    case .agentCall(let desc, _, _):
+                        toolUseLine(name: "Agent", displayText: desc)
                     }
                 }
             }

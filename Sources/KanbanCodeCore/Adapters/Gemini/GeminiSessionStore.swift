@@ -193,8 +193,7 @@ public final class GeminiSessionStore: SessionStore, @unchecked Sendable {
                         if !toolCalls.isEmpty {
                             toolCalls[toolCalls.count - 1]["result"] = block.text
                         }
-                    case .thinking:
-                        // Skip thinking blocks
+                    case .thinking, .planModeEnter, .planModeExit, .askUserQuestion, .agentCall:
                         break
                     }
                 }
