@@ -56,6 +56,49 @@ private struct HoverBrightness: ViewModifier {
     }
 }
 
+// MARK: - Per-card chat draft (persisted to disk)
+
+struct ChatDraft: Codable {
+    var text: String = ""
+    var images: [Data] = [] // PNG data for attached images
+
+    var isEmpty: Bool { text.isEmpty && images.isEmpty }
+
+    private static let dirPath: String = {
+        let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code/chat-drafts")
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    static func loadAll() -> [String: ChatDraft] {
+        let dir = dirPath
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [:] }
+        var result: [String: ChatDraft] = [:]
+        for file in files where file.hasSuffix(".json") {
+            let cardId = String(file.dropLast(5)) // remove .json
+            let path = (dir as NSString).appendingPathComponent(file)
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+               let draft = try? JSONDecoder().decode(ChatDraft.self, from: data) {
+                if !draft.isEmpty {
+                    result[cardId] = draft
+                }
+            }
+        }
+        return result
+    }
+
+    static func save(cardId: String, draft: ChatDraft) {
+        let path = (dirPath as NSString).appendingPathComponent("\(cardId).json")
+        if draft.isEmpty {
+            try? FileManager.default.removeItem(atPath: path)
+        } else {
+            if let data = try? JSONEncoder().encode(draft) {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        }
+    }
+}
+
 struct CardDetailView: View {
     let card: KanbanCodeCard
     var onResume: () -> Void = {}
@@ -99,9 +142,33 @@ struct CardDetailView: View {
     @State private var turns: [ConversationTurn] = []
     @State private var isLoadingHistory = false
     @State private var hasMoreTurns = false
-    @State private var chatDraftText = ""
-    @State private var chatDraftImages: [Data] = []
+    // Per-card chat drafts (keyed by card ID, persisted to disk)
+    @State private var chatDrafts: [String: ChatDraft] = ChatDraft.loadAll()
     @State private var chatPendingMessage: String?
+
+    private var chatDraftText: Binding<String> {
+        Binding(
+            get: { chatDrafts[card.id]?.text ?? "" },
+            set: { newValue in
+                var draft = chatDrafts[card.id] ?? ChatDraft()
+                draft.text = newValue
+                chatDrafts[card.id] = draft
+                ChatDraft.save(cardId: card.id, draft: draft)
+            }
+        )
+    }
+
+    private var chatDraftImages: Binding<[Data]> {
+        Binding(
+            get: { chatDrafts[card.id]?.images ?? [] },
+            set: { newValue in
+                var draft = chatDrafts[card.id] ?? ChatDraft()
+                draft.images = newValue
+                chatDrafts[card.id] = draft
+                ChatDraft.save(cardId: card.id, draft: draft)
+            }
+        )
+    }
     @State private var isLoadingMore = false
     @Binding var selectedTab: DetailTab
     @State private var showRenameSheet = false
@@ -671,8 +738,8 @@ struct CardDetailView: View {
                                 checkpointTurn = turn
                                 showCheckpointConfirm = true
                             },
-                            draftText: $chatDraftText,
-                            draftImages: $chatDraftImages,
+                            draftText: chatDraftText,
+                            draftImages: chatDraftImages,
                             pendingMessage: $chatPendingMessage
                         )
                         .task(id: "chatview-\(card.id)") {

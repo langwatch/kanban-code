@@ -183,17 +183,22 @@ private struct ChatMessageList: View {
                     scrollToBottom(proxy: proxy, delay: false)
                 }
             }
+            .onChange(of: pendingMessage) {
+                if pendingMessage != nil {
+                    scrollToBottom(proxy: proxy, delay: false)
+                }
+            }
             .onAppear {
-                // Fix blank screen: force scroll to bottom on re-appear
+                // Scroll to bottom on appear/re-appear
                 lastSeenCount = turns.count
                 lastSeenLineNumber = turns.last?.lineNumber
-                if !turns.isEmpty {
-                    scrollToBottom(proxy: proxy, delay: true)
-                }
+                isAtBottom = true
+                scrollToBottom(proxy: proxy, delay: true)
             }
             .onChange(of: turns.first?.lineNumber) {
                 // Card changed — reset and scroll
                 lastSeenLineNumber = nil
+                lastSeenCount = 0
                 isAtBottom = true
                 hasNewMessages = false
                 scrollToBottom(proxy: proxy, delay: true)
@@ -247,8 +252,11 @@ private struct ChatMessageList: View {
 
     private func scrollToBottom(proxy: ScrollViewProxy, delay: Bool) {
         Task { @MainActor in
-            if delay { try? await Task.sleep(for: .milliseconds(50)) }
-            proxy.scrollTo("bottom-spacer", anchor: .bottom)
+            // Multiple attempts with increasing delays — LazyVStack needs time to render
+            for ms in (delay ? [50, 150, 300] : [0]) {
+                if ms > 0 { try? await Task.sleep(for: .milliseconds(ms)) }
+                proxy.scrollTo("bottom-spacer", anchor: .bottom)
+            }
         }
     }
 
