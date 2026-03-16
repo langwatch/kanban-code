@@ -9,6 +9,7 @@ struct PromptEditor: NSViewRepresentable {
     var placeholder: String = ""
     var maxHeight: CGFloat = 400
     var onSubmit: () -> Void = {}
+    var onCmdSubmit: (() -> Void)?
     var onImagePaste: ((Data) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -39,6 +40,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
+        textView.onCmdSubmit = onCmdSubmit
         textView.onImagePaste = onImagePaste
         textView.placeholderString = placeholder
 
@@ -60,6 +62,7 @@ struct PromptEditor: NSViewRepresentable {
             textView.needsDisplay = true // redraw placeholder if cleared
         }
         textView.onSubmit = onSubmit
+        textView.onCmdSubmit = onCmdSubmit
         textView.onImagePaste = onImagePaste
         textView.font = font
 
@@ -139,6 +142,7 @@ final class PromptEditorScrollView: NSScrollView {
 /// NSTextView subclass that intercepts Return key for submit behavior.
 final class SubmitTextView: NSTextView {
     var onSubmit: () -> Void = {}
+    var onCmdSubmit: (() -> Void)?
     var onImagePaste: ((Data) -> Void)?
     var placeholderString: String = ""
 
@@ -168,10 +172,19 @@ final class SubmitTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36 // Return key
         let hasShift = event.modifierFlags.contains(.shift)
+        let hasCmd = event.modifierFlags.contains(.command)
+
+        if isReturn && hasCmd && onCmdSubmit != nil {
+            // Cmd+Enter → queue prompt (when handler is set)
+            if let delegate = self.delegate as? PromptEditor.Coordinator {
+                delegate.parent.text = self.string
+            }
+            onCmdSubmit?()
+            return
+        }
 
         if isReturn && !hasShift {
-            // Flush current text to the binding before submitting,
-            // so the send handler has the latest value.
+            // Enter → send
             if let delegate = self.delegate as? PromptEditor.Coordinator {
                 delegate.parent.text = self.string
             }

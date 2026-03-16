@@ -337,10 +337,14 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
     private func autoSendQueuedPrompt(sessionId: String) async {
         do {
             guard let link = try await coordinationStore.linkForSession(sessionId) else {
+                KanbanCodeLog.info("notify", "Auto-send: no link found for session \(sessionId.prefix(8))")
                 return
             }
             guard let prompts = link.queuedPrompts,
                   let prompt = prompts.first(where: { $0.sendAutomatically && !editingQueuedPromptIds.contains($0.id) }) else {
+                let qCount = link.queuedPrompts?.count ?? 0
+                let autoCount = link.queuedPrompts?.filter(\.sendAutomatically).count ?? 0
+                KanbanCodeLog.info("notify", "Auto-send: no eligible prompt for \(sessionId.prefix(8)) (queued: \(qCount), auto: \(autoCount), editing: \(editingQueuedPromptIds))")
                 return
             }
             guard link.tmuxLink?.sessionName != nil else {
@@ -364,8 +368,10 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
     }
 
     /// Slow background tick: poll activity states for sessions without hook events.
+    /// Also processes any missed hook events as a fallback in case the file watcher missed a write.
     /// Column updates and PR tracking are now handled by BoardStore.reconcile().
     private func backgroundTick() async {
+        await processHookEvents()
         await updateActivityStates()
     }
 

@@ -484,6 +484,9 @@ struct ContentView: View {
             onSendQueuedPrompt: { promptId in
                 store.dispatch(.sendQueuedPrompt(cardId: card.id, promptId: promptId))
             },
+            onReorderQueuedPrompts: { promptIds in
+                store.dispatch(.reorderQueuedPrompts(cardId: card.id, promptIds: promptIds))
+            },
             onEditingQueuedPrompt: { promptId in
                 if let prev = editingQueuedPromptId {
                     orchestrator.clearPromptEditing(prev)
@@ -1393,8 +1396,13 @@ struct ContentView: View {
             .keyboardShortcut(AppShortcut.openCommandMode.key, modifiers: AppShortcut.openCommandMode.modifiers)
             .hidden()
 
-        // Cmd+Enter — expand detail OR deep search depending on context
+        // Cmd+Enter — expand detail OR deep search depending on context.
+        // When the prompt editor is focused, forward to it for queue prompt.
         Button("") {
+            if let textView = NSApp.keyWindow?.firstResponder as? SubmitTextView {
+                textView.onCmdSubmit?()
+                return
+            }
             let ctx = shortcutContext
             if AppShortcut.deepSearch.isActive(in: ctx) {
                 deepSearchTrigger.toggle()

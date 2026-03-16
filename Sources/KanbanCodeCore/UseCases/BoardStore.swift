@@ -30,6 +30,7 @@ public struct AppState: Sendable {
     public var selectedProjectPath: String?
     public var paletteOpen: Bool = false
     public var detailExpanded: Bool = false
+    public var promptEditorFocused: Bool = false
     public var error: String?
     public var isLoading: Bool = false
     public var lastRefresh: Date?
@@ -186,6 +187,7 @@ public enum Action: Sendable {
     case selectCard(cardId: String?)
     case setPaletteOpen(Bool)
     case setDetailExpanded(Bool)
+    case setPromptEditorFocused(Bool)
     case unlinkFromCard(cardId: String, linkType: LinkType)
     case killTerminal(cardId: String, sessionName: String)
     case cancelLaunch(cardId: String)
@@ -207,6 +209,7 @@ public enum Action: Sendable {
     case updateQueuedPrompt(cardId: String, promptId: String, body: String, sendAutomatically: Bool)
     case removeQueuedPrompt(cardId: String, promptId: String)
     case sendQueuedPrompt(cardId: String, promptId: String)
+    case reorderQueuedPrompts(cardId: String, promptIds: [String])
 
     // Async completions
     case launchCompleted(cardId: String, tmuxName: String, sessionLink: SessionLink?, worktreeLink: WorktreeLink?, isRemote: Bool)
@@ -506,6 +509,10 @@ public enum Reducer {
             state.detailExpanded = expanded
             return []
 
+        case .setPromptEditorFocused(let focused):
+            state.promptEditorFocused = focused
+            return []
+
         case .showDialog(let dialog):
             state.activeDialog = dialog
             return []
@@ -682,6 +689,14 @@ public enum Reducer {
                 sendEffect = .sendPromptToTmux(sessionName: sessionName, promptBody: prompt.body, assistant: link.effectiveAssistant)
             }
             return [.upsertLink(link), sendEffect]
+
+        case .reorderQueuedPrompts(let cardId, let promptIds):
+            guard var link = state.links[cardId],
+                  let prompts = link.queuedPrompts else { return [] }
+            let byId = Dictionary(prompts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            link.queuedPrompts = promptIds.compactMap { byId[$0] }
+            state.links[cardId] = link
+            return [.upsertLink(link)]
 
         case .moveCardToProject(let cardId, let projectPath):
             guard var link = state.links[cardId] else { return [] }

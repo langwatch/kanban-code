@@ -227,6 +227,7 @@ extension Notification.Name {
     static let kanbanCodeSettingsChanged = Notification.Name("kanbanCodeSettingsChanged")
     static let kanbanCodeSelectCard = Notification.Name("kanbanCodeSelectCard")
     static let kanbanCodeQuitRequested = Notification.Name("kanbanCodeQuitRequested")
+    static let kanbanCodePromptFocusChanged = Notification.Name("kanbanCodePromptFocusChanged")
     static let kanbanSelectTerminalTab = Notification.Name("kanbanSelectTerminalTab")
     static let kanbanCloseTerminalTab = Notification.Name("kanbanCloseTerminalTab")
 }

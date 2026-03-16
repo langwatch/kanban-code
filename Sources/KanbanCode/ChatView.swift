@@ -28,10 +28,26 @@ struct ChatView: View {
     @Binding var pendingMessage: String?
 
     /// Use pane output as ground truth, falling back to hook state only if no tmux session.
+    /// Also optimistically show busy when a pending message was just sent.
     private var isAssistantBusy: Bool {
         if dismissedBusy { return false }
+        if pendingMessage != nil { return true }
         if tmuxSessionName != nil { return isBusyFromPane }
         return activityState == .activelyWorking
+    }
+
+    private func clearPendingIfMatched() {
+        guard let pending = pendingMessage else { return }
+        let prefix = String(pending.prefix(40))
+        let hasMatch = turns.contains { turn in
+            turn.role == "user" && turn.contentBlocks.contains {
+                if case .text = $0.kind { return $0.text.contains(prefix) }
+                return false
+            }
+        }
+        if hasMatch {
+            pendingMessage = nil
+        }
     }
 
     var body: some View {
@@ -98,15 +114,10 @@ struct ChatView: View {
             )
         }
         .onChange(of: turns.count) {
-            // Clear pending message when a new user turn arrives
-            if let pending = pendingMessage {
-                if turns.last(where: { $0.role == "user" })?.contentBlocks.contains(where: {
-                    if case .text = $0.kind { return $0.text.contains(pending.prefix(50)) }
-                    return false
-                }) == true {
-                    pendingMessage = nil
-                }
-            }
+            clearPendingIfMatched()
+        }
+        .onChange(of: turns.last?.lineNumber) {
+            clearPendingIfMatched()
         }
         .onChange(of: isBusyFromPane) {
             // If Claude starts working again after dismiss (e.g. background agents),
@@ -127,6 +138,7 @@ private struct ChatMessageList: View {
     var hasMoreTurns: Bool = false
     var tmuxSessionName: String?
     @Binding var isBusyFromPane: Bool
+    @State private var pollKick: Int = 0
     var pendingMessage: String?
     var onLoadMore: (() -> Void)?
     var onFork: (() -> Void)?
@@ -206,7 +218,7 @@ private struct ChatMessageList: View {
 
                     // Bottom spacer for scroll anchor — tall enough to keep
                     // the last message visible above the "working..." bar + input.
-                    Color.clear.frame(height: 60)
+                    Color.clear.frame(height: 30)
                         .id("bottom-spacer")
                 }
                 .padding(.horizontal, 16)
@@ -257,10 +269,23 @@ private struct ChatMessageList: View {
                     } catch {
                         newBusy = false
                     }
-                    if newBusy != isBusyFromPane {
+                    // Don't flip to not-busy while a pending message exists —
+                    // Claude hasn't processed the prompt yet, tmux just hasn't caught up.
+                    if newBusy != isBusyFromPane && (newBusy || pendingMessage == nil) {
                         isBusyFromPane = newBusy
                     }
-                    try? await Task.sleep(for: .seconds(5))
+                    // Wait up to 5s, but re-check immediately if pollKick changes
+                    let kickBefore = pollKick
+                    for _ in 0..<50 {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        if pollKick != kickBefore || Task.isCancelled { break }
+                    }
+                }
+            }
+            .onChange(of: pendingMessage) {
+                // Kick the pane poll to immediately check busy state after sending
+                if pendingMessage != nil {
+                    pollKick += 1
                 }
             }
             .overlay(alignment: .bottom) {
@@ -1090,37 +1115,42 @@ struct ChatInputBar: View {
                 }
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
+            ZStack(alignment: .bottomTrailing) {
                 PromptEditor(
                     text: $text,
                     font: .systemFont(ofSize: 13),
                     placeholder: "Message \(assistant.displayName)...",
-                    maxHeight: 200,
+                    maxHeight: 160,
                     onSubmit: send,
+                    onCmdSubmit: onQueuePrompt != nil ? { showQueueDialog = true } : nil,
                     onImagePaste: { data in pastedImages.append(data) }
                 )
                 .focused($isFocused)
                 .frame(minHeight: 24)
                 .fixedSize(horizontal: false, vertical: true)
+                // Extra bottom padding so text never overlaps the floating buttons
+                .padding(.bottom, 4)
 
-                if onQueuePrompt != nil {
-                    Button { showQueueDialog = true } label: {
-                        Image(systemName: "text.badge.plus")
-                            .font(.system(size: 18))
-                            .foregroundStyle(canSend ? Color.primary.opacity(0.5) : Color.primary.opacity(0.15))
+                HStack(alignment: .center, spacing: 12) {
+                    if onQueuePrompt != nil {
+                        Button { showQueueDialog = true } label: {
+                            Image(systemName: "text.badge.plus")
+                                .font(.system(size: 18))
+                                .foregroundStyle(canSend ? Color.primary.opacity(0.5) : Color.primary.opacity(0.15))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend)
+                        .help("Queue prompt")
+                    }
+
+                    Button(action: send) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(canSend ? Color.primary : Color.primary.opacity(0.2))
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend)
-                    .help("Queue prompt")
                 }
-
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(canSend ? Color.primary : Color.primary.opacity(0.2))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 10)

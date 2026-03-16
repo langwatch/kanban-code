@@ -9,12 +9,14 @@ struct AppShortcutContext {
     var detailOpen: Bool
     var expandedDetail: Bool
     var terminalTabActive: Bool
+    var promptEditorFocused: Bool
 
     init(from state: AppState, terminalTabActive: Bool = false) {
         self.paletteOpen = state.paletteOpen
         self.detailOpen = state.selectedCardId != nil
         self.expandedDetail = state.detailExpanded
         self.terminalTabActive = terminalTabActive
+        self.promptEditorFocused = state.promptEditorFocused
     }
 }
 
@@ -98,7 +100,7 @@ enum AppShortcut: CaseIterable {
 
         // Toggle between kanban and expanded+sidebar mode
         case .toggleExpanded:
-            return !ctx.paletteOpen
+            return !ctx.paletteOpen && !ctx.promptEditorFocused
 
         // Toggle sidebar in expanded (list) mode
         case .toggleSidebar:
