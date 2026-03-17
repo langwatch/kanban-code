@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.1.20](https://github.com/langwatch/kanban-code/compare/v0.1.19...v0.1.20) (2026-03-17)
+
+
+### Features
+
+* add embedded browser tabs to card detail view ([f901780](https://github.com/langwatch/kanban-code/commit/f90178079f6c6cc7245a9fdfe506ab849df28d2f))
+* add embedded browser tabs to card detail view ([2de5322](https://github.com/langwatch/kanban-code/commit/2de5322f47c6cc7f6c8e1982f50c84382cb5f592))
+* auto-scroll on expand, instant scroll to bottom ([e4b71a8](https://github.com/langwatch/kanban-code/commit/e4b71a80c359ad5d18a77441194b837277155da9))
+* card info section in expanded mode actions menu ([a3b1c9a](https://github.com/langwatch/kanban-code/commit/a3b1c9ae9671a6122f3b770490955ab486f55cae))
+* chat UX improvements, queue prompt from input, drag-reorder queued prompts ([78d2786](https://github.com/langwatch/kanban-code/commit/78d27868a999948d980ee375a91cd7a585921d65))
+* grouped tool calls, image labels, queue fixes, escape behavior, prompt state ([e9e3a4c](https://github.com/langwatch/kanban-code/commit/e9e3a4c0d2f0262fd1a4989da16ad42c7ac6287c))
+* image chips on user bubbles, up-arrow history, working indicator grace period ([af71be0](https://github.com/langwatch/kanban-code/commit/af71be0eb2dc9f35e4d8b92b442f5a1759ef3a04))
+* interactive plan approval and AskUserQuestion in chat view ([7dbe248](https://github.com/langwatch/kanban-code/commit/7dbe2488aa82c2dbf5be65972090035f36a2701a))
+* native Chat View with terminal toggle (Phase 1-5) ([677708c](https://github.com/langwatch/kanban-code/commit/677708c42eb0c0b4eaa86a558d56baa731492f68))
+* queue prompt button in chat view, edit diff stats, spinner fix ([9aea657](https://github.com/langwatch/kanban-code/commit/9aea6572daef9d8054fbefb01846dbae5e85e9af))
+* render subagents, plan mode, AskUserQuestion in chat view ([32e6e26](https://github.com/langwatch/kanban-code/commit/32e6e26e869e69cc278b4eca7a1c5e41f60b5c08))
+
+
+### Bug Fixes
+
+* chat view stability, prompt sending, path encoding, performance ([c60dfb7](https://github.com/langwatch/kanban-code/commit/c60dfb7859fc308ca2eabb17c9c0f027a5a416ae))
+* checkpoint kills session, refreshes chat, LazyVStack blank screen ([f2b43a1](https://github.com/langwatch/kanban-code/commit/f2b43a191bd4a3023bcced60fb43089453fb84fe))
+* hide sidebar toggle in kanban mode, center search overlay on full window ([494f286](https://github.com/langwatch/kanban-code/commit/494f2861c7ff859daec07d772302904e764d924d))
+* per-card chat drafts, scroll reliability, prompt sending retry ([efaed0b](https://github.com/langwatch/kanban-code/commit/efaed0b699106b033a454ea68251ea0aa41b571b))
+* project selector always visible in toolbar, compact sync icon in expanded mode ([6e2bce2](https://github.com/langwatch/kanban-code/commit/6e2bce2a3acaa72af1db76648e190c6c99332a3d))
+* prompt editor state isolation per card, clear pending on card switch ([388b179](https://github.com/langwatch/kanban-code/commit/388b179d1bdf8263bf51ee2edff71d25d700f52d))
+
+
+### Performance
+
+* fork SwiftTerm async dispatch, off-main-actor history loading ([d4a131e](https://github.com/langwatch/kanban-code/commit/d4a131e6b2ae5b79ff524965cd110a9c95f51832))
+* wait-for-silence terminal rendering, always drop to tail ([0bbcd60](https://github.com/langwatch/kanban-code/commit/0bbcd60a049c365fde8c43ffd5da9c1dac93203d))
+* wait-for-silence terminal rendering, always drop to tail ([d5262f3](https://github.com/langwatch/kanban-code/commit/d5262f37fb97e4db3eb615082a52dc3a78fd27e5))
+
+
+### Refactoring
+
+* enrich ContentBlock for chat view (Phase 0) ([cc12243](https://github.com/langwatch/kanban-code/commit/cc122431c5de5dfeaafde302e95e83f50f2dd9d2))
+* global dialog state (Elm-like) for all card action dialogs ([c29a463](https://github.com/langwatch/kanban-code/commit/c29a463f34d905dcdc3f6670c29d0e273e0541db))
+
 ## [0.1.19](https://github.com/langwatch/kanban-code/compare/v0.1.18...v0.1.19) (2026-03-15)
 
 
