@@ -102,11 +102,20 @@ public enum TranscriptReader {
             let blocks: [ContentBlock]
             let textPreview: String
             if type == "queue-operation" {
-                // Queued prompt — render as user message
+                // Queued prompt or task notification — render as user/system message
                 role = "user"
                 let content = obj["content"] as? String ?? ""
-                blocks = [ContentBlock(kind: .text, text: content)]
-                textPreview = content
+                if content.contains("<task-notification>") {
+                    if let summary = Self.parseTaskNotification(content) {
+                        blocks = [ContentBlock(kind: .text, text: summary)]
+                        textPreview = summary
+                    } else {
+                        continue // Hide malformed task notifications
+                    }
+                } else {
+                    blocks = [ContentBlock(kind: .text, text: content)]
+                    textPreview = content
+                }
             } else if type == "user" {
                 role = JsonlParser.isLocalCommandStdout(obj) ? "assistant" : type
                 blocks = extractUserBlocks(from: obj)

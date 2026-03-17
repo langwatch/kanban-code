@@ -539,9 +539,27 @@ struct ChatMessageView: View, Equatable {
             .map(\.text).joined(separator: "\n")
     }
 
+    private var isTaskNotification: Bool {
+        turn.role == "user" && turn.contentBlocks.contains {
+            if case .text = $0.kind { return $0.text.hasPrefix("✓ ") || $0.text.hasPrefix("⏳ ") }
+            return false
+        }
+    }
+
     var body: some View {
         if hasContent {
-            if suppressBackground {
+            if isTaskNotification {
+                // Task notification — centered system-style
+                HStack {
+                    Spacer(minLength: 0)
+                    let text = turn.contentBlocks.first { if case .text = $0.kind { return true }; return false }?.text ?? ""
+                    Text(text)
+                        .font(.app(.caption))
+                        .foregroundStyle(.tertiary)
+                        .italic()
+                    Spacer(minLength: 0)
+                }
+            } else if suppressBackground {
                 // Inside a grouped tool box — no centering wrapper, no frame constraint
                 assistantMessage
             } else {
