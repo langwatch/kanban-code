@@ -856,7 +856,6 @@ struct ChatMessageView: View, Equatable {
                         } else {
                             highlightedText(block.text)
                                 .font(.app(.body))
-                                .textSelection(.enabled)
                         }
                     }
                 }
@@ -939,15 +938,10 @@ struct ChatMessageView: View, Equatable {
                 if highlightText != nil {
                     highlightedText(trimmed)
                         .font(.system(size: 13))
-                        .textSelection(.enabled)
-                } else if trimmed.containsMarkdown {
-                    Markdown(trimmed)
-                        .markdownTheme(chatMarkdownTheme)
-                        .textSelection(.enabled)
                 } else {
-                    Text(trimmed)
+                    markdownText(trimmed)
                         .font(.system(size: 13))
-                        .textSelection(.enabled)
+                        .lineSpacing(4)
                 }
             }
         case .toolUse(let name, _, _):
@@ -983,6 +977,21 @@ struct ChatMessageView: View, Equatable {
                 rawInputJSON: paired.block.rawInputJSON
             )
         }
+    }
+
+    // MARK: - Markdown text rendering
+
+    /// Renders markdown as native SwiftUI Text via AttributedString, enabling
+    /// cross-paragraph and cross-bubble text selection. Falls back to plain text
+    /// if markdown parsing fails.
+    private func markdownText(_ text: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 
     // MARK: - Text highlighting for search
