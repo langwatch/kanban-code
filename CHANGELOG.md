@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.21](https://github.com/langwatch/kanban-code/compare/v0.1.20...v0.1.21) (2026-03-18)
+
+
+### Features
+
+* chat search, scroll fix, image thumbnails, worktree removal ([0f73c47](https://github.com/langwatch/kanban-code/commit/0f73c47291163190c8258964ae651ce4d4bdbf16))
+* lid-closed pushover, per-project worktree pref, tab & scroll fixes ([80e2c61](https://github.com/langwatch/kanban-code/commit/80e2c61da667f47613bc436b2015d2339161aeb2))
+* pushover lid-closed mode, per-project worktree pref, UI fixes ([f74995b](https://github.com/langwatch/kanban-code/commit/f74995bb815a3fef498fdde68886806ac1a9b314))
+
+
+### Bug Fixes
+
+* persist browser tabs across card switches ([15a1d52](https://github.com/langwatch/kanban-code/commit/15a1d5257502fdc56960d40a92b8c806fef3abf3))
+* persist browser tabs across card switches ([f9d9af5](https://github.com/langwatch/kanban-code/commit/f9d9af58abfba18c13b14653acfe8ec916650bee))
+* resolve compiler warnings from contributor PR ([17c4eb3](https://github.com/langwatch/kanban-code/commit/17c4eb34ab1914503f08691830cad0667e95339b))
+* task notifications parsed from XML, rendered as centered system messages ([31b30df](https://github.com/langwatch/kanban-code/commit/31b30df8867032bfb5368959f2afc19fb9f8ddeb))
+
 ## [0.1.20](https://github.com/langwatch/kanban-code/compare/v0.1.19...v0.1.20) (2026-03-17)
 
 
