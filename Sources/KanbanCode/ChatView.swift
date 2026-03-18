@@ -19,6 +19,8 @@ struct ChatView: View {
     var onSendPrompt: (String, [String]) -> Void = { _, _ in }
     var onQueuePrompt: ((String, Bool, [String]) -> Void)? // (body, sendAutomatically, imagePaths)
     var onLoadMore: (() -> Void)?
+    var onLoadAroundTurn: ((Int) -> Void)?
+    var sessionPath: String?
     var onFork: (() -> Void)?
     var onCheckpoint: ((ConversationTurn) -> Void)?
     @Binding var draftText: String
@@ -65,6 +67,8 @@ struct ChatView: View {
                     isBusyFromPane: $isBusyFromPane,
                     pendingMessage: pendingMessage,
                     onLoadMore: onLoadMore,
+                    onLoadAroundTurn: onLoadAroundTurn,
+                    sessionPath: sessionPath,
                     onFork: onFork,
                     onCheckpoint: onCheckpoint,
                     onSendAnswer: { answer in
@@ -101,9 +105,10 @@ struct ChatView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(Color(.windowBackgroundColor), in: Capsule())
-                        .frame(maxWidth: chatMaxWidth, alignment: .leading)
+                        .frame(maxWidth: chatMaxWidth + 40, alignment: .leading)
                         Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 16)
                     .padding(.bottom, 2)
                 }
             }
@@ -153,6 +158,8 @@ private struct ChatMessageList: View {
     @State private var pollKick: Int = 0
     var pendingMessage: String?
     var onLoadMore: (() -> Void)?
+    var onLoadAroundTurn: ((Int) -> Void)?
+    var sessionPath: String?
     var onFork: (() -> Void)?
     var onCheckpoint: ((ConversationTurn) -> Void)?
     var onSendAnswer: ((String) -> Void)?
@@ -162,10 +169,31 @@ private struct ChatMessageList: View {
     @State private var lastSeenCount = 0
     @State private var lastSeenLineNumber: Int?
 
+    // Search state
+    @State private var showSearch = false
+    @State private var searchText = ""
+    @State private var activeQuery = ""
+    @State private var searchMatchIndices: [Int] = []
+    @State private var currentMatchPosition: Int = 0
+    @State private var searchDebounceTask: Task<Void, Never>?
+    @State private var searchScanTask: Task<Void, Never>?
+    @State private var isSearchScanning = false
+    @State private var pendingMatchScroll = false
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var currentMatchTurnIndex: Int? {
+        guard showSearch, !searchMatchIndices.isEmpty,
+              currentMatchPosition < searchMatchIndices.count else { return nil }
+        return searchMatchIndices[currentMatchPosition]
+    }
+
     var body: some View {
+        ZStack(alignment: .top) {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
+                    // Spacer for search bar
+                    if showSearch { Color.clear.frame(height: 36) }
                     if hasMoreTurns {
                         ProgressView()
                             .controlSize(.small)
@@ -197,7 +225,9 @@ private struct ChatMessageList: View {
                                         onFork: onFork,
                                         onCheckpoint: onCheckpoint,
                                         onSendAnswer: onSendAnswer,
-                                        suppressBackground: true
+                                        suppressBackground: true,
+                                        highlightText: activeQuery.isEmpty ? nil : activeQuery,
+                                        isCurrentMatch: currentMatchTurnIndex == toolTurns[ti].index
                                     )
                                     .equatable()
                                     .id(toolTurns[ti].lineNumber)
@@ -223,22 +253,13 @@ private struct ChatMessageList: View {
                                 },
                                 onFork: onFork,
                                 onCheckpoint: onCheckpoint,
-                                onSendAnswer: onSendAnswer
+                                onSendAnswer: onSendAnswer,
+                                highlightText: activeQuery.isEmpty ? nil : activeQuery,
+                                isCurrentMatch: currentMatchTurnIndex == turn.index
                             )
                             .equatable()
                             .id(turn.lineNumber)
                             .padding(.vertical, 4)
-                            .onAppear {
-                                if turn.lineNumber == turns.last?.lineNumber {
-                                    isAtBottom = true
-                                    hasNewMessages = false
-                                }
-                            }
-                            .onDisappear {
-                                if turn.lineNumber == turns.last?.lineNumber {
-                                    isAtBottom = false
-                                }
-                            }
                         }
                     }
 
@@ -272,17 +293,39 @@ private struct ChatMessageList: View {
                 }
                 .padding(.horizontal, 16)
             }
+            .defaultScrollAnchor(.bottom)
+            .modifier(ScrollBottomTracker(isAtBottom: $isAtBottom, hasNewMessages: $hasNewMessages))
             .onChange(of: turns.last?.lineNumber) {
-                // New message at bottom — auto-scroll or show pill
                 guard let newLast = turns.last?.lineNumber else { return }
                 let isInitial = lastSeenLineNumber == nil
-                if isInitial || (newLast != lastSeenLineNumber && (isAtBottom || isInitial)) {
-                    scrollToBottom(proxy: proxy, delay: isInitial)
-                } else if newLast != lastSeenLineNumber {
-                    hasNewMessages = true
+                // During search, handle pending match scroll instead of auto-scroll
+                if !activeQuery.isEmpty {
+                    if pendingMatchScroll {
+                        pendingMatchScroll = false
+                        scrollToCurrentMatch(proxy: proxy, delay: true)
+                    }
+                    lastSeenLineNumber = newLast
+                    lastSeenCount = turns.count
+                } else {
+                    if isInitial || (newLast != lastSeenLineNumber && (isAtBottom || isInitial)) {
+                        scrollToBottom(proxy: proxy, delay: isInitial)
+                    } else if newLast != lastSeenLineNumber {
+                        hasNewMessages = true
+                    }
+                    lastSeenLineNumber = newLast
+                    lastSeenCount = turns.count
                 }
-                lastSeenLineNumber = newLast
-                lastSeenCount = turns.count
+            }
+            .onChange(of: currentMatchPosition) {
+                guard !searchMatchIndices.isEmpty,
+                      currentMatchPosition < searchMatchIndices.count else { return }
+                let idx = searchMatchIndices[currentMatchPosition]
+                if turns.contains(where: { $0.index == idx }) {
+                    scrollToCurrentMatch(proxy: proxy, delay: false)
+                } else {
+                    pendingMatchScroll = true
+                    onLoadAroundTurn?(idx)
+                }
             }
             .onChange(of: pendingMessage) {
                 if pendingMessage != nil {
@@ -290,18 +333,9 @@ private struct ChatMessageList: View {
                 }
             }
             .onAppear {
-                // Scroll to bottom on appear/re-appear.
-                // Multiple delayed attempts to work around LazyVStack rendering blank
-                // until a scroll event kicks layout — common SwiftUI bug on large lists.
                 lastSeenCount = turns.count
                 lastSeenLineNumber = turns.last?.lineNumber
                 isAtBottom = true
-                proxy.scrollTo("bottom-spacer", anchor: .bottom)
-                for delay in [50, 150, 300, 600] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-                        proxy.scrollTo("bottom-spacer", anchor: .bottom)
-                    }
-                }
             }
             .onChange(of: turns.first?.lineNumber) {
                 // Card changed — reset and scroll
@@ -378,15 +412,173 @@ private struct ChatMessageList: View {
                 }
             }
         }
+        // Search bar overlay
+        if showSearch {
+            chatSearchBar
+        }
+        }
+        .background {
+            Button("") {
+                showSearch = true
+                isSearchFieldFocused = true
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .hidden()
+        }
+    }
+
+    // MARK: - Search Bar
+
+    private var chatSearchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+
+            TextField("Search...", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.app(.callout))
+                .focused($isSearchFieldFocused)
+                .onKeyPress(.escape) { dismissSearch(); return .handled }
+                .onSubmit { navigateSearch(forward: false) }
+                .onChange(of: searchText) { scheduleSearch() }
+
+            if !activeQuery.isEmpty {
+                if isSearchScanning {
+                    ProgressView().controlSize(.mini)
+                    Text("\(searchMatchIndices.count) found…")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
+                } else if searchMatchIndices.isEmpty {
+                    Text("0 results")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(searchMatchIndices.count - currentMatchPosition)/\(searchMatchIndices.count)")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+
+                    Button { navigateSearch(forward: false) } label: {
+                        Image(systemName: "chevron.up").font(.app(.caption2))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+
+                    Button { navigateSearch(forward: true) } label: {
+                        Image(systemName: "chevron.down").font(.app(.caption2))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            Button { dismissSearch() } label: {
+                Image(systemName: "xmark").font(.app(.caption2))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+    }
+
+    // MARK: - Search Logic
+
+    private func scheduleSearch() {
+        searchDebounceTask?.cancel()
+        if searchText.isEmpty {
+            activeQuery = ""
+            searchMatchIndices = []
+            currentMatchPosition = 0
+            searchScanTask?.cancel()
+            isSearchScanning = false
+            return
+        }
+        guard searchText.count >= 2 else { return }
+        searchDebounceTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            activeQuery = searchText
+            startScan()
+        }
+    }
+
+    private func startScan() {
+        searchScanTask?.cancel()
+        searchMatchIndices = []
+        currentMatchPosition = 0
+        guard let path = sessionPath, !activeQuery.isEmpty else { return }
+        isSearchScanning = true
+        let query = activeQuery
+        searchScanTask = Task {
+            var matches: [Int] = []
+            for await matchIndex in TranscriptReader.scanForMatches(from: path, query: query) {
+                if Task.isCancelled { break }
+                matches.append(matchIndex)
+                if matches.count == 1 || matches.count % 50 == 0 {
+                    searchMatchIndices = matches
+                }
+            }
+            guard !Task.isCancelled else { return }
+            searchMatchIndices = matches
+            isSearchScanning = false
+            if !matches.isEmpty {
+                currentMatchPosition = matches.count - 1
+            }
+        }
+    }
+
+    private func navigateSearch(forward: Bool) {
+        guard !searchMatchIndices.isEmpty else { return }
+        if forward {
+            currentMatchPosition = (currentMatchPosition + 1) % searchMatchIndices.count
+        } else {
+            currentMatchPosition = (currentMatchPosition - 1 + searchMatchIndices.count) % searchMatchIndices.count
+        }
+    }
+
+    private func dismissSearch() {
+        searchDebounceTask?.cancel()
+        searchScanTask?.cancel()
+        isSearchScanning = false
+        showSearch = false
+        isSearchFieldFocused = false
+        searchText = ""
+        activeQuery = ""
+    }
+
+    private func scrollToCurrentMatch(proxy: ScrollViewProxy, delay: Bool) {
+        guard !searchMatchIndices.isEmpty,
+              currentMatchPosition < searchMatchIndices.count else { return }
+        let idx = searchMatchIndices[currentMatchPosition]
+        guard let turn = turns.first(where: { $0.index == idx }) else { return }
+        let lineNum = turn.lineNumber
+        if delay {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(lineNum, anchor: .center)
+                }
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(lineNum, anchor: .center)
+            }
+        }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy, delay: Bool) {
-        Task { @MainActor in
-            // Multiple attempts with increasing delays — LazyVStack needs time to render
-            for ms in (delay ? [50, 150, 300] : [0]) {
-                if ms > 0 { try? await Task.sleep(for: .milliseconds(ms)) }
+        if delay {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
                 proxy.scrollTo("bottom-spacer", anchor: .bottom)
             }
+        } else {
+            proxy.scrollTo("bottom-spacer", anchor: .bottom)
         }
     }
 
@@ -505,13 +697,17 @@ struct ChatMessageView: View, Equatable {
     var onCheckpoint: ((ConversationTurn) -> Void)?
     var onSendAnswer: ((String) -> Void)?
     var suppressBackground: Bool = false
+    var highlightText: String? = nil
+    var isCurrentMatch: Bool = false
     @State private var isHovered = false
 
     nonisolated static func == (lhs: ChatMessageView, rhs: ChatMessageView) -> Bool {
         lhs.turn.lineNumber == rhs.turn.lineNumber &&
         lhs.turn.contentBlocks.count == rhs.turn.contentBlocks.count &&
         lhs.isLastInGroup == rhs.isLastInGroup &&
-        lhs.assistant == rhs.assistant
+        lhs.assistant == rhs.assistant &&
+        lhs.highlightText == rhs.highlightText &&
+        lhs.isCurrentMatch == rhs.isCurrentMatch
     }
 
     private var hasContent: Bool {
@@ -632,7 +828,7 @@ struct ChatMessageView: View, Equatable {
                                 .italic()
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text(block.text)
+                            highlightedText(block.text)
                                 .font(.app(.body))
                                 .textSelection(.enabled)
                         }
@@ -714,7 +910,11 @@ struct ChatMessageView: View, Equatable {
         case .text:
             let trimmed = paired.block.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                if trimmed.containsMarkdown {
+                if highlightText != nil {
+                    highlightedText(trimmed)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                } else if trimmed.containsMarkdown {
                     Markdown(trimmed)
                         .markdownTheme(chatMarkdownTheme)
                         .textSelection(.enabled)
@@ -757,6 +957,28 @@ struct ChatMessageView: View, Equatable {
                 rawInputJSON: paired.block.rawInputJSON
             )
         }
+    }
+
+    // MARK: - Text highlighting for search
+
+    private func highlightedText(_ text: String) -> Text {
+        guard let query = highlightText?.lowercased(), !query.isEmpty else {
+            return Text(text)
+        }
+        var attr = AttributedString(text)
+        let lower = text.lowercased()
+        var pos = lower.startIndex
+        let hlBg: Color = isCurrentMatch ? .orange.opacity(0.4) : .yellow.opacity(0.3)
+        while let range = lower.range(of: query, range: pos..<lower.endIndex) {
+            let startOff = lower.distance(from: lower.startIndex, to: range.lowerBound)
+            let endOff = lower.distance(from: lower.startIndex, to: range.upperBound)
+            let chars = attr.characters
+            let attrStart = chars.index(chars.startIndex, offsetBy: startOff)
+            let attrEnd = chars.index(chars.startIndex, offsetBy: endOff)
+            attr[attrStart..<attrEnd].backgroundColor = hlBg
+            pos = range.upperBound
+        }
+        return Text(attr)
     }
 
     // MARK: Pair tool results
@@ -1364,38 +1586,24 @@ struct ChatInputBar: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            // Image chips
-            if !pastedImages.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(pastedImages.indices, id: \.self) { i in
-                            if let nsImage = NSImage(data: pastedImages[i]) {
-                                ZStack(alignment: .topTrailing) {
-                                    Image(nsImage: nsImage)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: 48, height: 48)
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                                    Button {
-                                        pastedImages.remove(at: i)
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(.white)
-                                            .shadow(radius: 2)
+            ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: 0) {
+                    // Image thumbnails inside the prompt box
+                    if !pastedImages.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(pastedImages.enumerated()), id: \.element) { index, data in
+                                    ChatImageThumbnail(imageData: data) {
+                                        pastedImages.remove(at: index)
                                     }
-                                    .buttonStyle(.plain)
-                                    .offset(x: 4, y: -4)
                                 }
                             }
+                            .padding(.horizontal, 6)
                         }
+                        .padding(.top, 6)
+                        .padding(.bottom, 4)
                     }
-                    .padding(.horizontal, 16)
-                }
-            }
 
-            ZStack(alignment: .bottomTrailing) {
                 PromptEditor(
                     text: $text,
                     font: .systemFont(ofSize: 13),
@@ -1411,7 +1619,8 @@ struct ChatInputBar: View {
                 .frame(minHeight: 24)
                 .fixedSize(horizontal: false, vertical: true)
                 // Extra bottom padding so text never overlaps the floating buttons
-                .padding(.bottom, 4)
+                .padding(.bottom, 30)
+                } // end VStack (images + editor)
 
                 HStack(alignment: .center, spacing: 12) {
                     if onQueuePrompt != nil {
@@ -1506,6 +1715,61 @@ private extension String {
     var containsMarkdown: Bool {
         contains("**") || contains("```") || contains("# ") ||
         contains("[") || contains("- ") || contains("> ")
+    }
+}
+
+// MARK: - Scroll Bottom Tracker
+
+/// Tracks whether the scroll view is at the bottom using scroll geometry.
+/// Extracted to a ViewModifier to help the Swift type-checker.
+private struct ScrollBottomTracker: ViewModifier {
+    @Binding var isAtBottom: Bool
+    @Binding var hasNewMessages: Bool
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: Bool.self, of: { geo in
+            geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 30
+        }, action: { _, newAtBottom in
+            isAtBottom = newAtBottom
+            if newAtBottom { hasNewMessages = false }
+        })
+    }
+}
+
+// MARK: - Chat Image Thumbnail
+
+private struct ChatImageThumbnail: View {
+    let imageData: Data
+    let onRemove: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        if let nsImage = NSImage(data: imageData) {
+            ZStack(alignment: .topTrailing) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 2)
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4, y: -4)
+            }
+            .onHover { isHovering = $0 }
+            .popover(isPresented: $isHovering) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 300, maxHeight: 300)
+                    .padding(4)
+            }
+        }
     }
 }
 

@@ -464,7 +464,7 @@ struct ProcessManagerView: View {
     private func removeSelectedWorktrees(_ ids: Set<String>) async {
         for id in ids {
             guard let info = worktreeInfos.first(where: { $0.id == id }) else { continue }
-            try? await worktreeAdapter.removeWorktree(path: info.path, force: false)
+            try? await worktreeAdapter.removeWorktree(path: info.path, repoRoot: info.repoRoot, force: false)
         }
         selectedWorktreeIds.removeAll()
         await loadWorktrees()

@@ -2738,7 +2738,7 @@ struct ContentView: View {
         store.dispatch(.setBusy(cardId: cardId, busy: true))
         let adapter = GitWorktreeAdapter()
         do {
-            try await adapter.removeWorktree(path: worktreePath, force: true)
+            try await adapter.removeWorktree(path: worktreePath, repoRoot: card.link.projectPath, force: true)
             store.dispatch(.setBusy(cardId: cardId, busy: false))
             // If card has no session, delete it entirely — it was only a worktree
             if card.link.sessionLink == nil {

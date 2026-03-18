@@ -588,6 +588,8 @@ struct CardDetailView: View {
                 onAddQueuedPrompt(prompt)
             },
             onLoadMore: { Task { await loadMoreHistory() } },
+            onLoadAroundTurn: { turnIndex in Task { await loadAroundTurn(turnIndex) } },
+            sessionPath: card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath,
             onFork: { onFork(true) },
             onCheckpoint: { turn in
                 checkpointTurn = turn

@@ -33,20 +33,22 @@ public final class GitWorktreeAdapter: WorktreeManagerPort, @unchecked Sendable 
         return Worktree(path: worktreePath, branch: name)
     }
 
-    public func removeWorktree(path: String, force: Bool) async throws {
+    public func removeWorktree(path: String, repoRoot: String? = nil, force: Bool) async throws {
         var args = ["worktree", "remove"]
         if force { args.append("--force") }
         args.append(path)
 
-        // Derive repo root from worktree path (e.g. /repo/.claude/worktrees/name → /repo)
-        let repoRoot: String?
-        if let range = path.range(of: "/.claude/worktrees/") {
-            repoRoot = String(path[..<range.lowerBound])
+        // Use provided repoRoot, or derive from worktree path as fallback
+        let effectiveRoot: String?
+        if let repoRoot {
+            effectiveRoot = repoRoot
+        } else if let range = path.range(of: "/.claude/worktrees/") {
+            effectiveRoot = String(path[..<range.lowerBound])
         } else {
-            repoRoot = (path as NSString).deletingLastPathComponent
+            effectiveRoot = (path as NSString).deletingLastPathComponent
         }
 
-        let result = try await ShellCommand.run(gitPath, arguments: args, currentDirectory: repoRoot)
+        let result = try await ShellCommand.run(gitPath, arguments: args, currentDirectory: effectiveRoot)
         if !result.succeeded {
             throw WorktreeError.removeFailed(path: path, message: result.stderr)
         }

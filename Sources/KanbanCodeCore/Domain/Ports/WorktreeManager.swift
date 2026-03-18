@@ -9,5 +9,5 @@ public protocol WorktreeManagerPort: Sendable {
     func createWorktree(repoRoot: String, name: String) async throws -> Worktree
 
     /// Remove a worktree.
-    func removeWorktree(path: String, force: Bool) async throws
+    func removeWorktree(path: String, repoRoot: String?, force: Bool) async throws
 }
