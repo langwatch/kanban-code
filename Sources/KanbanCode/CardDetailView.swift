@@ -754,7 +754,7 @@ struct CardDetailView: View {
 
                 // Content area: either ChatView or TerminalContainerView (not both)
                 ZStack {
-                    if preferChatView {
+                    if preferChatView && isClaudeTabSelected {
                         // Chat mode: no terminal mounted (saves CPU, fixes scroll)
                         chatViewForCurrentCard
                         .task(id: "chatview-\(card.id)") {
@@ -817,8 +817,9 @@ struct CardDetailView: View {
                             .transition(.opacity)
                     }
                 }
-                // Floating chat/terminal toggle
+                // Floating chat/terminal toggle — only on assistant tab
                 .overlay(alignment: .topTrailing) {
+                    if isClaudeTabSelected {
                     Button {
                         preferChatView.toggle()
                         if !preferChatView {
@@ -834,6 +835,7 @@ struct CardDetailView: View {
                     .glassEffect(.regular, in: .circle)
                     .help(preferChatView ? "Show terminal" : "Show chat")
                     .padding(10)
+                    }
                 }
             }
             .onChange(of: card.link.tmuxLink) {
@@ -939,6 +941,8 @@ struct CardDetailView: View {
                 Text(tabLabel)
                     .font(.app(.caption))
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     .padding(.vertical, 2)
 
                 Spacer()
