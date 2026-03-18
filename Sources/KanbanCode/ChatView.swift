@@ -41,33 +41,23 @@ struct ChatView: View {
     }
 
     @State private var pendingMessageTime: Date = .distantPast
+    @State private var userTurnCountAtSend: Int = 0
 
     private func clearPendingIfMatched() {
-        guard let pending = pendingMessage else { return }
+        guard pendingMessage != nil else { return }
 
-        // Timeout: clear pending after 30s regardless — prevents infinite pending state
-        if Date.now.timeIntervalSince(pendingMessageTime) > 30 {
+        // If any new user turn arrived since we sent, dismiss the pending message.
+        // This is simple and reliable — we can only have one pending at a time,
+        // and a new user turn in the transcript means our message was received.
+        let currentUserCount = turns.filter { $0.role == "user" }.count
+        if currentUserCount > userTurnCountAtSend {
             pendingMessage = nil
             busyGraceUntil = Date.now.addingTimeInterval(8)
             return
         }
 
-        let prefix = String(pending.prefix(40))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prefix.isEmpty else { pendingMessage = nil; return }
-
-        // Check text blocks AND textPreview for the match
-        let hasMatch = turns.contains { turn in
-            guard turn.role == "user" else { return false }
-            // Check textPreview (always set, even for tool_result turns)
-            if turn.textPreview.contains(prefix) { return true }
-            // Check content blocks
-            return turn.contentBlocks.contains {
-                if case .text = $0.kind { return $0.text.contains(prefix) }
-                return false
-            }
-        }
-        if hasMatch {
+        // Timeout: clear pending after 30s regardless
+        if Date.now.timeIntervalSince(pendingMessageTime) > 30 {
             pendingMessage = nil
             busyGraceUntil = Date.now.addingTimeInterval(8)
         }
@@ -142,6 +132,7 @@ struct ChatView: View {
                 onSend: { text, images in
                     pendingMessage = text
                     pendingMessageTime = .now
+                    userTurnCountAtSend = turns.filter { $0.role == "user" }.count
                     onSendPrompt(text, images)
                 },
                 onQueuePrompt: onQueuePrompt,
