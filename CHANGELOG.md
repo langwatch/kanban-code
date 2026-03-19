@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.22](https://github.com/langwatch/kanban-code/compare/v0.1.21...v0.1.22) (2026-03-19)
+
+
+### Bug Fixes
+
+* crash in SystemTray.terminate, pending message dedup, lazy image preview ([edc211d](https://github.com/langwatch/kanban-code/commit/edc211d227440aa9a1449edc2879f100978e9df2))
+* cross-bubble text selection and line spacing in chat mode ([45417f6](https://github.com/langwatch/kanban-code/commit/45417f6812c5f939d5a2a633853c629dd617cdae))
+* dismiss pending message when any new user turn arrives ([191a230](https://github.com/langwatch/kanban-code/commit/191a2307422e93788b442f233ca64a752a292a12))
+* image hover loading reads line incrementally instead of entire file ([56e413c](https://github.com/langwatch/kanban-code/commit/56e413c6b901c6d664ed9e453d8ac8ebfca85932))
+* lid-closed pushover skips when external display active, cross-bubble text selection ([b1fd8f4](https://github.com/langwatch/kanban-code/commit/b1fd8f4e9c32f80724699939f89add082b127da0))
+
+
+### Performance
+
+* passthrough mode for tmux copy-mode, less aggressive frame dropping ([6cf7829](https://github.com/langwatch/kanban-code/commit/6cf78291e20e0507111e2eb932d565cb34daac7d))
+
 ## [0.1.21](https://github.com/langwatch/kanban-code/compare/v0.1.20...v0.1.21) (2026-03-18)
 
 
