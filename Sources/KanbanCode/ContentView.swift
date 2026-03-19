@@ -384,6 +384,9 @@ struct ContentView: View {
                     shouldFocusTerminal = true
                 }
             },
+            onRenameCard: { cardId, name in
+                store.dispatch(.renameCard(cardId: cardId, name: name))
+            },
             inSidebar: true
         )
     }

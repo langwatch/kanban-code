@@ -177,6 +177,8 @@ private struct ChatMessageList: View {
 
     @State private var isAtBottom = true
     @State private var isNearTop = false
+    @State private var isLoadingMore = false
+    @State private var firstVisibleLineNumber: Int?
     @State private var hasNewMessages = false
     @State private var lastSeenCount = 0
     @State private var lastSeenLineNumber: Int?
@@ -207,7 +209,7 @@ private struct ChatMessageList: View {
                 VStack(spacing: 0) {
                     // Spacer for search bar
                     if showSearch { Color.clear.frame(height: 36) }
-                    if hasMoreTurns {
+                    if hasMoreTurns && !turns.isEmpty {
                         ProgressView()
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
@@ -270,6 +272,7 @@ private struct ChatMessageList: View {
                                 onSendAnswer: onSendAnswer,
                                 highlightText: activeQuery.isEmpty ? nil : activeQuery,
                                 isCurrentMatch: currentMatchTurnIndex == turn.index,
+                                sessionPath: sessionPath,
                                 expandedTextBlocks: $expandedTextBlocks
                             )
                             .equatable()
@@ -313,14 +316,8 @@ private struct ChatMessageList: View {
             .modifier(ScrollBottomTracker(isAtBottom: $isAtBottom, hasNewMessages: $hasNewMessages))
             .modifier(ScrollNearTopDetector(isNearTop: $isNearTop))
             .onChange(of: isNearTop) {
-                if isNearTop && hasMoreTurns && activeQuery.isEmpty {
-                    onLoadMore?()
-                }
-            }
-            .onChange(of: turns.count) {
-                // After load-more prepends turns, if still near top, load more again
-                if isNearTop && hasMoreTurns && activeQuery.isEmpty {
-                    onLoadMore?()
+                if isNearTop && hasMoreTurns && !isLoadingMore && activeQuery.isEmpty {
+                    triggerLoadMore()
                 }
             }
             .onChange(of: turns.last?.lineNumber) {
@@ -373,14 +370,22 @@ private struct ChatMessageList: View {
                 // Distinguish card change (last also changed) from load-more (last unchanged)
                 let lastUnchanged = turns.last?.lineNumber == lastSeenLineNumber
                 if lastUnchanged {
-                    // Load-more prepended earlier turns — don't scroll to bottom
+                    // Load-more prepended earlier turns — scroll to preserved position
                     lastSeenCount = turns.count
+                    if let anchor = firstVisibleLineNumber {
+                        proxy.scrollTo(anchor, anchor: .top)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            proxy.scrollTo(anchor, anchor: .top)
+                        }
+                    }
+                    isLoadingMore = false
                 } else {
                     // Card changed — reset and scroll
                     lastSeenLineNumber = nil
                     lastSeenCount = 0
                     isAtBottom = true
                     hasNewMessages = false
+                    isLoadingMore = false
                     scrollToBottom(proxy: proxy, delay: true)
                 }
             }
@@ -612,6 +617,14 @@ private struct ChatMessageList: View {
         }
     }
 
+    private func triggerLoadMore() {
+        guard !isLoadingMore else { return }
+        isLoadingMore = true
+        // Remember the first visible turn so we can scroll back to it after prepend
+        firstVisibleLineNumber = turns.first?.lineNumber
+        onLoadMore?()
+    }
+
     private func scrollToBottom(proxy: ScrollViewProxy, delay: Bool) {
         if delay {
             Task { @MainActor in
@@ -754,7 +767,8 @@ struct ChatMessageView: View, Equatable {
         lhs.isLastInGroup == rhs.isLastInGroup &&
         lhs.assistant == rhs.assistant &&
         lhs.highlightText == rhs.highlightText &&
-        lhs.isCurrentMatch == rhs.isCurrentMatch
+        lhs.isCurrentMatch == rhs.isCurrentMatch &&
+        lhs.sessionPath == rhs.sessionPath
     }
 
     private var hasContent: Bool {
@@ -1854,22 +1868,28 @@ private struct LazyImageChip: View {
         .background(Color.primary.opacity(0.06), in: Capsule())
         .foregroundStyle(.secondary)
         .onHover { hovering in
-            isHovering = hovering
             if hovering && loadedImage == nil && !isLoading {
                 loadImage()
+            }
+            if hovering && loadedImage != nil {
+                isHovering = true
+            }
+            if !hovering {
+                isHovering = false
             }
         }
         .popover(isPresented: $isHovering) {
             if let loadedImage {
+                let size = loadedImage.size
+                let scale = min(1.0, min(600.0 / max(size.width, 1), 400.0 / max(size.height, 1)))
                 Image(nsImage: loadedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 400, maxHeight: 400)
+                    .frame(
+                        width: size.width * scale,
+                        height: size.height * scale
+                    )
                     .padding(4)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 100, height: 60)
             }
         }
     }
@@ -1881,6 +1901,8 @@ private struct LazyImageChip: View {
             let images = try? await TranscriptReader.loadImagesAtOffset(from: path, byteOffset: byteOffset)
             if let data = images?[safe: index], let nsImage = NSImage(data: data) {
                 loadedImage = nsImage
+                // Show popover now that image is ready (if mouse is still over the chip)
+                isHovering = true
             }
             isLoading = false
         }

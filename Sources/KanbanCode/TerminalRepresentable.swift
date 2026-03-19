@@ -22,14 +22,17 @@ final class BatchedTerminalView: LocalProcessTerminalView {
     // During heavy streaming, data arrives continuously — we keep resetting the
     // timer until there's a gap, then process only the tail.
     private static let batchDelay: DispatchTimeInterval = .milliseconds(32)  // 2 frames
-    private static let chunkSize = 4 * 1024
-    private static let maxBlockSeconds: Double = 0.004  // 4ms budget
+    private static let chunkSize = 16 * 1024
+    private static let maxBlockSeconds: Double = 0.008  // 8ms budget
 
-    // Only keep the last 8KB — one screen repaint is enough for final state.
-    private static let keepBytes = 8 * 1024
+    // Keep the last 32KB — enough for a full screen repaint with escape sequences.
+    private static let keepBytes = 32 * 1024
 
     private var pendingOffset = 0
     private var scheduledFlushTime: UInt64 = 0
+
+    /// When true, disables aggressive frame dropping (copy-mode, interactive scrolling).
+    var passthroughMode = false
 
     // Stats collection
     private var statsReceiveCount = 0
@@ -54,15 +57,14 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         }
 
         // Reset the flush timer on every data arrival.
-        // This means we only process when data STOPS flowing (or slows down).
-        // During heavy streaming, the timer keeps getting pushed forward —
-        // when it finally fires, we skip to the last 8KB and render the final state.
         let now = DispatchTime.now().uptimeNanoseconds
-        scheduledFlushTime = now + 32_000_000 // 32ms from now
+        let delay: UInt64 = passthroughMode ? 8_000_000 : 32_000_000 // 8ms or 32ms
+        scheduledFlushTime = now + delay
 
         if !flushScheduled {
             flushScheduled = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.batchDelay) { [weak self] in
+            let deadline: DispatchTimeInterval = passthroughMode ? .milliseconds(8) : Self.batchDelay
+            DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
                 self?.checkAndProcess()
             }
         }
@@ -92,10 +94,10 @@ final class BatchedTerminalView: LocalProcessTerminalView {
             return
         }
 
-        // Always skip to the tail — only the final screen state matters.
-        // Find a newline near the keep boundary to avoid mid-escape-sequence cuts.
+        // In normal mode, skip to the tail — only the final screen state matters.
+        // In passthrough mode (copy-mode), render everything for smooth scrolling.
         let backlog = pendingData.count - pendingOffset
-        if backlog > Self.keepBytes {
+        if !passthroughMode && backlog > Self.keepBytes {
             var cutPoint = pendingData.count - Self.keepBytes
             let scanLimit = min(cutPoint + 1024, pendingData.count)
             while cutPoint < scanLimit && pendingData[cutPoint] != 0x0A { cutPoint += 1 }
@@ -428,6 +430,7 @@ final class TerminalCache {
 
                 self.copyModeSessions.remove(session)
                 self.copyModeExitTime[session] = .now
+                self.terminals[session]?.passthroughMode = false
 
                 // Esc just dismisses scroll mode — don't forward it to the shell.
                 let isEscape = event.keyCode == 53
@@ -471,6 +474,7 @@ final class TerminalCache {
                 let lines = max(1, Int(abs(event.deltaY)))
                 if !inCopyMode {
                     self?.copyModeSessions.insert(session)
+                    self?.terminals[session]?.passthroughMode = true
                     Task.detached {
                         _ = try? await ShellCommand.run(tmux, arguments: ["copy-mode", "-t", session])
                         _ = try? await ShellCommand.run(tmux, arguments: ["send-keys", "-t", session, "-X", "-N", "\(lines)", "cursor-up"])
@@ -496,6 +500,7 @@ final class TerminalCache {
                         let shouldExit = await MainActor.run {
                             guard TerminalCache.shared.copyModeSessions.remove(session) != nil else { return false }
                             TerminalCache.shared.copyModeExitTime[session] = .now
+                            TerminalCache.shared.terminals[session]?.passthroughMode = false
                             return true
                         }
                         if shouldExit {

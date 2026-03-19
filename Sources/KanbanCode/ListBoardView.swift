@@ -23,6 +23,7 @@ struct ListBoardView: View {
     var canDropCard: (KanbanCodeCard, KanbanCodeColumn) -> Bool = { _, _ in true }
     var onNewTask: () -> Void = {}
     var onCardClicked: (String) -> Void = { _ in }
+    var onRenameCard: (String, String) -> Void = { _, _ in } // (cardId, newName)
     var inSidebar: Bool = false
     @AppStorage("listBoardCollapsedColumns") private var collapsedColumnsRaw = ""
 
@@ -94,6 +95,7 @@ struct ListBoardView: View {
             onReorderCard: { cardId, targetCardId, above in
                 store.dispatch(.reorderCard(cardId: cardId, targetCardId: targetCardId, above: above))
             },
+            onRenameCard: onRenameCard,
             onToggleCollapse: { toggleCollapse(for: section.column) }
         )
     }
@@ -196,6 +198,7 @@ private struct ListBoardSectionView: View {
     let onMoveCard: (String, KanbanCodeColumn) -> Void
     let canDropCard: (KanbanCodeCard, KanbanCodeColumn) -> Bool
     let onReorderCard: (String, String, Bool) -> Void
+    let onRenameCard: (String, String) -> Void
     let onToggleCollapse: () -> Void
 
     @State private var isTargeted = false
@@ -302,7 +305,8 @@ private struct ListBoardSectionView: View {
                         onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) },
                         onMoveToFolder: { onMoveToFolder(card.id) },
                         enabledAssistants: enabledAssistants,
-                        onMigrateAssistant: { target in onMigrateAssistant(card.id, target) }
+                        onMigrateAssistant: { target in onMigrateAssistant(card.id, target) },
+                        onRename: { name in onRenameCard(card.id, name) }
                     )
                     .opacity(dragState.draggingCard?.id == card.id ? 0.65 : 1)
                     .background(
@@ -491,6 +495,9 @@ private struct ListCardRowView: View {
     var onMoveToFolder: () -> Void = {}
     var enabledAssistants: [CodingAssistant] = []
     var onMigrateAssistant: (CodingAssistant) -> Void = { _ in }
+    var onRename: (String) -> Void = { _ in } // newName
+    @State private var showRename = false
+    @State private var renameText = ""
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -570,6 +577,12 @@ private struct ListCardRowView: View {
             Button(action: onFork) {
                 Label("Fork Session", systemImage: "arrow.branch")
             }
+            Button {
+                renameText = card.link.name ?? card.displayTitle
+                showRename = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
             Button(action: onCopyResumeCmd) {
                 Label("Copy Resume Command", systemImage: "doc.on.doc")
             }
@@ -644,6 +657,13 @@ private struct ListCardRowView: View {
                 Button(action: onArchive) {
                     Label("Archive", systemImage: "archivebox")
                 }
+            }
+        }
+        .alert("Rename", isPresented: $showRename) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                onRename(renameText.trimmingCharacters(in: .whitespacesAndNewlines))
             }
         }
     }
