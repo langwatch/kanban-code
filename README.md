@@ -296,7 +296,7 @@ The spec files in `spec/` document every feature and edge case in detail.
 
 ![This is an incredible vision.](assets/claude-testimonial.webp)
 
-— Claude Code, when first seeing Kanban Code's [initial prompt](./initial-prompt.md)
+— Claude Code, after first seeing Kanban Code's [initial prompt](./initial-prompt.md)
 
 ## License
 
