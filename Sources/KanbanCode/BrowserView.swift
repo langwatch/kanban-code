@@ -1,6 +1,41 @@
 import SwiftUI
 import WebKit
 
+// MARK: - Eruda DevTools script helpers
+
+/// Pure-logic helper for generating Eruda injection and toggle scripts.
+/// Testable without WKWebView — see BrowserDevToolsTests.
+enum ErudaScript {
+    /// JS that initializes Eruda (hidden by default). Injected after the library source.
+    static let initializationScript: String = """
+        if (typeof eruda !== 'undefined' && !eruda._isInit) {
+            eruda.init({ useShadowDom: true, autoScale: true });
+            eruda.hide();
+        }
+        """
+
+    /// JS to show the Eruda panel.
+    static let showScript = "if (typeof eruda !== 'undefined') { eruda.show(); }"
+
+    /// JS to hide the Eruda panel.
+    static let hideScript = "if (typeof eruda !== 'undefined') { eruda.hide(); }"
+
+    /// Returns show or hide script based on current visibility.
+    static func toggleScript(currentlyVisible: Bool) -> String {
+        currentlyVisible ? hideScript : showScript
+    }
+
+    /// Loads eruda.min.js from bundle and appends the initialization call.
+    /// Throws if the resource is missing.
+    static func fullInjectionScript() throws -> String {
+        guard let url = Bundle.appResources.url(forResource: "eruda.min", withExtension: "js") else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let library = try String(contentsOf: url, encoding: .utf8)
+        return library + "\n" + initializationScript
+    }
+}
+
 // MARK: - Browser tab model
 
 /// Holds a WKWebView and publishes navigation state for SwiftUI.
@@ -16,6 +51,7 @@ final class BrowserTab: ObservableObject {
     @Published var canGoForward: Bool = false
     @Published var isLoading: Bool = false
     @Published var estimatedProgress: Double = 0
+    @Published var isDevToolsVisible: Bool = false
 
     private var observers: [NSKeyValueObservation] = []
     private var navigationCoordinator: BrowserNavigationCoordinator?
@@ -27,6 +63,16 @@ final class BrowserTab: ObservableObject {
         config.websiteDataStore = .default()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+
+        // Inject Eruda devtools script into every page load
+        if let erudaJS = try? ErudaScript.fullInjectionScript() {
+            let userScript = WKUserScript(
+                source: erudaJS,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: false
+            )
+            config.userContentController.addUserScript(userScript)
+        }
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.allowsBackForwardNavigationGestures = true
@@ -94,6 +140,13 @@ final class BrowserTab: ObservableObject {
 
     func reload() { webView.reload() }
     func stopLoading() { webView.stopLoading() }
+
+    /// Toggle Eruda DevTools visibility in the web page.
+    func toggleDevTools() {
+        let script = ErudaScript.toggleScript(currentlyVisible: isDevToolsVisible)
+        webView.evaluateJavaScript(script) { _, _ in }
+        isDevToolsVisible.toggle()
+    }
 
     func navigate(to url: URL) {
         webView.load(URLRequest(url: url))
@@ -231,6 +284,13 @@ struct BrowserContentView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+
+                Button(action: { tab.toggleDevTools() }) {
+                    Image(systemName: "hammer.fill")
+                        .foregroundStyle(tab.isDevToolsVisible ? Color.accentColor : .secondary)
+                }
+                .help("Toggle DevTools")
+                .keyboardShortcut("i", modifiers: [.command, .option])
             }
             .buttonStyle(.borderless)
             .font(.app(.caption))
