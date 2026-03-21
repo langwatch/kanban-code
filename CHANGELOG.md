@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.23](https://github.com/langwatch/kanban-code/compare/v0.1.22...v0.1.23) (2026-03-21)
+
+
+### Features
+
+* read plan approval options from tmux pane instead of hardcoding ([14555f3](https://github.com/langwatch/kanban-code/commit/14555f37a57b3b55a99371b818fe2e317b4f941b))
+
+
+### Bug Fixes
+
+* browser tab scroll not intercepted by terminal scroll handler ([2929e65](https://github.com/langwatch/kanban-code/commit/2929e6570637d9f8cfb6f1932d63d614ecbfa419))
+* clear browser tab selection when new shell tab is created ([d8a3445](https://github.com/langwatch/kanban-code/commit/d8a34458aaef9f370535eb6f19bd30c9ab22b844))
+* Cmd+1-9 tab switching includes browser tabs, fix image popover ([3c26593](https://github.com/langwatch/kanban-code/commit/3c2659300932a92535d4c6aa3a3bf357a0167443))
+* Cmd+W closes browser tabs too, not just shell tabs ([07ace67](https://github.com/langwatch/kanban-code/commit/07ace670be091a881b410269668cbde19a68d69e))
+* dismiss stale pending message on chat view appear ([5756342](https://github.com/langwatch/kanban-code/commit/5756342eafbff5d4741717052f52928d1bb06e58))
+* resolve unused variable and return statement warnings ([f72a470](https://github.com/langwatch/kanban-code/commit/f72a470023e16c65fe8ffc2d24ad70eee37e2bd6))
+
+
+### Documentation
+
+* add productive-mode screenshot, project's goal and testimonials to README ([ce34c28](https://github.com/langwatch/kanban-code/commit/ce34c2807380b4fdf790a9ca2c17fa2ad5c54fe4))
+
 ## [0.1.22](https://github.com/langwatch/kanban-code/compare/v0.1.21...v0.1.22) (2026-03-19)
 
 
