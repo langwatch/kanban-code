@@ -31,6 +31,8 @@ struct SearchOverlay: View {
     var initialQuery: String = ""
     var deepSearchTrigger: Bool = false
 
+    /// Snapshot of cards at open time — avoids re-rendering when store reconciles.
+    @State private var snapshotCards: [KanbanCodeCard] = []
     @State private var query = ""
     @State private var searchResults: [SearchResultItem] = []
     @State private var filteredCards: [KanbanCodeCard] = []
@@ -59,7 +61,7 @@ struct SearchOverlay: View {
     private var resultsSection: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 4) {
                     if isCommandMode {
                         commandsView
                     } else if query.isEmpty {
@@ -98,6 +100,7 @@ struct SearchOverlay: View {
     }
 
     private func handleAppear() {
+        snapshotCards = cards  // Freeze cards at open time
         isSearchFocused = true
         if !initialQuery.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -152,7 +155,7 @@ struct SearchOverlay: View {
     }
 
     private var recentSortedCards: [KanbanCodeCard] {
-        cards.sorted {
+        snapshotCards.sorted {
             let t0 = $0.link.lastOpenedAt ?? $0.link.lastActivity ?? $0.link.updatedAt
             let t1 = $1.link.lastOpenedAt ?? $1.link.lastActivity ?? $1.link.updatedAt
             return t0 > t1
@@ -345,7 +348,7 @@ struct SearchOverlay: View {
         guard !terms.isEmpty else { return [] }
         let activeColumns: Set<KanbanCodeColumn> = [.inProgress, .waiting, .inReview, .done]
 
-        return cards
+        return snapshotCards
             .compactMap { card -> (KanbanCodeCard, Double)? in
                 let title = card.displayTitle.lowercased()
                 let project = (card.projectName ?? "").lowercased()
@@ -471,7 +474,7 @@ struct SearchOverlay: View {
         }
 
         let currentQuery = query
-        let currentCards = cards
+        let currentCards = snapshotCards
         let t0 = ContinuousClock.now
         KanbanCodeLog.info("search", "deepSearch START query='\(currentQuery)' cards=\(currentCards.count)")
 

@@ -367,13 +367,19 @@ struct PlanModeExitCard: View {
             }
             // Poll the pane until we find options (they may appear with a slight delay)
             let tmux = TmuxAdapter()
-            for _ in 0..<10 {
+            for attempt in 0..<10 {
                 if let output = try? await tmux.capturePane(sessionName: session) {
                     let opts = PaneOutputParser.parsePlanOptions(from: output)
                     if !opts.isEmpty {
                         paneOptions = opts
                         didLoadOptions = true
+                        KanbanCodeLog.info("plan", "Found \(opts.count) plan options on attempt \(attempt + 1)")
                         return
+                    }
+                    if attempt == 9 {
+                        // Log last 500 chars of pane output for debugging
+                        let tail = String(output.suffix(500))
+                        KanbanCodeLog.info("plan", "No plan options found after 10 attempts. Pane tail: \(tail)")
                     }
                 }
                 try? await Task.sleep(for: .milliseconds(500))

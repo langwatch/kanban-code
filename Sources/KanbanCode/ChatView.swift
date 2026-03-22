@@ -298,6 +298,7 @@ private struct ChatMessageList: View {
                                 highlightText: activeQuery.isEmpty ? nil : activeQuery,
                                 isCurrentMatch: currentMatchTurnIndex == turn.index,
                                 sessionPath: sessionPath,
+                                tmuxSessionName: tmuxSessionName,
                                 hasLastToolCall: turn.lineNumber == lastToolCallLN,
                                 expandedTextBlocks: $expandedTextBlocks
                             )
