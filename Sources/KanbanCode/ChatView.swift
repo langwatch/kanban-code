@@ -231,6 +231,8 @@ private struct ChatMessageList: View {
                     let groupInfo = Self.computeGroupInfo(turns: turns)
                     let toolResults = Self.computeToolResults(turns: turns)
                     let turnGroups = Self.groupConsecutiveToolTurns(turns: turns)
+                    // Last visible turn = last turn in the last group (groups skip invisible turns)
+                    let lastVisibleLN = turnGroups.last?.last?.lineNumber
 
                     ForEach(turnGroups.indices, id: \.self) { gi in
                         let group = turnGroups[gi]
@@ -256,7 +258,7 @@ private struct ChatMessageList: View {
                                         isCurrentMatch: currentMatchTurnIndex == toolTurns[ti].index,
                                         sessionPath: sessionPath,
                                         tmuxSessionName: tmuxSessionName,
-                                        isLastTurn: toolTurns[ti].lineNumber == turns.last?.lineNumber,
+                                        isLastTurn: toolTurns[ti].lineNumber == lastVisibleLN,
                                         expandedTextBlocks: $expandedTextBlocks
                                     )
                                     .equatable()
@@ -287,7 +289,7 @@ private struct ChatMessageList: View {
                                 highlightText: activeQuery.isEmpty ? nil : activeQuery,
                                 isCurrentMatch: currentMatchTurnIndex == turn.index,
                                 sessionPath: sessionPath,
-                                isLastTurn: turn.lineNumber == turns.last?.lineNumber,
+                                isLastTurn: turn.lineNumber == lastVisibleLN,
                                 expandedTextBlocks: $expandedTextBlocks
                             )
                             .equatable()

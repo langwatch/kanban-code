@@ -851,7 +851,7 @@ struct CardDetailView: View {
                             startHistoryWatcher()
                         }
                     }
-                    if !preferChatView || !isClaudeTabSelected {
+                    if !preferChatView || (selectedTerminalSession != nil || selectedBrowserTabId != nil) {
                         // Terminal mode
                         TerminalContainerView(
                             sessions: allLiveSessions,
@@ -931,8 +931,8 @@ struct CardDetailView: View {
             .onChange(of: card.link.tmuxLink) {
                 let shells = shellSessions
                 if let selected = selectedTerminalSession, !shells.contains(selected) {
-                    // Selected shell was killed — go to next shell or Claude tab
-                    selectedTerminalSession = shells.first // nil if no shells left → Claude tab
+                    // Selected shell was killed — go to Claude tab (not another shell)
+                    selectedTerminalSession = nil
                 } else if shells.count > knownShellCount, let last = shells.last, knownShellCount >= 0 {
                     // New SHELL was added (not Claude resuming) — auto-switch to it
                     selectedTerminalSession = last
