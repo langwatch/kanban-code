@@ -1754,27 +1754,31 @@ struct CardDetailView: View {
         pathPollTask = Task {
             let tmux = TerminalCache.tmuxPath
             while !Task.isCancelled {
-                // Query panes for extra shell sessions (base-sh1, base-sh2, ...).
-                // Skip the primary session — it always shows the assistant name.
-                if let result = try? await ShellCommand.run(
-                    tmux, arguments: [
-                        "list-panes", "-a",
-                        "-F", "#{session_name}\t#{pane_current_path}",
-                        "-f", "#{m:\(baseName)-*,#{session_name}}"
-                    ]
-                ) {
-                    let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                    for line in output.components(separatedBy: "\n") where !line.isEmpty {
-                        let parts = line.components(separatedBy: "\t")
-                        guard parts.count >= 2 else { continue }
-                        let session = parts[0]
-                        let folder = (parts[1] as NSString).lastPathComponent
-                        if !folder.isEmpty && folder != terminalPaths[session] {
-                            terminalPaths[session] = folder
+                // Only poll when a shell tab is selected — no need to update
+                // folder names for tabs that aren't visible.
+                if selectedTerminalSession != nil {
+                    // Query panes for extra shell sessions (base-sh1, base-sh2, ...).
+                    // Skip the primary session — it always shows the assistant name.
+                    if let result = try? await ShellCommand.run(
+                        tmux, arguments: [
+                            "list-panes", "-a",
+                            "-F", "#{session_name}\t#{pane_current_path}",
+                            "-f", "#{m:\(baseName)-*,#{session_name}}"
+                        ]
+                    ) {
+                        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                        for line in output.components(separatedBy: "\n") where !line.isEmpty {
+                            let parts = line.components(separatedBy: "\t")
+                            guard parts.count >= 2 else { continue }
+                            let session = parts[0]
+                            let folder = (parts[1] as NSString).lastPathComponent
+                            if !folder.isEmpty && folder != terminalPaths[session] {
+                                terminalPaths[session] = folder
+                            }
                         }
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(1500))
+                try? await Task.sleep(for: .seconds(3))
             }
         }
     }

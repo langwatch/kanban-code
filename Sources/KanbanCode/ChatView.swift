@@ -424,10 +424,14 @@ private struct ChatMessageList: View {
                     if newBusy != isBusyFromPane && (newBusy || pendingMessage == nil) {
                         isBusyFromPane = newBusy
                     }
-                    // Wait up to 5s, but re-check immediately if pollKick changes
+                    // Adaptive polling: fast when busy or just sent a message, slow when idle.
+                    // - Busy/pending: 250ms for responsive "thinking" indicator
+                    // - Idle: 3s to save CPU
+                    let interval: Int = (isBusyFromPane || pendingMessage != nil) ? 250 : 3000
                     let kickBefore = pollKick
-                    for _ in 0..<50 {
-                        try? await Task.sleep(for: .milliseconds(100))
+                    let steps = max(1, interval / 250)
+                    for _ in 0..<steps {
+                        try? await Task.sleep(for: .milliseconds(250))
                         if pollKick != kickBefore || Task.isCancelled { break }
                     }
                 }

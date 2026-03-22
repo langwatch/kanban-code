@@ -940,7 +940,9 @@ struct ContentView: View {
             }
             .task(id: "refresh-timer") {
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(3))
+                    // Adaptive: 3s when active, 10s when backgrounded
+                    let interval: Duration = store.appIsActive ? .seconds(3) : .seconds(10)
+                    try? await Task.sleep(for: interval)
                     guard !Task.isCancelled else { break }
                     await store.reconcile()
                     systemTray.update()
