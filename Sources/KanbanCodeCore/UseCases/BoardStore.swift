@@ -80,7 +80,17 @@ public final class AppState: @unchecked Sendable {
     /// Cached cards array — rebuilt by BoardStore after each dispatch.
     public internal(set) var cards: [KanbanCodeCard] = []
 
-    /// Rebuild the cached cards array from current state.
+    /// Cards visible after project filtering — cached for independent observation.
+    public internal(set) var filteredCards: [KanbanCodeCard] = []
+
+    /// Pre-computed cards per column — each column is independently tracked by @Observable,
+    /// so only columns with actual changes trigger SwiftUI re-renders.
+    public internal(set) var cardsByColumn: [KanbanCodeColumn: [KanbanCodeCard]] = [:]
+
+    /// Visible columns — cached for independent observation.
+    public internal(set) var visibleColumns: [KanbanCodeColumn] = []
+
+    /// Rebuild all cached card arrays from current state.
     /// Only assigns when the result differs — prevents unnecessary SwiftUI re-renders.
     func rebuildCards() {
         let newCards = links.values.map { link in
@@ -90,42 +100,42 @@ public final class AppState: @unchecked Sendable {
             return KanbanCodeCard(link: link, session: session, activityState: activity, isBusy: busyCards.contains(link.id), isRateLimited: rateLimited)
         }
         if newCards != cards { cards = newCards }
-    }
 
-    /// Cards visible after project filtering.
-    public var filteredCards: [KanbanCodeCard] {
-        cards.filter { cardMatchesProjectFilter($0) }
-    }
+        let newFiltered = cards.filter { cardMatchesProjectFilter($0) }
+        if newFiltered != filteredCards { filteredCards = newFiltered }
 
-    /// Cards for a specific column, sorted by manual sortOrder then last activity (newest first).
-    public func cards(in column: KanbanCodeColumn) -> [KanbanCodeCard] {
-        filteredCards.filter { $0.column == column }
-            .sorted {
-                switch ($0.link.sortOrder, $1.link.sortOrder) {
-                case (let a?, let b?): return a < b
-                case (_?, nil): return true
-                case (nil, _?): return false
-                case (nil, nil):
-                    let t0 = $0.link.lastActivity ?? $0.link.updatedAt
-                    let t1 = $1.link.lastActivity ?? $1.link.updatedAt
-                    if t0 != t1 { return t0 > t1 }
-                    return $0.id < $1.id
+        // Per-column sorted arrays
+        var newByColumn: [KanbanCodeColumn: [KanbanCodeCard]] = [:]
+        for column in KanbanCodeColumn.allCases {
+            newByColumn[column] = newFiltered.filter { $0.column == column }
+                .sorted {
+                    switch ($0.link.sortOrder, $1.link.sortOrder) {
+                    case (let a?, let b?): return a < b
+                    case (_?, nil): return true
+                    case (nil, _?): return false
+                    case (nil, nil):
+                        let t0 = $0.link.lastActivity ?? $0.link.updatedAt
+                        let t1 = $1.link.lastActivity ?? $1.link.updatedAt
+                        if t0 != t1 { return t0 > t1 }
+                        return $0.id < $1.id
+                    }
                 }
-            }
+        }
+        if newByColumn != cardsByColumn { cardsByColumn = newByColumn }
+
+        let alwaysVisible: [KanbanCodeColumn] = [.backlog, .inProgress, .waiting, .inReview, .done]
+        var newVisible = alwaysVisible
+        if (newByColumn[.allSessions]?.count ?? 0) > 0 { newVisible.append(.allSessions) }
+        if newVisible != visibleColumns { visibleColumns = newVisible }
+    }
+
+    /// Cards for a specific column (pre-computed, cached).
+    public func cards(in column: KanbanCodeColumn) -> [KanbanCodeCard] {
+        cardsByColumn[column] ?? []
     }
 
     public func cardCount(in column: KanbanCodeColumn) -> Int {
-        filteredCards.filter { $0.column == column }.count
-    }
-
-    /// The visible columns (non-empty or always-shown).
-    public var visibleColumns: [KanbanCodeColumn] {
-        let alwaysVisible: [KanbanCodeColumn] = [.backlog, .inProgress, .waiting, .inReview, .done]
-        var result = alwaysVisible
-        if cardCount(in: .allSessions) > 0 {
-            result.append(.allSessions)
-        }
-        return result
+        cardsByColumn[column]?.count ?? 0
     }
 
     private func cardMatchesProjectFilter(_ card: KanbanCodeCard) -> Bool {
@@ -1223,7 +1233,7 @@ public enum Reducer {
                     changed = true
                 }
             }
-            state.activityMap = activityMap
+            if state.activityMap != activityMap { state.activityMap = activityMap }
             return changed ? [.persistLinks(Array(state.links.values))] : []
 
         // MARK: Busy State
