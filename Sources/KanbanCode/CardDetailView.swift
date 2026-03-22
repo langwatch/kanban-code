@@ -242,9 +242,15 @@ struct CardDetailView: View {
             if !oldId.isEmpty {
                 cardTabMemory[oldId] = (terminal: selectedTerminalSession, browser: selectedBrowserTabId)
             }
-            // Restore tab selection for the new card (synchronous — no flicker)
+            // Restore tab selection for the new card (synchronous — no flicker).
+            // Validate that the saved session still exists — if not, fall back to Claude tab.
             let saved = cardTabMemory[card.id]
-            selectedTerminalSession = saved?.terminal
+            let validShells = card.link.tmuxLink?.extraSessions ?? []
+            if let savedTerminal = saved?.terminal, validShells.contains(savedTerminal) {
+                selectedTerminalSession = savedTerminal
+            } else {
+                selectedTerminalSession = nil
+            }
             selectedBrowserTabId = saved?.browser
             // Clear stale state synchronously so the new card never renders
             // with the previous card's turns or chat state.
