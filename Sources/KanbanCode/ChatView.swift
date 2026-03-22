@@ -65,6 +65,15 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if turns.isEmpty && isLoading {
+                VStack {
+                    Spacer()
+                    ProgressView()
+                        .controlSize(.regular)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             ZStack(alignment: .bottom) {
                 ChatMessageList(
                     turns: turns,
@@ -247,6 +256,7 @@ private struct ChatMessageList: View {
                                         isCurrentMatch: currentMatchTurnIndex == toolTurns[ti].index,
                                         sessionPath: sessionPath,
                                         tmuxSessionName: tmuxSessionName,
+                                        isLastTurn: toolTurns[ti].lineNumber == turns.last?.lineNumber,
                                         expandedTextBlocks: $expandedTextBlocks
                                     )
                                     .equatable()
@@ -277,6 +287,7 @@ private struct ChatMessageList: View {
                                 highlightText: activeQuery.isEmpty ? nil : activeQuery,
                                 isCurrentMatch: currentMatchTurnIndex == turn.index,
                                 sessionPath: sessionPath,
+                                isLastTurn: turn.lineNumber == turns.last?.lineNumber,
                                 expandedTextBlocks: $expandedTextBlocks
                             )
                             .equatable()
@@ -759,6 +770,7 @@ struct ChatMessageView: View, Equatable {
     var isCurrentMatch: Bool = false
     var sessionPath: String?
     var tmuxSessionName: String?
+    var isLastTurn: Bool = false
     @Binding var expandedTextBlocks: Set<String>
     @State private var isHovered = false
 
@@ -773,7 +785,8 @@ struct ChatMessageView: View, Equatable {
         lhs.assistant == rhs.assistant &&
         lhs.highlightText == rhs.highlightText &&
         lhs.isCurrentMatch == rhs.isCurrentMatch &&
-        lhs.sessionPath == rhs.sessionPath
+        lhs.sessionPath == rhs.sessionPath &&
+        lhs.isLastTurn == rhs.isLastTurn
     }
 
     private var hasContent: Bool {
@@ -939,12 +952,14 @@ struct ChatMessageView: View, Equatable {
                         ForEach(group.items.indices, id: \.self) { ti in
                             if ti > 0 { Divider().padding(.leading, 8) }
                             if case .toolUse(let name, _, _) = group.items[ti].paired.block.kind {
+                                let isLast = isLastTurn && gi == groups.count - 1 && ti == group.items.count - 1
                                 ToolCallCard(
                                     name: name,
                                     displayText: group.items[ti].paired.block.text,
                                     rawInputJSON: group.items[ti].paired.block.rawInputJSON,
                                     resultText: group.items[ti].paired.resultBlock?.text,
-                                    showBackground: false
+                                    showBackground: false,
+                                    autoExpand: isLast
                                 )
                             }
                         }
@@ -957,14 +972,15 @@ struct ChatMessageView: View, Equatable {
                         }
                     }
                 } else {
-                    blockView(group.items[0].paired)
+                    let isLast = gi == groups.count - 1
+                    blockView(group.items[0].paired, isLastBlock: isLast)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func blockView(_ paired: PairedBlock) -> some View {
+    private func blockView(_ paired: PairedBlock, isLastBlock: Bool = false) -> some View {
         switch paired.block.kind {
         case .text:
             let trimmed = paired.block.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -977,7 +993,8 @@ struct ChatMessageView: View, Equatable {
                 displayText: paired.block.text,
                 rawInputJSON: paired.block.rawInputJSON,
                 resultText: paired.resultBlock?.text,
-                showBackground: !suppressBackground
+                showBackground: !suppressBackground,
+                autoExpand: isLastTurn && isLastBlock
             )
         case .toolResult:
             EmptyView()
@@ -1187,10 +1204,13 @@ struct ToolCallCard: View, Equatable {
     let rawInputJSON: Data?
     var resultText: String?
     var showBackground: Bool = true
+    /// When true, the card starts expanded. Resets to false when user manually toggles.
+    var autoExpand: Bool = false
     @State private var isExpanded = false
+    @State private var userToggled = false
 
     nonisolated static func == (lhs: ToolCallCard, rhs: ToolCallCard) -> Bool {
-        lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON
+        lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON && lhs.autoExpand == rhs.autoExpand
     }
 
     private func parseSummary() -> (action: String, target: String, additions: Int?, deletions: Int?, replaceAll: Bool) {
@@ -1245,6 +1265,7 @@ struct ToolCallCard: View, Equatable {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 isExpanded.toggle()
+                userToggled = true
                 if isExpanded { NotificationCenter.default.post(name: .chatCardExpanded, object: nil) }
             } label: {
                 HStack(spacing: 5) {
@@ -1285,6 +1306,16 @@ struct ToolCallCard: View, Equatable {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.primary.opacity(0.04))
                     .padding(.leading, -8)
+            }
+        }
+        .onChange(of: autoExpand) {
+            if !userToggled {
+                isExpanded = autoExpand
+            }
+        }
+        .onAppear {
+            if autoExpand && !userToggled {
+                isExpanded = true
             }
         }
     }

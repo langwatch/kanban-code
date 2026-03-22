@@ -320,6 +320,16 @@ struct CardDetailView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .sheet(isPresented: Binding(
+            get: { showAddLink && isExpanded },
+            set: { if !$0 { showAddLink = false } }
+        )) {
+            AddLinkPopover(
+                onAddBranch: { onAddBranch($0); showAddLink = false },
+                onAddIssue: { onAddIssue($0); showAddLink = false },
+                onAddPR: { onAddPR($0); showAddLink = false }
+            )
+        }
         .task(id: card.id) {
             actionsMenuProvider?.builder = { [self] in buildActionsMenu() }
             turns = []
@@ -840,7 +850,8 @@ struct CardDetailView: View {
                             await loadHistory()
                             startHistoryWatcher()
                         }
-                    } else {
+                    }
+                    if !preferChatView || !isClaudeTabSelected {
                         // Terminal mode
                         TerminalContainerView(
                             sessions: allLiveSessions,
