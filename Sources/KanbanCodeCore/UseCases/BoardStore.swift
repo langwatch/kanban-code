@@ -24,7 +24,11 @@ public enum DialogState: Equatable, Sendable {
 
 /// Single source of truth for the entire board.
 /// All mutations go through the Reducer — no direct writes.
-public struct AppState: Sendable {
+/// @Observable gives SwiftUI fine-grained per-property tracking:
+/// views reading `state.cards` only re-render when `cards` changes,
+/// not when `state.error` or other unrelated fields change.
+@Observable
+public final class AppState: @unchecked Sendable {
     public var links: [String: Link] = [:]                     // cardId → Link
     public var sessions: [String: Session] = [:]               // sessionId → Session
     public var activityMap: [String: ActivityState] = [:]       // sessionId → activity
@@ -77,13 +81,15 @@ public struct AppState: Sendable {
     public internal(set) var cards: [KanbanCodeCard] = []
 
     /// Rebuild the cached cards array from current state.
-    mutating func rebuildCards() {
-        cards = links.values.map { link in
+    /// Only assigns when the result differs — prevents unnecessary SwiftUI re-renders.
+    func rebuildCards() {
+        let newCards = links.values.map { link in
             let session = link.sessionLink.flatMap { sessions[$0.sessionId] }
             let activity = link.sessionLink.flatMap { activityMap[$0.sessionId] }
             let rateLimited = link.projectPath.map { rateLimitedRepos.contains($0) } ?? false
             return KanbanCodeCard(link: link, session: session, activityState: activity, isBusy: busyCards.contains(link.id), isRateLimited: rateLimited)
         }
+        if newCards != cards { cards = newCards }
     }
 
     /// Cards visible after project filtering.
@@ -1025,18 +1031,22 @@ public enum Reducer {
         // MARK: Background Reconciliation
 
         case .reconciled(let result):
-            state.tmuxSessions = result.tmuxSessions
-            state.configuredProjects = result.configuredProjects
-            state.excludedPaths = result.excludedPaths
-            state.discoveredProjectPaths = result.discoveredProjectPaths
-            state.globalRemoteSettings = result.globalRemoteSettings
+            // Equality-gated assignments — only trigger @Observable change notifications
+            // for fields that actually differ. Prevents unnecessary SwiftUI re-renders
+            // when reconciliation produces the same data as the previous cycle.
+            if state.tmuxSessions != result.tmuxSessions { state.tmuxSessions = result.tmuxSessions }
+            if state.configuredProjects != result.configuredProjects { state.configuredProjects = result.configuredProjects }
+            if state.excludedPaths != result.excludedPaths { state.excludedPaths = result.excludedPaths }
+            if state.discoveredProjectPaths != result.discoveredProjectPaths { state.discoveredProjectPaths = result.discoveredProjectPaths }
+            if state.globalRemoteSettings != result.globalRemoteSettings { state.globalRemoteSettings = result.globalRemoteSettings }
 
             // Rebuild sessions map
-            state.sessions = Dictionary(
+            let newSessions = Dictionary(
                 result.sessions.map { ($0.id, $0) },
                 uniquingKeysWith: { a, _ in a }
             )
-            state.activityMap = result.activityMap
+            if state.sessions != newSessions { state.sessions = newSessions }
+            if state.activityMap != result.activityMap { state.activityMap = result.activityMap }
 
             // Merge reconciled links using last-writer-wins on updatedAt.
             // Reconciliation takes seconds of async work. Any in-memory changes
@@ -1169,9 +1179,9 @@ public enum Reducer {
                 mergedLinks[id] = link
             }
 
-            state.links = mergedLinks
+            if state.links != mergedLinks { state.links = mergedLinks }
             state.lastRefresh = Date()
-            state.isLoading = false
+            if state.isLoading { state.isLoading = false }
 
             // Validate selected card still exists
             if let selectedId = state.selectedCardId,
@@ -1308,13 +1318,24 @@ public final class BoardStore: @unchecked Sendable {
         self.sessionStore = sessionStore
     }
 
+    /// Actions that only toggle UI state and don't affect card data — skip rebuildCards().
+    private static func needsRebuild(_ action: Action) -> Bool {
+        switch action {
+        case .setPaletteOpen, .setDetailExpanded, .setPromptEditorFocused,
+             .showDialog, .dismissDialog, .setError, .setLoading, .setIsRefreshingBacklog:
+            return false
+        default:
+            return true
+        }
+    }
+
     /// Dispatch an action. Reducer runs synchronously, effects run async.
     public func dispatch(_ action: Action) {
         #if DEBUG
         let t = CACurrentMediaTime()
         #endif
         let effects = Reducer.reduce(state: &state, action: action)
-        state.rebuildCards()
+        if Self.needsRebuild(action) { state.rebuildCards() }
         #if DEBUG
         let totalMs = (CACurrentMediaTime() - t) * 1000
         if totalMs > 4 {

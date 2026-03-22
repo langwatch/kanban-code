@@ -1,7 +1,7 @@
 import Foundation
 
 /// A discovered coding assistant session, extracted from session files.
-public struct Session: Identifiable, Sendable {
+public struct Session: Identifiable, Sendable, Equatable {
     public let id: String // sessionId (UUID string)
     public var name: String? // Custom name or auto-generated summary
     public var firstPrompt: String? // First user message text

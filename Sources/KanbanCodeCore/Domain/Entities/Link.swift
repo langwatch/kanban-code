@@ -149,7 +149,7 @@ public enum CardLabel: String, Sendable {
 
 /// The coordination record — a card on the board with independently optional typed links.
 /// Stored in ~/.kanban-code/links.json.
-public struct Link: Identifiable, Codable, Sendable {
+public struct Link: Identifiable, Codable, Sendable, Equatable {
     public let id: String
 
     // Card-level properties
@@ -474,7 +474,7 @@ public struct Link: Identifiable, Codable, Sendable {
 }
 
 /// Tracks which fields have been manually set by the user.
-public struct ManualOverrides: Codable, Sendable {
+public struct ManualOverrides: Codable, Sendable, Equatable {
     public var worktreePath: Bool
     public var tmuxSession: Bool
     public var name: Bool

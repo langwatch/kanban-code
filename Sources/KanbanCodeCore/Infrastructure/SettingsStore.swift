@@ -167,7 +167,7 @@ public struct NotificationSettings: Codable, Sendable {
     }
 }
 
-public struct RemoteSettings: Codable, Sendable {
+public struct RemoteSettings: Codable, Sendable, Equatable {
     public var host: String
     public var remotePath: String
     public var localPath: String

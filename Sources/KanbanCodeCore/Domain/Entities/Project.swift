@@ -1,7 +1,7 @@
 import Foundation
 
 /// A configured project (repository) that Kanban tracks.
-public struct Project: Identifiable, Codable, Sendable {
+public struct Project: Identifiable, Codable, Sendable, Equatable {
     public var id: String { path }
     public let path: String // Project directory (where Claude runs)
     public var name: String // Display name

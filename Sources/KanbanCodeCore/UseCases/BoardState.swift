@@ -1,7 +1,7 @@
 import Foundation
 
 /// A card on the Kanban board, combining Link + Session data for display.
-public struct KanbanCodeCard: Identifiable, Sendable {
+public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
     public let id: String // link.id — stable across refreshes
     public let link: Link
     public let session: Session?
