@@ -554,6 +554,7 @@ struct ChatInputBar: View {
     @FocusState private var isFocused: Bool
     @State private var showQueueDialog = false
     @State private var historyIndex: Int = -1 // -1 = current draft, 0 = last sent, 1 = second to last...
+    @State private var savedDraft: String = "" // Draft text before history recall
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -587,7 +588,8 @@ struct ChatInputBar: View {
                     identity: cardId,
                     onSubmit: send,
                     onCmdSubmit: onQueuePrompt != nil ? { showQueueDialog = true } : nil,
-                    onUpArrowAtStart: { recallHistory() },
+                    onUpArrowAtStart: { recallHistoryUp() },
+                    onDownArrowAtStart: { recallHistoryDown() },
                     onImagePaste: { data in pastedImages.append(data) }
                 )
                 .focused($isFocused)
@@ -673,13 +675,24 @@ struct ChatInputBar: View {
         text = ""
         pastedImages = []
         historyIndex = -1
+        savedDraft = ""
     }
 
-    private func recallHistory() {
+    private func recallHistoryUp() -> String? {
         let nextIndex = historyIndex + 1
-        guard nextIndex < userMessageHistory.count else { return }
+        guard nextIndex < userMessageHistory.count else { return nil }
+        if historyIndex == -1 { savedDraft = text }
         historyIndex = nextIndex
-        text = userMessageHistory[nextIndex]
+        return userMessageHistory[nextIndex]
+    }
+
+    private func recallHistoryDown() -> String? {
+        guard historyIndex >= 0 else { return nil }
+        historyIndex -= 1
+        if historyIndex == -1 {
+            return savedDraft
+        }
+        return userMessageHistory[historyIndex]
     }
 }
 

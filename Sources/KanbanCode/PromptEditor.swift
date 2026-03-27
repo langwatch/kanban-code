@@ -12,7 +12,8 @@ struct PromptEditor: NSViewRepresentable {
     var identity: String = ""
     var onSubmit: () -> Void = {}
     var onCmdSubmit: (() -> Void)?
-    var onUpArrowAtStart: (() -> Void)?
+    var onUpArrowAtStart: (() -> String?)?
+    var onDownArrowAtStart: (() -> String?)?
     var onImagePaste: ((Data) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -45,6 +46,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.onCmdSubmit = onCmdSubmit
         textView.onUpArrowAtStart = onUpArrowAtStart
+        textView.onDownArrowAtStart = onDownArrowAtStart
         textView.onImagePaste = onImagePaste
         textView.placeholderString = placeholder
 
@@ -73,6 +75,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.onCmdSubmit = onCmdSubmit
         textView.onUpArrowAtStart = onUpArrowAtStart
+        textView.onDownArrowAtStart = onDownArrowAtStart
         textView.onImagePaste = onImagePaste
         textView.font = font
 
@@ -155,7 +158,8 @@ final class PromptEditorScrollView: NSScrollView {
 final class SubmitTextView: NSTextView {
     var onSubmit: () -> Void = {}
     var onCmdSubmit: (() -> Void)?
-    var onUpArrowAtStart: (() -> Void)?
+    var onUpArrowAtStart: (() -> String?)?
+    var onDownArrowAtStart: (() -> String?)?
     var onImagePaste: ((Data) -> Void)?
     var placeholderString: String = ""
 
@@ -215,7 +219,20 @@ final class SubmitTextView: NSTextView {
         if event.keyCode == 126 { // up arrow
             let cursorAtStart = selectedRange().location == 0 && selectedRange().length == 0
             if (cursorAtStart || string.isEmpty), let handler = onUpArrowAtStart {
-                handler()
+                if let replacement = handler() {
+                    replaceTextAndCursorToStart(replacement)
+                }
+                return
+            }
+        }
+
+        // Down arrow at start of text → recall next (more recent) message
+        if event.keyCode == 125 { // down arrow
+            let cursorAtStart = selectedRange().location == 0 && selectedRange().length == 0
+            if (cursorAtStart || string.isEmpty), let handler = onDownArrowAtStart {
+                if let replacement = handler() {
+                    replaceTextAndCursorToStart(replacement)
+                }
                 return
             }
         }
@@ -235,6 +252,17 @@ final class SubmitTextView: NSTextView {
             if tryPasteImage() { return true }
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Replace text, sync the binding, and move cursor to start.
+    private func replaceTextAndCursorToStart(_ newText: String) {
+        string = newText
+        setSelectedRange(NSRange(location: 0, length: 0))
+        if let delegate = self.delegate as? PromptEditor.Coordinator {
+            delegate.parent.text = newText
+        }
+        (enclosingScrollView as? PromptEditorScrollView)?.recalcIntrinsicHeight()
+        needsDisplay = true
     }
 
     /// Try to extract an image from the clipboard. Returns true if an image was handled.

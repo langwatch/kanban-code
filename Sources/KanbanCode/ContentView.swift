@@ -1920,6 +1920,7 @@ struct ContentView: View {
         let project = Project(path: path)
         Task {
             try? await settingsStore.addProject(project)
+            await store.loadSettingsAndCache()
             await store.reconcile()
             setSelectedProject(path)
         }
@@ -1938,6 +1939,7 @@ struct ContentView: View {
         let project = Project(path: path)
         Task {
             try? await settingsStore.addProject(project)
+            await store.loadSettingsAndCache()
             await store.reconcile()
             setSelectedProject(path)
         }
@@ -1947,6 +1949,7 @@ struct ContentView: View {
         let project = Project(path: path)
         Task {
             try? await settingsStore.addProject(project)
+            await store.loadSettingsAndCache()
             await store.reconcile()
             setSelectedProject(path)
         }
@@ -1975,6 +1978,7 @@ struct ContentView: View {
                     let project = Project(path: path)
                     Task {
                         try? await settingsStore.addProject(project)
+                        await store.loadSettingsAndCache()
                         await store.reconcile()
                         setSelectedProject(path)
                     }

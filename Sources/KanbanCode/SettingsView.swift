@@ -871,6 +871,7 @@ struct ProjectsSettingsView: View {
                             try? await settingsStore.updateProject(updated)
                         }
                         await loadSettings()
+                        NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
                     }
                     isEditingNew = false
                     editingProject = nil
@@ -945,6 +946,7 @@ struct ProjectsSettingsView: View {
         Task {
             try? await settingsStore.addProject(project)
             await loadSettings()
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
             // Open edit sheet so user can configure name/filter
             editingProject = projects.first(where: { $0.path == path })
         }
@@ -954,6 +956,7 @@ struct ProjectsSettingsView: View {
         Task {
             try? await settingsStore.removeProject(path: project.path)
             await loadSettings()
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
         }
     }
 

@@ -378,6 +378,39 @@ struct ChatMessageView: View, Equatable {
     // MARK: Actions (below message, visible on hover)
 
     @State private var showCopyCheck = false
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoFormatterNoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, h:mm a"
+        return f
+    }()
+
+    private var formattedTimestamp: String? {
+        guard let ts = turn.timestamp else { return nil }
+        guard let date = Self.isoFormatter.date(from: ts)
+                ?? Self.isoFormatterNoFrac.date(from: ts) else { return nil }
+        if Calendar.current.isDateInToday(date) {
+            return Self.timeFormatter.string(from: date)
+        } else {
+            return Self.dateTimeFormatter.string(from: date)
+        }
+    }
+
     private var messageActions: some View {
         HStack(spacing: 4) {
             // Copy
@@ -405,6 +438,12 @@ struct ChatMessageView: View, Equatable {
                 ActionButton(icon: "arrow.branch", help: "Fork") {
                     onFork?()
                 }
+            }
+
+            if let ts = formattedTimestamp {
+                Text(ts)
+                    .font(.app(.caption2))
+                    .foregroundStyle(.secondary)
             }
         }
         .opacity(isHovered ? 1 : 0)
