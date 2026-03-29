@@ -328,6 +328,17 @@ private struct ListBoardSectionView: View {
                                 lineWidth: 2
                             )
                     )
+                    .overlay(alignment: .top) {
+                        if dragState.mergeTargetId == card.id {
+                            Text("Merge")
+                                .font(.app(.caption2).bold())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color.orange, in: Capsule())
+                                .offset(y: -10)
+                        }
+                    }
                     .background(
                         GeometryReader { geo in
                             Color.clear.preference(
