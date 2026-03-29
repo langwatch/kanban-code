@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.24](https://github.com/langwatch/kanban-code/compare/v0.1.23...v0.1.24) (2026-03-29)
+
+
+### Features
+
+* message timestamps on hover, prompt history cycling, fix project cache ([ba27a13](https://github.com/langwatch/kanban-code/commit/ba27a137d53249830346da33dd86e71270b13fb3))
+
+
+### Bug Fixes
+
+* absorb shell tab sessions into parent card instead of creating duplicates ([4d01339](https://github.com/langwatch/kanban-code/commit/4d01339a704ba4ba2c5e3afbd170994ad46f7ab8))
+* activity detection after Stop, merge assistant turns, show thinking blocks ([545f297](https://github.com/langwatch/kanban-code/commit/545f29789b77874d74ec6d7a774684202bafe9ec))
+* merge duplicate sessionId cards from launch race condition ([5fc19ab](https://github.com/langwatch/kanban-code/commit/5fc19abbd91df2f322e06523d843d5b446120223))
+* PR number thousand separator, restore Unlink PR in toolbar menu ([55d82f3](https://github.com/langwatch/kanban-code/commit/55d82f3cba81b896db655e7a79b484e4392a595f))
+* rename action not working from context menus ([c6d3ae0](https://github.com/langwatch/kanban-code/commit/c6d3ae0de90854f194a25e5b8f8eac88ac071611))
+* search overlay invisible items, render markdown tables in chat ([9c31561](https://github.com/langwatch/kanban-code/commit/9c3156154688187f84fc06dc5e2377e200d053da))
+
+
+### Performance
+
+* fix search overlay slowness from VStack, scroll to top on query change ([72f5420](https://github.com/langwatch/kanban-code/commit/72f5420b09113fd4b19f1fdfab38779299c991df))
+
+
+### Refactoring
+
+* unify all card context menus into shared CardActionsMenu ([ac6233d](https://github.com/langwatch/kanban-code/commit/ac6233d5f83f5b5299fd5474bf46fd3ab84e048d))
+
 ## [0.1.23](https://github.com/langwatch/kanban-code/compare/v0.1.22...v0.1.23) (2026-03-22)
 
 
