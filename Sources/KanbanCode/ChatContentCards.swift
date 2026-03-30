@@ -744,8 +744,8 @@ struct ContextDonutView: View {
         .onHover { isHovering = $0 }
         .popover(isPresented: $isHovering, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                let total = usage.totalInputTokens + usage.totalOutputTokens
-                Text("\(String(format: "%.1f", usage.usedPercentage))% · \(formatTokens(total)) / \(formatTokens(usage.contextWindowSize)) context used")
+                let currentTokens = Int(usage.usedPercentage / 100.0 * Double(usage.contextWindowSize))
+                Text("\(String(format: "%.1f", usage.usedPercentage))% · \(formatTokens(currentTokens)) / \(formatTokens(usage.contextWindowSize)) context used")
                     .fontWeight(.medium)
                 if let model = usage.model, !model.isEmpty {
                     Text(model)
