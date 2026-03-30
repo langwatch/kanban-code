@@ -73,6 +73,7 @@ struct ContentView: View {
     @State var isDroppingImage = false
     @State var addFromPathText = ""
     @State var renamingCardId: String?
+    @State var pendingTerminalSession: String?
     @State var launchConfig: LaunchConfig?
     @State var syncStatuses: [String: SyncStatus] = [:]
     @State var isSyncRefreshing = false
@@ -456,6 +457,7 @@ struct ContentView: View {
             card: card,
             sessionStore: assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore,
             selectedTab: $detailTab,
+            pendingTerminalSession: $pendingTerminalSession,
             onResume: {
                 if card.link.sessionLink != nil {
                     resumeCard(cardId: card.id)
@@ -760,8 +762,10 @@ struct ContentView: View {
                 ProcessManagerView(
                     store: store,
                     isPresented: $showProcessManager,
-                    onSelectCard: { cardId in
+                    onSelectCard: { cardId, terminalSession in
                         store.dispatch(.selectCard(cardId: cardId))
+                        pendingTerminalSession = terminalSession
+                        shouldFocusTerminal = true
                     }
                 )
             }

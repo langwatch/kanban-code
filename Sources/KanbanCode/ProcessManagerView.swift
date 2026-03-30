@@ -24,7 +24,8 @@ struct WorktreeInfo: Identifiable {
 struct ProcessManagerView: View {
     let store: BoardStore
     @Binding var isPresented: Bool
-    var onSelectCard: (String) -> Void = { _ in }
+    /// Navigate to card, optionally opening a specific terminal tab
+    var onSelectCard: (_ cardId: String, _ terminalSession: String?) -> Void = { _, _ in }
 
     enum Tab: String, CaseIterable {
         case tmux = "Tmux"
@@ -165,27 +166,46 @@ struct ProcessManagerView: View {
                     }
                 }
             }
-            .width(min: 150, ideal: 200)
+            .width(min: 150, ideal: 180)
+
+            TableColumn("Tab") { session in
+                let info = tabInfo(for: session.name)
+                if let label = info.label {
+                    Text(label)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                } else if let role = info.role {
+                    Text(role)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .width(min: 60, ideal: 90)
 
             TableColumn("Path") { session in
                 Text(abbreviatePath(session.path))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .width(min: 100, ideal: 150)
+            .width(min: 100, ideal: 130)
 
             TableColumn("Card") { session in
-                if let (cardId, cardTitle) = cardForTmux(session.name) {
+                let info = tabInfo(for: session.name)
+                if let cardId = info.cardId {
                     Button {
-                        onSelectCard(cardId)
+                        onSelectCard(cardId, info.isExtra ? session.name : nil)
                         isPresented = false
                     } label: {
-                        Text(cardTitle)
-                            .foregroundStyle(.blue)
-                            .lineLimit(1)
+                        HStack(spacing: 2) {
+                            Text(info.cardTitle ?? "")
+                                .lineLimit(1)
+                            Image(systemName: "arrow.forward.circle.fill")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.blue)
                     }
                     .buttonStyle(.plain)
-                    .help("Go to card")
+                    .help("Go to card\(info.isExtra ? " (open this tab)" : "")")
                 }
             }
             .width(min: 80, ideal: 140)
@@ -239,12 +259,16 @@ struct ProcessManagerView: View {
             TableColumn("Card") { process in
                 if let cardId = process.cardId, let title = process.cardTitle {
                     Button {
-                        onSelectCard(cardId)
+                        onSelectCard(cardId, nil)
                         isPresented = false
                     } label: {
-                        Text(title)
-                            .foregroundStyle(.blue)
-                            .lineLimit(1)
+                        HStack(spacing: 2) {
+                            Text(title)
+                                .lineLimit(1)
+                            Image(systemName: "arrow.forward.circle.fill")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.blue)
                     }
                     .buttonStyle(.plain)
                     .help("Go to card")
@@ -387,12 +411,46 @@ struct ProcessManagerView: View {
 
     // MARK: - Card Matching
 
-    private func cardForTmux(_ sessionName: String) -> (String, String)? {
+    private struct TmuxTabInfo {
+        var cardId: String?
+        var cardTitle: String?
+        var label: String?   // User-assigned tab name
+        var role: String?    // "Claude", "Shell", etc.
+        var isExtra: Bool = false
+    }
+
+    private func tabInfo(for sessionName: String) -> TmuxTabInfo {
         for card in store.state.cards {
-            if let tmux = card.link.tmuxLink,
-               tmux.allSessionNames.contains(sessionName) {
-                return (card.id, card.displayTitle)
+            guard let tmux = card.link.tmuxLink else { continue }
+            if tmux.sessionName == sessionName {
+                // Primary session
+                let label = tmux.tabNames?[sessionName]
+                return TmuxTabInfo(
+                    cardId: card.id,
+                    cardTitle: card.displayTitle,
+                    label: label,
+                    role: label == nil ? card.link.effectiveAssistant.displayName : nil
+                )
             }
+            if tmux.extraSessions?.contains(sessionName) == true {
+                // Extra terminal tab
+                let label = tmux.tabNames?[sessionName]
+                return TmuxTabInfo(
+                    cardId: card.id,
+                    cardTitle: card.displayTitle,
+                    label: label,
+                    role: label == nil ? "Shell" : nil,
+                    isExtra: true
+                )
+            }
+        }
+        return TmuxTabInfo()
+    }
+
+    private func cardForTmux(_ sessionName: String) -> (String, String)? {
+        let info = tabInfo(for: sessionName)
+        if let cardId = info.cardId, let title = info.cardTitle {
+            return (cardId, title)
         }
         return nil
     }
