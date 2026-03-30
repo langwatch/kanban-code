@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.1.24](https://github.com/langwatch/kanban-code/compare/v0.1.23...v0.1.24) (2026-03-30)
+
+
+### Features
+
+* add Copy Session .jsonl Path to card actions menu ([5d32d04](https://github.com/langwatch/kanban-code/commit/5d32d040ea11569d0c0169f0e04f5fd3a339bee6))
+* context usage donut chart via Claude Code statusline ([93c4a65](https://github.com/langwatch/kanban-code/commit/93c4a656042f05cdd394ec388ab0230659375f00))
+* message timestamps on hover, prompt history cycling, fix project cache ([ba27a13](https://github.com/langwatch/kanban-code/commit/ba27a137d53249830346da33dd86e71270b13fb3))
+* show tab names in Process Manager, navigate to specific terminal tab ([09ff183](https://github.com/langwatch/kanban-code/commit/09ff183b950c94a35802d098ef3dad1ca43e9076))
+
+
+### Bug Fixes
+
+* absorb shell tab sessions into parent card instead of creating duplicates ([4d01339](https://github.com/langwatch/kanban-code/commit/4d01339a704ba4ba2c5e3afbd170994ad46f7ab8))
+* activity detection after Stop, merge assistant turns, show thinking blocks ([545f297](https://github.com/langwatch/kanban-code/commit/545f29789b77874d74ec6d7a774684202bafe9ec))
+* Add Link menu item visible in all card menus, not just expanded toolbar ([16f8595](https://github.com/langwatch/kanban-code/commit/16f8595edf7ff751ba9d1c56ec4d8db8df235e69))
+* add Merge label pill to list view drag-and-drop (matches kanban) ([70de4a1](https://github.com/langwatch/kanban-code/commit/70de4a120816c70c6a3f805775531c9c10758a9e))
+* derive current context tokens from percentage × window size ([c32a64d](https://github.com/langwatch/kanban-code/commit/c32a64d577b4bef5be96317031de65db98dd683f))
+* empty statusline output, smaller gray donut chart ([16defe6](https://github.com/langwatch/kanban-code/commit/16defe63439facf24b50d6dc2544f736df22fabc))
+* merge duplicate sessionId cards from launch race condition ([5fc19ab](https://github.com/langwatch/kanban-code/commit/5fc19abbd91df2f322e06523d843d5b446120223))
+* PR number thousand separator, restore Unlink PR in toolbar menu ([55d82f3](https://github.com/langwatch/kanban-code/commit/55d82f3cba81b896db655e7a79b484e4392a595f))
+* rename action not working from context menus ([c6d3ae0](https://github.com/langwatch/kanban-code/commit/c6d3ae0de90854f194a25e5b8f8eac88ac071611))
+* search overlay invisible items, render markdown tables in chat ([9c31561](https://github.com/langwatch/kanban-code/commit/9c3156154688187f84fc06dc5e2377e200d053da))
+* tiny ellipsis button, add card merge to list/sidebar view ([730f03f](https://github.com/langwatch/kanban-code/commit/730f03f228a9b88d216bc74f9d2efab9292e5344))
+* worktree session not matching manual card, same-column merge blocked ([8fe056a](https://github.com/langwatch/kanban-code/commit/8fe056a10e0bcbf099cdcc85e8ca09a8d9678598))
+
+
+### Performance
+
+* fix search overlay slowness from VStack, scroll to top on query change ([72f5420](https://github.com/langwatch/kanban-code/commit/72f5420b09113fd4b19f1fdfab38779299c991df))
+
+
+### Refactoring
+
+* unify all card context menus into shared CardActionsMenu ([ac6233d](https://github.com/langwatch/kanban-code/commit/ac6233d5f83f5b5299fd5474bf46fd3ab84e048d))
+
 ## [0.1.23](https://github.com/langwatch/kanban-code/compare/v0.1.22...v0.1.23) (2026-03-22)
 
 
