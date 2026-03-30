@@ -130,11 +130,6 @@ struct CardActionsMenu: View {
                 Label("Issue: #\(String(issue.number))", systemImage: "circle.circle")
             }
         }
-        if let onAddLink {
-            Button(action: onAddLink) {
-                Label("Add Link", systemImage: "plus")
-            }
-        }
         Divider()
     }
 
@@ -204,7 +199,7 @@ struct CardActionsMenu: View {
 
     @ViewBuilder
     private var linksSection: some View {
-        if !card.link.prLinks.isEmpty || card.link.issueLink != nil {
+        if !card.link.prLinks.isEmpty || card.link.issueLink != nil || onAddLink != nil {
             Divider()
             ForEach(card.link.prLinks, id: \.number) { pr in
                 Button {
@@ -220,6 +215,11 @@ struct CardActionsMenu: View {
                     }
                 } label: {
                     Label("Open Issue #\(String(issue.number))", systemImage: "arrow.up.right.square")
+                }
+            }
+            if let onAddLink {
+                Button(action: onAddLink) {
+                    Label("Add Link", systemImage: "plus")
                 }
             }
         }
