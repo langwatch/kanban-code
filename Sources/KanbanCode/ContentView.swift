@@ -74,6 +74,7 @@ struct ContentView: View {
     @State var addFromPathText = ""
     @State var renamingCardId: String?
     @State var pendingTerminalSession: String?
+    @State var showAddLinkCardId: String?
     @State var launchConfig: LaunchConfig?
     @State var syncStatuses: [String: SyncStatus] = [:]
     @State var isSyncRefreshing = false
@@ -769,6 +770,27 @@ struct ContentView: View {
                     }
                 )
             }
+            .popover(isPresented: Binding(
+                get: { showAddLinkCardId != nil },
+                set: { if !$0 { showAddLinkCardId = nil } }
+            )) {
+                if let cardId = showAddLinkCardId {
+                    AddLinkPopover(
+                        onAddBranch: { branch in
+                            store.dispatch(.addBranchToCard(cardId: cardId, branch: branch))
+                            showAddLinkCardId = nil
+                        },
+                        onAddIssue: { number in
+                            store.dispatch(.addIssueLinkToCard(cardId: cardId, issueNumber: number))
+                            showAddLinkCardId = nil
+                        },
+                        onAddPR: { number in
+                            store.dispatch(.addPRToCard(cardId: cardId, prNumber: number))
+                            showAddLinkCardId = nil
+                        }
+                    )
+                }
+            }
     }
 
     // MARK: - Global Dialog
@@ -1009,6 +1031,11 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectCard)) { notification in
                 if let cardId = notification.userInfo?["cardId"] as? String {
                     store.dispatch(.selectCard(cardId: cardId))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeAddLink)) { notification in
+                if let cardId = notification.userInfo?["cardId"] as? String {
+                    showAddLinkCardId = cardId
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSettingsChanged)) { _ in
@@ -1739,6 +1766,7 @@ struct ContentView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(cmd, forType: .string)
                 },
+                onAddLink: { showAddLinkCardId = card.id },
                 onUnlink: { linkType in store.dispatch(.unlinkFromCard(cardId: card.id, linkType: linkType)) },
                 onDiscover: {
                     Task {

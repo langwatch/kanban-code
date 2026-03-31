@@ -23,6 +23,8 @@ struct CardActionsMenu: View {
     var onRenameRequest: () -> Void = {}
     var onCopyResumeCmd: () -> Void = {}
     var onCheckpoint: (() -> Void)?
+    /// Opens the Add Link popover. When nil, posts a notification instead
+    /// (used by kanban/list menus where the sheet lives on ContentView).
     var onAddLink: (() -> Void)?
     var onUnlink: ((Action.LinkType) -> Void)?
     var onDiscover: (() -> Void)?
@@ -199,7 +201,7 @@ struct CardActionsMenu: View {
 
     @ViewBuilder
     private var linksSection: some View {
-        if !card.link.prLinks.isEmpty || card.link.issueLink != nil || onAddLink != nil {
+        Group {
             Divider()
             ForEach(card.link.prLinks, id: \.number) { pr in
                 Button {
@@ -217,10 +219,18 @@ struct CardActionsMenu: View {
                     Label("Open Issue #\(String(issue.number))", systemImage: "arrow.up.right.square")
                 }
             }
-            if let onAddLink {
-                Button(action: onAddLink) {
-                    Label("Add Link", systemImage: "plus")
+            Button {
+                if let onAddLink {
+                    onAddLink()
+                } else {
+                    NotificationCenter.default.post(
+                        name: .kanbanCodeAddLink,
+                        object: nil,
+                        userInfo: ["cardId": card.id]
+                    )
                 }
+            } label: {
+                Label("Add Link", systemImage: "plus")
             }
         }
     }

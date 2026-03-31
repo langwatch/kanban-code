@@ -1472,7 +1472,7 @@ struct CardDetailView: View {
                     checkpointMode = true
                     selectedTab = .history
                 },
-                onAddLink: isExpanded ? { showAddLink = true } : nil,
+                onAddLink: { showAddLink = true },
                 onUnlink: isExpanded ? onUnlink : nil,
                 onDiscover: onDiscover,
                 onCleanupWorktree: onCleanupWorktree,

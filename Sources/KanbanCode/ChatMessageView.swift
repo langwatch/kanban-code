@@ -307,8 +307,10 @@ struct ChatMessageView: View, Equatable {
                 Text("Show more (\(text.count / 1024)KB)")
                     .font(.app(.caption))
                     .foregroundStyle(Color.accentColor)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
         }
     }
 
