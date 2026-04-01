@@ -290,14 +290,31 @@ private struct ChatMessageList: View {
                             .padding(.vertical, 4)
                         } else {
                             let turn = group[0]
+                            // Collect all text from consecutive same-role turns for copy
+                            let groupText: String = {
+                                guard groupInfo[turn.lineNumber] == true else { return "" }
+                                var texts: [String] = []
+                                // Walk backwards from this turn to find all consecutive same-role turns
+                                if let turnIdx = turns.firstIndex(where: { $0.lineNumber == turn.lineNumber }) {
+                                    var i = turnIdx
+                                    while i >= 0 && turns[i].role == turn.role {
+                                        let t = turns[i].contentBlocks
+                                            .filter { if case .text = $0.kind { return true }; return false }
+                                            .map(\.text).joined(separator: "\n")
+                                        if !t.isEmpty { texts.insert(t, at: 0) }
+                                        i -= 1
+                                    }
+                                }
+                                return texts.joined(separator: "\n\n")
+                            }()
                             ChatMessageView(
                                 turn: turn,
                                 assistant: assistant,
                                 toolResultMap: toolResults[turn.lineNumber] ?? [:],
                                 isLastInGroup: groupInfo[turn.lineNumber] ?? true,
-                                onCopy: { text in
+                                onCopy: { _ in
                                     NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(text, forType: .string)
+                                    NSPasteboard.general.setString(groupText, forType: .string)
                                 },
                                 onFork: onFork,
                                 onCheckpoint: onCheckpoint,

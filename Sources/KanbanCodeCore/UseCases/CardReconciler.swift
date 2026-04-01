@@ -500,18 +500,17 @@ public enum CardReconciler {
             }
         }
 
-        // 4. Match by project path for cards that already have a session + extra shell tabs.
-        //    When the user runs `claude` in a card's shell tab, a new session is created
-        //    in the same project. We match it to the existing card to prevent duplicates.
+        // 4. Match by project path for cards that already have a session + active tmux.
+        //    When a new Claude session starts in a card's tmux terminal (primary or shell tab),
+        //    match it to the existing card to prevent duplicates.
         //    The card keeps its original sessionLink — we just suppress a new card.
         if let projectPath = session.projectPath {
             for (_, link) in linksById {
-                guard let tmux = link.tmuxLink,
-                      !(tmux.extraSessions ?? []).isEmpty,
+                guard link.tmuxLink != nil,
                       link.sessionLink != nil,
                       (link.projectPath == projectPath || isWorktreeUnder(sessionPath: projectPath, projectRoot: link.projectPath))
                 else { continue }
-                KanbanCodeLog.info("reconciler", "findCard: session=\(session.id.prefix(8)) matched by projectPath+extraShells → card=\(link.id.prefix(12))")
+                KanbanCodeLog.info("reconciler", "findCard: session=\(session.id.prefix(8)) matched by projectPath+tmux (existing session) → card=\(link.id.prefix(12))")
                 return link.id
             }
         }

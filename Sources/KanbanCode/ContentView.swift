@@ -1766,6 +1766,11 @@ struct ContentView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(cmd, forType: .string)
                 },
+                onCheckpoint: {
+                    detailTab = .history
+                    // CardDetailView picks up checkpointMode from its own menu
+                    // but from here we just navigate to history tab
+                },
                 onAddLink: { showAddLinkCardId = card.id },
                 onUnlink: { linkType in store.dispatch(.unlinkFromCard(cardId: card.id, linkType: linkType)) },
                 onDiscover: {

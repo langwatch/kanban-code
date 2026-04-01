@@ -1296,9 +1296,10 @@ struct CardReconcilerTests {
         #expect(result[0].sessionLink?.sessionId == "s-original", "Original session preserved")
     }
 
-    @Test("Shell tab session does NOT absorb if card has no extra shells")
-    func noExtraShellsNoAbsorb() {
-        // Card has tmuxLink but no extra sessions — the new session could be from anywhere
+    @Test("New session in same project absorbed when card has tmux (no extras needed)")
+    func sameProjectTmuxAbsorbed() {
+        // Card has tmuxLink (primary only, no extras). A new session in the same
+        // project should be absorbed — it's likely a new Claude session in the same terminal.
         let manualCard = Link(
             name: "My task",
             projectPath: "/project",
@@ -1316,7 +1317,31 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [manualCard], snapshot: snapshot)
-        #expect(result.count == 2, "Without extra shells, new session creates a new card")
+        #expect(result.count == 1, "New session in same project absorbed into tmux card")
+        #expect(result[0].id == manualCard.id)
+        #expect(result[0].sessionLink?.sessionId == "s-original", "Original session preserved")
+    }
+
+    @Test("New session in DIFFERENT project NOT absorbed (tmux)")
+    func differentProjectTmuxNotAbsorbed() {
+        let card = Link(
+            name: "Task A",
+            projectPath: "/project-a",
+            column: .inProgress,
+            source: .manual,
+            sessionLink: SessionLink(sessionId: "s1", sessionPath: "/p/s1.jsonl"),
+            tmuxLink: TmuxLink(sessionName: "proj-a-card1")
+        )
+
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [
+                Session(id: "s1", projectPath: "/project-a", messageCount: 10, modifiedTime: .now, jsonlPath: "/p/s1.jsonl"),
+                Session(id: "s-other", projectPath: "/project-b", messageCount: 2, modifiedTime: .now, jsonlPath: "/p/s-other.jsonl"),
+            ]
+        )
+
+        let result = CardReconciler.reconcile(existing: [card], snapshot: snapshot)
+        #expect(result.count == 2, "Different project = different card")
     }
 
     @Test("Shell tab session in worktree project is absorbed")
