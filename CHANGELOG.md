@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.25](https://github.com/langwatch/kanban-code/compare/v0.1.24...v0.1.25) (2026-04-03)
+
+
+### Features
+
+* add `kanban` CLI and centralize shortcut display strings ([8a7420b](https://github.com/langwatch/kanban-code/commit/8a7420bbaa90601fbdf61c6c25381b0a17fe702a))
+
+
+### Bug Fixes
+
+* absorb new sessions by project+tmux, copy all grouped messages, add checkpoint ([6aeb023](https://github.com/langwatch/kanban-code/commit/6aeb023d7fdb76936bd99da01dbd43469319d33f))
+* Add Link always visible, Show more clickable, notification-based Add Link ([d099da6](https://github.com/langwatch/kanban-code/commit/d099da687b0a23f25a9918f45627b5a73abd19c0))
+
+
+### Performance
+
+* virtualize card list in expanded sections ([df8e920](https://github.com/langwatch/kanban-code/commit/df8e9207b48137c1caa0b39f6a92d06160a3d4c0))
+
 ## [0.1.24](https://github.com/langwatch/kanban-code/compare/v0.1.23...v0.1.24) (2026-03-30)
 
 
