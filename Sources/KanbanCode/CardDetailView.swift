@@ -362,7 +362,7 @@ struct CardDetailView: View {
                 // Otherwise wait for tmuxLink to appear (handled below)
             }
         }
-        .onChange(of: card.link.tmuxLink?.sessionName) {
+        .onChange(of: card.link.tmuxLink?.sessionName as String?) {
             if focusTerminal && card.link.tmuxLink != nil {
                 selectedTab = .terminal
                 terminalGrabFocus = true
