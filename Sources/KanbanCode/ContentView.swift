@@ -677,7 +677,14 @@ struct ContentView: View {
                     ImageDropZone(isTargeted: $isDroppingImage) { imageData in
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setData(imageData, forType: .png)
-                        Task { try? await self.tmuxAdapter.sendBracketedPaste(to: sessionName) }
+                        Task {
+                            try? await self.tmuxAdapter.sendBracketedPaste(to: sessionName)
+                            // Send Enter after image paste so Claude processes it
+                            let _ = try? await ShellCommand.run(
+                                ShellCommand.findExecutable("tmux") ?? "tmux",
+                                arguments: ["send-keys", "-t", sessionName, "Enter"]
+                            )
+                        }
                     }
                     .allowsHitTesting(isDroppingImage)
                 } else {

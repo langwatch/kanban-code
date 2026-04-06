@@ -30,6 +30,7 @@ struct ChatMessageView: View, Equatable {
     nonisolated static func == (lhs: ChatMessageView, rhs: ChatMessageView) -> Bool {
         lhs.turn.lineNumber == rhs.turn.lineNumber &&
         lhs.turn.contentBlocks.count == rhs.turn.contentBlocks.count &&
+        lhs.blocksFingerprint == rhs.blocksFingerprint &&
         lhs.isLastInGroup == rhs.isLastInGroup &&
         lhs.assistant == rhs.assistant &&
         lhs.highlightText == rhs.highlightText &&
@@ -38,22 +39,16 @@ struct ChatMessageView: View, Equatable {
         lhs.hasLastToolCall == rhs.hasLastToolCall
     }
 
-    private var hasContent: Bool {
-        if turn.role == "user" {
-            // User turns: only show if they have visible text (not just tool_result blocks)
-            return turn.contentBlocks.contains {
-                if case .text = $0.kind { return !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                return false
-            }
+    /// Lightweight fingerprint of block content for equatable checks.
+    /// Compares text lengths and block kinds — catches any content change
+    /// without the cost of full string comparison.
+    private var blocksFingerprint: Int {
+        var h = 0
+        for block in turn.contentBlocks {
+            h = h &* 31 &+ block.text.count
+            h = h &* 31 &+ String(describing: block.kind).hashValue
         }
-        return turn.contentBlocks.contains { block in
-            switch block.kind {
-            case .text: return !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .toolUse, .agentCall, .planModeExit, .askUserQuestion, .planModeEnter: return true
-            case .toolResult: return false
-            case .thinking: return !block.text.isEmpty
-            }
-        }
+        return h
     }
 
     /// Text content of this turn for copy.
@@ -70,41 +65,57 @@ struct ChatMessageView: View, Equatable {
         }
     }
 
-    var body: some View {
-        if hasContent {
-            if isTaskNotification {
-                // Task notification — centered system-style
-                HStack {
-                    Spacer(minLength: 0)
-                    let text = turn.contentBlocks.first { if case .text = $0.kind { return true }; return false }?.text ?? ""
-                    Text(text)
-                        .font(.app(.caption))
-                        .foregroundStyle(.tertiary)
-                        .italic()
-                    Spacer(minLength: 0)
-                }
-            } else if suppressBackground {
-                // Inside a grouped tool box — no centering wrapper, no frame constraint
-                assistantMessage
-            } else {
-                HStack {
-                    Spacer(minLength: 0)
-                    VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
-                        if turn.role == "user" {
-                            userBubble
-                        } else {
-                            assistantMessage
-                        }
+    /// Whether this turn has visible content (used by ChatView to skip empty turns in ForEach).
+    static func turnHasContent(_ turn: ConversationTurn) -> Bool {
+        if turn.role == "user" {
+            return turn.contentBlocks.contains {
+                if case .text = $0.kind { return !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                return false
+            }
+        }
+        return turn.contentBlocks.contains { block in
+            switch block.kind {
+            case .text: return !block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .toolUse, .agentCall, .planModeExit, .askUserQuestion, .planModeEnter: return true
+            case .toolResult: return false
+            case .thinking: return !block.text.isEmpty
+            }
+        }
+    }
 
-                        if isLastInGroup {
-                            messageActions
-                        }
+    var body: some View {
+        if isTaskNotification {
+            // Task notification — centered system-style
+            HStack {
+                Spacer(minLength: 0)
+                let text = turn.contentBlocks.first { if case .text = $0.kind { return true }; return false }?.text ?? ""
+                Text(text)
+                    .font(.app(.caption))
+                    .foregroundStyle(.tertiary)
+                    .italic()
+                Spacer(minLength: 0)
+            }
+        } else if suppressBackground {
+            // Inside a grouped tool box — no centering wrapper, no frame constraint
+            assistantMessage
+        } else {
+            HStack {
+                Spacer(minLength: 0)
+                VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
+                    if turn.role == "user" {
+                        userBubble
+                    } else {
+                        assistantMessage
                     }
-                    .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
-                    .contentShape(Rectangle())
-                    .onHover { isHovered = $0 }
-                    Spacer(minLength: 0)
+
+                    if isLastInGroup {
+                        messageActions
+                    }
                 }
+                .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
+                .contentShape(Rectangle())
+                .onHover { isHovered = $0 }
+                Spacer(minLength: 0)
             }
         }
     }

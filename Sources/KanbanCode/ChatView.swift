@@ -49,9 +49,8 @@ struct ChatView: View {
     private func clearPendingIfMatched() {
         guard pendingMessage != nil else { return }
 
-        // If any new user turn arrived since we sent, dismiss the pending message.
-        // This is simple and reliable — we can only have one pending at a time,
-        // and a new user turn in the transcript means our message was received.
+        // Clear immediately when user turn was echoed (message received by Claude).
+        // No delay — the pending bubble and real message must not coexist.
         let currentUserCount = turns.filter { $0.role == "user" }.count
         if currentUserCount > userTurnCountAtSend {
             pendingMessage = nil
@@ -206,6 +205,10 @@ private struct ChatMessageList: View {
     @State private var lastSeenCount = 0
     @State private var lastSeenLineNumber: Int?
     @State private var expandedTextBlocks: Set<String> = []
+    /// Whether to auto-scroll on new content. Only set to false when we show
+    /// the "New messages" badge (user deliberately scrolled away). Reset to true
+    /// when user sends a message, clicks "New messages", or scrolls back to bottom.
+    @State private var shouldAutoScroll = true
 
     // Search state
     @State private var showSearch = false
@@ -292,7 +295,7 @@ private struct ChatMessageList: View {
                             )
                             .frame(maxWidth: chatMaxWidth, alignment: .leading)
                             .padding(.vertical, 4)
-                        } else {
+                        } else if ChatMessageView.turnHasContent(group[0]) {
                             let turn = group[0]
                             // Collect all text from consecutive same-role turns for copy
                             let groupText: String = {
@@ -341,19 +344,20 @@ private struct ChatMessageList: View {
                     if let pending = pendingMessage {
                         HStack {
                             Spacer(minLength: 0)
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .opacity(0.5)
-                                Text(pending)
-                                    .font(.app(.body))
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 10)
-                                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
-                                    .opacity(0.5)
-                            }
-                            .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
-                            .frame(maxWidth: chatMaxWidth, alignment: .trailing)
+                            Text(pending)
+                                .font(.app(.body))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                                .opacity(0.5)
+                                .overlay(alignment: .leadingFirstTextBaseline) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .opacity(0.5)
+                                        .offset(x: -24)
+                                }
+                                .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                                .frame(maxWidth: chatMaxWidth, alignment: .trailing)
                             Spacer(minLength: 0)
                         }
                         .padding(.vertical, 4)
@@ -369,7 +373,7 @@ private struct ChatMessageList: View {
                 .textSelection(.enabled)
             }
             .defaultScrollAnchor(.bottom)
-            .modifier(ScrollBottomTracker(isAtBottom: $isAtBottom, hasNewMessages: $hasNewMessages))
+            .modifier(ScrollBottomTracker(isAtBottom: $isAtBottom, hasNewMessages: $hasNewMessages, shouldAutoScroll: $shouldAutoScroll))
             .modifier(ScrollNearTopDetector(isNearTop: $isNearTop))
             .onChange(of: isNearTop) {
                 if isNearTop && hasMoreTurns && !isLoadingMore && activeQuery.isEmpty {
@@ -392,10 +396,11 @@ private struct ChatMessageList: View {
                     let isNewAtBottom = newLast != lastSeenLineNumber
                     if isInitial {
                         scrollToBottom(proxy: proxy, delay: true)
-                    } else if isNewAtBottom && isAtBottom {
+                    } else if isNewAtBottom && shouldAutoScroll {
                         scrollToBottom(proxy: proxy, delay: false)
                     } else if isNewAtBottom {
                         hasNewMessages = true
+                        shouldAutoScroll = false
                     }
                     lastSeenLineNumber = newLast
                     lastSeenCount = turns.count
@@ -414,15 +419,28 @@ private struct ChatMessageList: View {
             }
             .onChange(of: pendingMessage) {
                 if pendingMessage != nil {
+                    // User just sent a message — always follow from now on.
+                    shouldAutoScroll = true
+                    hasNewMessages = false
                     scrollToBottom(proxy: proxy, delay: false)
+                    scrollToBottom(proxy: proxy, delay: true)
                 }
             }
             .onAppear {
                 lastSeenCount = turns.count
                 lastSeenLineNumber = turns.last?.lineNumber
                 isAtBottom = true
-                // Force initial scroll to trigger LazyVStack rendering
-                scrollToBottom(proxy: proxy, delay: true)
+                shouldAutoScroll = true
+                // Scroll to the last real message — forces LazyVStack to
+                // render items around it. Scrolling to an invisible spacer
+                // can leave LazyVStack in a blank state.
+                if let lastLN = turns.last?.lineNumber {
+                    proxy.scrollTo(lastLN, anchor: .bottom)
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(50))
+                        proxy.scrollTo("bottom-spacer", anchor: .bottom)
+                    }
+                }
             }
             .onChange(of: turns.first?.lineNumber) {
                 // Distinguish card change (last also changed) from load-more (last unchanged)
@@ -502,6 +520,7 @@ private struct ChatMessageList: View {
                         proxy.scrollTo("bottom-spacer", anchor: .bottom)
                         hasNewMessages = false
                         isAtBottom = true
+                        shouldAutoScroll = true
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.down")
@@ -823,13 +842,17 @@ private struct ChatMessageList: View {
 private struct ScrollBottomTracker: ViewModifier {
     @Binding var isAtBottom: Bool
     @Binding var hasNewMessages: Bool
+    @Binding var shouldAutoScroll: Bool
 
     func body(content: Content) -> some View {
         content.onScrollGeometryChange(for: Bool.self, of: { geo in
-            geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 30
+            geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 150
         }, action: { _, newAtBottom in
             isAtBottom = newAtBottom
-            if newAtBottom { hasNewMessages = false }
+            if newAtBottom {
+                hasNewMessages = false
+                shouldAutoScroll = true
+            }
         })
     }
 }

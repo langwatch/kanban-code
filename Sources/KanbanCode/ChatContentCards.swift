@@ -501,7 +501,11 @@ struct AskUserQuestionCard: View {
 
             ForEach(q.options.indices, id: \.self) { idx in
                 let option = q.options[idx]
-                let isSelected = isAnswered && (resultText?.contains(option.label) == true)
+                let isSelected: Bool = {
+                    guard isAnswered, let result = resultText?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+                    // Prefer exact match, fall back to contains for wrapped responses
+                    return result == option.label || result.hasPrefix(option.label) || result.hasSuffix(option.label)
+                }()
 
                 Button {
                     if !isAnswered {
