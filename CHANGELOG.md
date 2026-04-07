@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.1.25](https://github.com/langwatch/kanban-code/compare/v0.1.24...v0.1.25) (2026-04-07)
+
+
+### Features
+
+* add `kanban` CLI and centralize shortcut display strings ([8a7420b](https://github.com/langwatch/kanban-code/commit/8a7420bbaa90601fbdf61c6c25381b0a17fe702a))
+* clickable [#123](https://github.com/langwatch/kanban-code/issues/123) PR refs in chat mode, fix blank rendering ([a78b8ba](https://github.com/langwatch/kanban-code/commit/a78b8ba7d0e948f6b359b7ddc42252ceb3654ca9))
+* cmd+click GitHub issue/PR refs ([#123](https://github.com/langwatch/kanban-code/issues/123)) in terminal ([8d620ec](https://github.com/langwatch/kanban-code/commit/8d620eca8d025b00ae81add4f0d1955fa26d1c26))
+
+
+### Bug Fixes
+
+* absorb new sessions by project+tmux, copy all grouped messages, add checkpoint ([6aeb023](https://github.com/langwatch/kanban-code/commit/6aeb023d7fdb76936bd99da01dbd43469319d33f))
+* Add Link always visible, Show more clickable, notification-based Add Link ([d099da6](https://github.com/langwatch/kanban-code/commit/d099da687b0a23f25a9918f45627b5a73abd19c0))
+* chat mode scroll, rendering, and UX improvements ([7260393](https://github.com/langwatch/kanban-code/commit/72603930ea1b533c4ebd56cc93758906f56e49bd))
+* drop custom equatable on ChatMessageView ([75ac58b](https://github.com/langwatch/kanban-code/commit/75ac58b8bb1a960b6f4c04d9cc9461744a628bf3))
+* resolve type-checker timeout in CardDetailView onChange ([61b4e77](https://github.com/langwatch/kanban-code/commit/61b4e77b0fb40615951dc49749978770126926e5))
+* resolve type-checker timeout in CardDetailView onChange ([38a9bf7](https://github.com/langwatch/kanban-code/commit/38a9bf7db5b9f2d9924a384a585d4d50a26c0c44))
+* rotate log file on startup when over 10MB ([d8d2aeb](https://github.com/langwatch/kanban-code/commit/d8d2aeb68d5fa68e2d6dfa50ce1025652b46d017))
+* update worktreeLink when Claude switches worktrees (EnterWorktree) ([e3f921c](https://github.com/langwatch/kanban-code/commit/e3f921c5065e0f09ba38424c98ac2ed7635c39dd))
+
+
+### Performance
+
+* virtualize card list in expanded sections ([df8e920](https://github.com/langwatch/kanban-code/commit/df8e9207b48137c1caa0b39f6a92d06160a3d4c0))
+
 ## [0.1.24](https://github.com/langwatch/kanban-code/compare/v0.1.23...v0.1.24) (2026-03-30)
 
 
