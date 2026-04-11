@@ -419,6 +419,7 @@ struct LaunchFlowIntegrationTests {
 
         // Filter by monorepo subfolder
         state.selectedProjectPath = "/projects/monorepo/packages/app"
+        state.rebuildCards()
         let filtered = state.filteredCards
 
         // Direct card should match

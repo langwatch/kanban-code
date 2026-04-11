@@ -427,14 +427,16 @@ struct ReducerTests {
             activityMap: ["sess_1": .activelyWorking],
             tmuxSessions: ["tmux1"],
             configuredProjects: [],
-            excludedPaths: ["/excluded"]
+            excludedPaths: []
         )
         let _ = Reducer.reduce(state: &state, action: .reconciled(result))
 
         #expect(state.sessions["sess_1"]?.name == "Test")
         #expect(state.activityMap["sess_1"] == .activelyWorking)
         #expect(state.tmuxSessions.contains("tmux1"))
-        #expect(state.excludedPaths == ["/excluded"])
+        // Note: configuredProjects / excludedPaths / globalRemoteSettings are
+        // NOT set via .reconciled — only via .settingsLoaded. Reconcile runs
+        // async and would otherwise revert a concurrent addProject().
     }
 
     // MARK: - Add Extra Terminal
@@ -507,10 +509,12 @@ struct ReducerTests {
         state.rebuildCards()
 
         state.selectedProjectPath = "/test/project"
+        state.rebuildCards()
         #expect(state.filteredCards.count == 1)
         #expect(state.filteredCards[0].id == "c1")
 
         state.selectedProjectPath = nil // global view
+        state.rebuildCards()
         #expect(state.filteredCards.count == 2)
     }
 
