@@ -48,6 +48,7 @@ enum AppShortcut: CaseIterable {
     // Browser
     case browserReload          // Cmd+R (when browser tab active)
     case browserFocusAddress    // Cmd+L (when browser tab active)
+    case reopenClosedTab        // Cmd+Shift+T (reopen last closed browser/terminal tab)
 
     // Board
     case deselect               // Escape
@@ -62,7 +63,7 @@ enum AppShortcut: CaseIterable {
         [.openPaletteK, .openPaletteP, .openCommandMode,
          .newTask, .openSettings,
          .toggleExpanded, .toggleSidebar, .newTerminal, .deepSearch,
-         .stopAssistant, .browserReload, .browserFocusAddress,
+         .stopAssistant, .browserReload, .browserFocusAddress, .reopenClosedTab,
          .deselect, .deleteCard, .deleteCardForward,
          .project1, .project2, .project3, .project4, .project5,
          .project6, .project7, .project8, .project9]
@@ -80,6 +81,7 @@ enum AppShortcut: CaseIterable {
         case .newTerminal: return "t"
         case .browserReload: return "r"
         case .browserFocusAddress: return "l"
+        case .reopenClosedTab: return "t"
         case .stopAssistant: return .escape
         case .deselect: return .escape
         case .deleteCard: return .delete
@@ -105,6 +107,7 @@ enum AppShortcut: CaseIterable {
         case .toggleSidebar: return .command
         case .newTerminal: return .command
         case .browserReload, .browserFocusAddress: return .command
+        case .reopenClosedTab: return [.command, .shift]
         case .stopAssistant: return []
         case .deselect, .deleteCard, .deleteCardForward: return []
         case .project1, .project2, .project3, .project4, .project5,
@@ -163,6 +166,10 @@ enum AppShortcut: CaseIterable {
         // Browser shortcuts: detail panel open, not in palette.
         // The action handlers themselves check if a browser tab is selected.
         case .browserReload, .browserFocusAddress:
+            return ctx.detailOpen && !ctx.paletteOpen && !ctx.promptEditorFocused
+
+        // Reopen last closed tab: whenever detail is open.
+        case .reopenClosedTab:
             return ctx.detailOpen && !ctx.paletteOpen && !ctx.promptEditorFocused
 
         // Board shortcuts only when palette is closed

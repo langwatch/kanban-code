@@ -1572,6 +1572,14 @@ struct ContentView: View {
         .keyboardShortcut(AppShortcut.browserFocusAddress.key, modifiers: AppShortcut.browserFocusAddress.modifiers)
         .hidden()
 
+        // Cmd+Shift+T — reopen last closed tab (browser or terminal)
+        Button("") {
+            guard AppShortcut.reopenClosedTab.isActive(in: shortcutContext) else { return }
+            NotificationCenter.default.post(name: .kanbanReopenClosedTab, object: nil)
+        }
+        .keyboardShortcut(AppShortcut.reopenClosedTab.key, modifiers: AppShortcut.reopenClosedTab.modifiers)
+        .hidden()
+
         // Escape — context-dependent:
         // 1. In fullscreen mode: do nothing (don't close the card)
         // 2. In chat mode with Claude working: send interrupt (Ctrl+C)

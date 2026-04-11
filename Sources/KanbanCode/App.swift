@@ -297,4 +297,5 @@ extension Notification.Name {
     static let kanbanCodeOpenProject = Notification.Name("kanbanCodeOpenProject")
     static let browserFocusAddressBar = Notification.Name("browserFocusAddressBar")
     static let browserReload = Notification.Name("browserReload")
+    static let kanbanReopenClosedTab = Notification.Name("kanbanReopenClosedTab")
 }

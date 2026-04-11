@@ -2,6 +2,23 @@ import SwiftUI
 import KanbanCodeCore
 import MarkdownUI
 
+/// Bundles tab-management notification listeners into a single ViewModifier
+/// to keep CardDetailView.body under the type-checker's complexity limit.
+private struct TabManagementNotifications: ViewModifier {
+    let onClose: () -> Void
+    let onReopen: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCloseTerminalTab)) { _ in
+                onClose()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanReopenClosedTab)) { _ in
+                onReopen()
+            }
+    }
+}
+
 // Helper types (DetailTab, ActionsMenuProvider, HoverFeedbackStyle, HoverBrightness,
 // ChatDraft, NSMenuButton, dialogs, etc.) have been extracted to CardDetailHelpers.swift
 
@@ -340,18 +357,10 @@ struct CardDetailView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .kanbanCloseTerminalTab)) { _ in
-            guard selectedTab == .terminal else { return }
-            // Close the currently selected tab — shell or browser
-            if let browserId = selectedBrowserTabId,
-               let tab = browserTabs.first(where: { $0.id == browserId }) {
-                closeBrowserTab(tab)
-            } else if let session = selectedTerminalSession {
-                onKillTerminal(session)
-                let remaining = shellSessions.filter { $0 != session }
-                selectedTerminalSession = remaining.first
-            }
-        }
+        .modifier(TabManagementNotifications(
+            onClose: { closeCurrentTab() },
+            onReopen: { reopenLastClosedTab() }
+        ))
         .onChange(of: focusTerminal) {
             if focusTerminal {
                 if card.link.tmuxLink != nil {
@@ -683,13 +692,10 @@ struct CardDetailView: View {
 
                     // Globe button for new browser tab
                     Button {
-                        let tabId = "browser-\(UUID().uuidString)"
-                        let defaultURL = "http://localhost:5560/"
-                        onAddBrowserTab(tabId, defaultURL)
-                        let tab = BrowserTabCache.shared.getOrCreate(cardId: card.id, tabId: tabId, url: URL(string: defaultURL)!)
-                        browserTabs.append(tab)
-                        selectedBrowserTabId = tabId
-                        selectedTerminalSession = nil
+                        if let url = URL(string: "http://localhost:5560/") {
+                            selectedTab = .terminal
+                            openNewBrowserTab(url: url, focusAddressBar: true)
+                        }
                     } label: {
                         Image(systemName: "globe")
                             .font(.app(.caption))
@@ -918,13 +924,9 @@ struct CardDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     Button {
-                        let tabId = "browser-\(UUID().uuidString)"
-                        let defaultURL = "http://localhost:5560/"
-                        onAddBrowserTab(tabId, defaultURL)
-                        let tab = BrowserTabCache.shared.getOrCreate(cardId: card.id, tabId: tabId, url: URL(string: defaultURL)!)
-                        browserTabs.append(tab)
-                        selectedBrowserTabId = tabId
-                        selectedTerminalSession = nil
+                        if let url = URL(string: "http://localhost:5560/") {
+                            openNewBrowserTab(url: url, focusAddressBar: true)
+                        }
                     } label: {
                         Label("New Browser", systemImage: "globe")
                     }
@@ -958,6 +960,7 @@ struct CardDetailView: View {
                     if assistantAlive && isHovered {
                         Button {
                             if let session = claudeTmuxSession {
+                                ClosedTabHistory.shared.push(cardId: card.id, .terminal)
                                 onKillTerminal(session)
                             }
                         } label: {
@@ -1111,6 +1114,7 @@ struct CardDetailView: View {
                 // Close button on left, only on hover
                 if isHovered {
                     Button {
+                        ClosedTabHistory.shared.push(cardId: card.id, .terminal)
                         onKillTerminal(sessionName)
                         if selectedTerminalSession == sessionName {
                             let remaining = shellSessions.filter { $0 != sessionName }
@@ -1275,8 +1279,34 @@ struct CardDetailView: View {
         }
     }
 
+    /// Close the currently selected tab in terminal view (shell or browser).
+    private func closeCurrentTab() {
+        guard selectedTab == .terminal else { return }
+        if let browserId = selectedBrowserTabId,
+           let tab = browserTabs.first(where: { $0.id == browserId }) {
+            closeBrowserTab(tab)
+        } else if let session = selectedTerminalSession {
+            ClosedTabHistory.shared.push(cardId: card.id, .terminal)
+            onKillTerminal(session)
+            let remaining = shellSessions.filter { $0 != session }
+            selectedTerminalSession = remaining.first
+        }
+    }
+
+    /// Reopen the last closed tab (browser or terminal) for this card.
+    private func reopenLastClosedTab() {
+        guard let entry = ClosedTabHistory.shared.pop(cardId: card.id) else { return }
+        selectedTab = .terminal
+        switch entry {
+        case .browser(let url):
+            openNewBrowserTab(url: url)
+        case .terminal:
+            onCreateTerminal()
+        }
+    }
+
     /// Create a new browser tab at the given URL (used for Cmd+click and target="_blank").
-    private func openNewBrowserTab(url: URL) {
+    private func openNewBrowserTab(url: URL, focusAddressBar: Bool = false) {
         let tabId = "browser-\(UUID().uuidString)"
         let urlString = url.absoluteString
         onAddBrowserTab(tabId, urlString)
@@ -1284,6 +1314,14 @@ struct CardDetailView: View {
         browserTabs.append(tab)
         selectedBrowserTabId = tabId
         selectedTerminalSession = nil
+        if focusAddressBar {
+            // Wait for the new BrowserContentView to mount before posting the
+            // focus notification — the isActive check needs to see this tab.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
+                NotificationCenter.default.post(name: .browserFocusAddressBar, object: nil)
+            }
+        }
     }
 
     /// Hydrate live BrowserTab instances from persisted BrowserTabInfo in the link.
@@ -1299,6 +1337,9 @@ struct CardDetailView: View {
     /// Close a browser tab and fall back to the previous tab if it was selected.
     private func closeBrowserTab(_ tab: BrowserTab) {
         let wasSelected = selectedBrowserTabId == tab.id
+        if let url = tab.currentURL {
+            ClosedTabHistory.shared.push(cardId: card.id, .browser(url: url))
+        }
         BrowserTabCache.shared.remove(cardId: card.id, tabId: tab.id)
         browserTabs.removeAll { $0.id == tab.id }
         onRemoveBrowserTab(tab.id)
