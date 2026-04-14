@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
+import { join, basename, matchesGlob } from "node:path";
 import {
   Link,
   Settings,
@@ -300,9 +300,50 @@ const ACTIVE_COLUMNS: KanbanColumn[] = [
 ];
 
 export function filterActiveCards(links: Link[]): Link[] {
+  const settings = readSettings();
+  const excluded = settings.globalView?.excludedPaths ?? [];
   return links.filter(
-    (l) => ACTIVE_COLUMNS.includes(l.column) && !l.manuallyArchived
+    (l) =>
+      ACTIVE_COLUMNS.includes(l.column) &&
+      !l.manuallyArchived &&
+      !isExcluded(l.projectPath, excluded)
   );
+}
+
+function isExcluded(
+  projectPath: string | undefined,
+  excludedPaths: string[]
+): boolean {
+  if (!excludedPaths.length || !projectPath) return false;
+  const normalized = normalizePath(projectPath);
+  const folderName = basename(normalized);
+  for (const pattern of excludedPaths) {
+    if (pattern.includes("*") || pattern.includes("?")) {
+      // Glob — match against full path and folder name
+      try {
+        if (matchesGlob(normalized, pattern)) return true;
+        if (matchesGlob(folderName, pattern)) return true;
+      } catch {
+        // Invalid glob pattern, skip
+      }
+    } else {
+      const normalizedExcluded = normalizePath(pattern);
+      if (
+        normalized === normalizedExcluded ||
+        normalized.startsWith(normalizedExcluded + "/")
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
+function normalizePath(p: string): string {
+  // Expand ~ and resolve /private/var → /var etc.
+  if (p.startsWith("~/")) {
+    p = join(homedir(), p.slice(2));
+  }
+  return p;
 }
 
 export function filterByColumn(
