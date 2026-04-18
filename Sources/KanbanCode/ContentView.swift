@@ -662,6 +662,11 @@ struct ContentView: View {
                 if let cardId = store.state.selectedCardId,
                    let card = store.state.cards.first(where: { $0.id == cardId }) {
                     detailTab = DetailTab.initialTab(for: card)
+                    // Auto-focus terminal on any card switch (not just click).
+                    // Covers Cmd+K, arrow nav, notification taps, url deep-links.
+                    if card.link.tmuxLink != nil {
+                        shouldFocusTerminal = true
+                    }
                 }
                 selectedCardIdPersisted = store.state.selectedCardId ?? ""
             }

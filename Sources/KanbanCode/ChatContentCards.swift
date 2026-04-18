@@ -685,6 +685,13 @@ struct ChatInputBar: View {
             mentionQuery = newQuery
         }
         .onAppear { focusInput() }
+        // Re-focus the composer when switching between channels / DMs. The
+        // ChatInputBar view is recycled across drawer changes, so .onAppear
+        // doesn't re-fire; watching cardId (which encodes "channel:<name>"
+        // or "dm:<handle>") catches every switch.
+        .onChange(of: cardId) { _, _ in
+            focusInput()
+        }
     }
 
     /// Up/Down arrow handler: when the picker is open, navigate within it and
