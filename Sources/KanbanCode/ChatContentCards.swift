@@ -823,6 +823,16 @@ struct ChatInputBar: View {
     }
 
     private func send() {
+        // Mention picker intercept: if the user has the picker open and there's
+        // a match, Enter inserts the top match instead of sending the message.
+        // This lets `@alic<Enter>` expand to `@alice ` without clicking.
+        if let query = mentionQuery {
+            let matches = Self.filteredMentionMatches(query: query, candidates: mentionCandidates)
+            if let first = matches.first {
+                insertMention(first)
+                return
+            }
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         // Save images to temp files for the prompt queue
