@@ -208,4 +208,42 @@ struct AssignColumnTests {
         let col = AssignColumn.assign(link: link)
         #expect(col == .allSessions)
     }
+
+    // MARK: - Fork scenario (user reported "fork → In Progress")
+
+    @Test("Freshly forked card (source=.discovered, recent parent activity, no worktree, no activity state) → waiting")
+    func forkedCardLandsInWaiting() {
+        // Mirrors what forkCard (ContentView+Launch.swift:441-449) produces:
+        // source=.discovered, sessionLink set to the newly-copied jsonl,
+        // lastActivity inherited from parent (recent), NO tmux session yet.
+        var link = Link(
+            name: "parent (fork)",
+            projectPath: "/tmp/some-project",
+            column: .waiting,
+            lastActivity: .now,
+            source: .discovered,
+            sessionLink: SessionLink(sessionId: "forked-session-id")
+        )
+        link.manualOverrides = ManualOverrides()
+        // No activity state — fork runs before the detector has seen the new session.
+        let col = AssignColumn.assign(link: link)
+        #expect(col == .waiting, "Fork with recent lastActivity + no worktree should be Waiting, not In Progress")
+    }
+
+    @Test("Forked card with inherited worktree → waiting (not inProgress)")
+    func forkedCardWithWorktreeLandsInWaiting() {
+        // keepWorktree: true path — worktreeLink inherited from parent.
+        var link = Link(
+            name: "parent (fork)",
+            projectPath: "/tmp/some-project",
+            column: .waiting,
+            lastActivity: .now,
+            source: .discovered,
+            sessionLink: SessionLink(sessionId: "forked-session-id"),
+            worktreeLink: WorktreeLink(path: "/tmp/wt", branch: "feat")
+        )
+        link.manualOverrides = ManualOverrides()
+        let col = AssignColumn.assign(link: link, hasWorktree: true)
+        #expect(col == .waiting, "Fork with worktree but no activity should still be Waiting")
+    }
 }
