@@ -288,6 +288,12 @@ public actor EffectHandler {
     /// they know something was sent, even if they can't see it.
     private func fanOutOneMessage(target: ChannelMemberTarget, body: String, imagePaths: [String]) async {
         let canSendImages = target.assistant.supportsImageUpload && !imagePaths.isEmpty
+        // Text suffix: markdown image refs so the recipient can also Read() the
+        // persisted file (kept in sync with CLI's formatChannelBroadcast). This
+        // is redundant with the clipboard paste for Claude, but the markdown
+        // path is the ONLY way Gemini (and any other assistant that can't
+        // receive binary pastes) can see what was attached.
+        let imageRefs = imagePaths.isEmpty ? "" : "\n" + imagePaths.map { "![](\($0))" }.joined(separator: "\n")
         do {
             if canSendImages, let tmux = tmuxAdapter, let setClipboard = setClipboardImage {
                 let images = imagePaths.compactMap { ImageAttachment.fromPath($0) }
@@ -301,11 +307,9 @@ public actor EffectHandler {
                         setClipboard: setClipboard
                     )
                 }
-                try await tmux.pastePrompt(to: target.sessionName, text: body)
+                try await tmux.pastePrompt(to: target.sessionName, text: body + imageRefs)
             } else {
-                // Text-only path: either no images, or the assistant can't receive them.
-                let hint = imagePaths.isEmpty ? "" : " [\(imagePaths.count) image(s) attached]"
-                try await tmuxAdapter?.pastePrompt(to: target.sessionName, text: body + hint)
+                try await tmuxAdapter?.pastePrompt(to: target.sessionName, text: body + imageRefs)
             }
         } catch {
             KanbanCodeLog.warn("effect", "fanout to \(target.sessionName) failed: \(error)")
