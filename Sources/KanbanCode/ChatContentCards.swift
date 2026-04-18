@@ -597,6 +597,9 @@ struct ChatInputBar: View {
     /// Active @mention query (the partial handle after the last `@`), or nil when
     /// the user is not currently typing a mention.
     @State private var mentionQuery: String? = nil
+    /// Currently-selected mention in the picker (0 = top match). Resets to 0
+    /// whenever the query changes or the picker opens.
+    @State private var mentionSelectedIndex: Int = 0
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -626,7 +629,7 @@ struct ChatInputBar: View {
             if !mentionCandidates.isEmpty, let query = mentionQuery {
                 let matches = Self.filteredMentionMatches(query: query, candidates: mentionCandidates)
                 if !matches.isEmpty {
-                    MentionSuggestionList(matches: matches) { handle in
+                    MentionSuggestionList(matches: matches, selectedIndex: mentionSelectedIndex) { handle in
                         insertMention(handle)
                     }
                     .padding(.horizontal, 10)
@@ -655,8 +658,10 @@ struct ChatInputBar: View {
                         maxHeight: 160,
                         identity: cardId,
                         onSubmit: send,
+                        onArrowUp: { moveMentionSelection(by: -1) },
+                        onArrowDown: { moveMentionSelection(by: 1) },
                         onImagePaste: { data in pastedImages.append(data) },
-                        onEscape: onEscape
+                        onEscape: { handleEscape() }
                     )
                     .focused($isFocused)
                     .frame(minHeight: 24)
@@ -673,9 +678,36 @@ struct ChatInputBar: View {
             .padding(10)
         }
         .onChange(of: text) { _, newValue in
-            mentionQuery = Self.activeMentionQuery(in: newValue)
+            let newQuery = Self.activeMentionQuery(in: newValue)
+            if newQuery != mentionQuery {
+                mentionSelectedIndex = 0
+            }
+            mentionQuery = newQuery
         }
         .onAppear { focusInput() }
+    }
+
+    /// Up/Down arrow handler: when the picker is open, navigate within it and
+    /// return true to consume the event. When closed, return false so the
+    /// editor does its normal thing (caret move, history recall).
+    private func moveMentionSelection(by delta: Int) -> Bool {
+        guard let query = mentionQuery else { return false }
+        let matches = Self.filteredMentionMatches(query: query, candidates: mentionCandidates)
+        guard !matches.isEmpty else { return false }
+        let capped = min(matches.count, 6)
+        mentionSelectedIndex = (mentionSelectedIndex + delta + capped) % capped
+        return true
+    }
+
+    /// Escape: dismiss the picker if open; otherwise forward to the parent's
+    /// onEscape (typically "stop assistant" on card chat).
+    private func handleEscape() {
+        if mentionQuery != nil {
+            mentionQuery = nil
+            mentionSelectedIndex = 0
+            return
+        }
+        onEscape?()
     }
 
     // Original card-chat composer (unchanged).
@@ -823,13 +855,16 @@ struct ChatInputBar: View {
     }
 
     private func send() {
-        // Mention picker intercept: if the user has the picker open and there's
-        // a match, Enter inserts the top match instead of sending the message.
-        // This lets `@alic<Enter>` expand to `@alice ` without clicking.
+        // Mention picker intercept: if the picker is open and something matches,
+        // Enter inserts the *selected* row (navigated via arrows) instead of
+        // sending. Typing `@alic<Enter>` expands to `@alice ` — and
+        // `@a<Down><Enter>` picks the second match.
         if let query = mentionQuery {
             let matches = Self.filteredMentionMatches(query: query, candidates: mentionCandidates)
-            if let first = matches.first {
-                insertMention(first)
+            let visible = Array(matches.prefix(6))
+            if !visible.isEmpty {
+                let idx = max(0, min(mentionSelectedIndex, visible.count - 1))
+                insertMention(visible[idx])
                 return
             }
         }
@@ -873,12 +908,17 @@ struct ChatInputBar: View {
 /// Click-to-insert (no keyboard nav in this first pass).
 struct MentionSuggestionList: View {
     let matches: [String]
+    var selectedIndex: Int = 0
     let onSelect: (String) -> Void
 
     var body: some View {
+        let visible = Array(matches.prefix(6))
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(matches.prefix(6)), id: \.self) { handle in
-                MentionRow(handle: handle) {
+            ForEach(Array(visible.enumerated()), id: \.element) { index, handle in
+                MentionRow(
+                    handle: handle,
+                    isSelected: index == selectedIndex
+                ) {
                     onSelect(handle)
                 }
             }
@@ -899,15 +939,17 @@ struct MentionSuggestionList: View {
 
 private struct MentionRow: View {
     let handle: String
+    let isSelected: Bool
     let onSelect: () -> Void
     @State private var hovered = false
 
     var body: some View {
+        let active = isSelected || hovered
         Button(action: onSelect) {
             HStack(spacing: 6) {
                 Text("@\(handle)")
                     .font(.app(.body))
-                    .foregroundStyle(hovered ? Color.white : Color.primary)
+                    .foregroundStyle(active ? Color.white : Color.primary)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
@@ -915,7 +957,7 @@ private struct MentionRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(hovered ? Color.accentColor : Color.clear)
+                    .fill(active ? Color.accentColor : Color.clear)
                     .padding(.horizontal, 4)
             )
             .contentShape(Rectangle())

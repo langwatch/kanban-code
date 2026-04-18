@@ -14,6 +14,11 @@ struct PromptEditor: NSViewRepresentable {
     var onCmdSubmit: (() -> Void)?
     var onUpArrowAtStart: (() -> String?)?
     var onDownArrowAtStart: (() -> String?)?
+    /// Unconditional arrow hooks — fire on every up/down regardless of cursor
+    /// position. If they return true, the key is consumed (no caret move, no
+    /// history recall). Used to route arrows into the @-mention picker.
+    var onArrowUp: (() -> Bool)?
+    var onArrowDown: (() -> Bool)?
     var onImagePaste: ((Data) -> Void)?
     var onEscape: (() -> Void)?
 
@@ -48,6 +53,8 @@ struct PromptEditor: NSViewRepresentable {
         textView.onCmdSubmit = onCmdSubmit
         textView.onUpArrowAtStart = onUpArrowAtStart
         textView.onDownArrowAtStart = onDownArrowAtStart
+        textView.onArrowUp = onArrowUp
+        textView.onArrowDown = onArrowDown
         textView.onImagePaste = onImagePaste
         textView.onEscape = onEscape
         textView.placeholderString = placeholder
@@ -86,6 +93,8 @@ struct PromptEditor: NSViewRepresentable {
         textView.onCmdSubmit = onCmdSubmit
         textView.onUpArrowAtStart = onUpArrowAtStart
         textView.onDownArrowAtStart = onDownArrowAtStart
+        textView.onArrowUp = onArrowUp
+        textView.onArrowDown = onArrowDown
         textView.onImagePaste = onImagePaste
         textView.onEscape = onEscape
         textView.font = font
@@ -171,6 +180,8 @@ final class SubmitTextView: NSTextView {
     var onCmdSubmit: (() -> Void)?
     var onUpArrowAtStart: (() -> String?)?
     var onDownArrowAtStart: (() -> String?)?
+    var onArrowUp: (() -> Bool)?
+    var onArrowDown: (() -> Bool)?
     var onImagePaste: ((Data) -> Void)?
     var onEscape: (() -> Void)?
     var placeholderString: String = ""
@@ -233,8 +244,12 @@ final class SubmitTextView: NSTextView {
             return
         }
 
-        // Up arrow at start of text → recall previous message
+        // Up arrow — unconditional handler first (e.g. mention picker nav),
+        // falls back to history recall at start-of-buffer.
         if event.keyCode == 126 { // up arrow
+            if let handler = onArrowUp, handler() {
+                return
+            }
             let cursorAtStart = selectedRange().location == 0 && selectedRange().length == 0
             if (cursorAtStart || string.isEmpty), let handler = onUpArrowAtStart {
                 if let replacement = handler() {
@@ -244,8 +259,11 @@ final class SubmitTextView: NSTextView {
             }
         }
 
-        // Down arrow at start of text → recall next (more recent) message
+        // Down arrow — same pattern.
         if event.keyCode == 125 { // down arrow
+            if let handler = onArrowDown, handler() {
+                return
+            }
             let cursorAtStart = selectedRange().location == 0 && selectedRange().length == 0
             if (cursorAtStart || string.isEmpty), let handler = onDownArrowAtStart {
                 if let replacement = handler() {
