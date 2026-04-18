@@ -581,6 +581,9 @@ struct ChatInputBar: View {
     var placeholderOverride: String? = nil
     var contextUsage: ContextUsage?
     var userMessageHistory: [String] = [] // Most recent first
+    /// Optional list of handles (without leading `@`) available for @-mention completion.
+    /// Used only in `.irc` style; channels pass members, DMs pass the other party.
+    var mentionCandidates: [String] = []
     var onSend: (String, [String]) -> Void = { _, _ in }
     var onQueuePrompt: ((String, Bool, [String]) -> Void)?
     var onEscape: (() -> Void)?
@@ -591,6 +594,9 @@ struct ChatInputBar: View {
     @State private var showQueueDialog = false
     @State private var historyIndex: Int = -1 // -1 = current draft, 0 = last sent, 1 = second to last...
     @State private var savedDraft: String = "" // Draft text before history recall
+    /// Active @mention query (the partial handle after the last `@`), or nil when
+    /// the user is not currently typing a mention.
+    @State private var mentionQuery: String? = nil
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -650,6 +656,21 @@ struct ChatInputBar: View {
             .disabled(!canSend)
         }
         .padding(10)
+        .overlay(alignment: .bottomLeading) {
+            if !mentionCandidates.isEmpty, let query = mentionQuery {
+                let matches = Self.filteredMentionMatches(query: query, candidates: mentionCandidates)
+                if !matches.isEmpty {
+                    MentionSuggestionList(matches: matches) { handle in
+                        insertMention(handle)
+                    }
+                    .offset(y: -4)
+                    .alignmentGuide(.bottom) { $0[.top] }
+                }
+            }
+        }
+        .onChange(of: text) { _, newValue in
+            mentionQuery = Self.activeMentionQuery(in: newValue)
+        }
         .onAppear { focusInput() }
     }
 
@@ -760,6 +781,43 @@ struct ChatInputBar: View {
         isFocused = true
     }
 
+    // MARK: - @-mention autocompletion
+
+    /// Scan `text` for the last `@<partial>` token where the `@` is at the
+    /// start of the string or preceded by whitespace, and return `<partial>`
+    /// (empty string is fine — "@" alone opens the picker). Returns nil if
+    /// the text isn't currently inside a mention token.
+    /// Intentionally checks the trailing segment, which matches the typical
+    /// "typing at the end" pattern; cursor-aware detection would need a
+    /// PromptEditor callback and is not implemented in this minimal version.
+    static func activeMentionQuery(in text: String) -> String? {
+        guard let atIdx = text.lastIndex(of: "@") else { return nil }
+        // Everything after @ must be handle-valid — no spaces, newlines, etc.
+        let after = text[text.index(after: atIdx)...]
+        for c in after where !(c.isLetter || c.isNumber || c == "_" || c == "-") {
+            return nil
+        }
+        // @ must be at start-of-string or preceded by whitespace/punctuation
+        if atIdx > text.startIndex {
+            let prev = text[text.index(before: atIdx)]
+            if !(prev.isWhitespace || prev.isPunctuation) { return nil }
+        }
+        return String(after)
+    }
+
+    static func filteredMentionMatches(query: String, candidates: [String]) -> [String] {
+        let q = query.lowercased()
+        if q.isEmpty { return candidates }
+        return candidates.filter { $0.lowercased().hasPrefix(q) }
+    }
+
+    /// Replace the trailing `@<partial>` with `@<handle> ` and dismiss the picker.
+    private func insertMention(_ handle: String) {
+        guard let atIdx = text.lastIndex(of: "@") else { return }
+        text = String(text[..<atIdx]) + "@\(handle) "
+        mentionQuery = nil
+    }
+
     private func send() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -792,6 +850,47 @@ struct ChatInputBar: View {
             return savedDraft
         }
         return userMessageHistory[historyIndex]
+    }
+}
+
+// MARK: - @-mention suggestion list
+
+/// Floating popover listing handles that match the current @-mention query.
+/// Click-to-insert (no keyboard nav in this first pass).
+struct MentionSuggestionList: View {
+    let matches: [String]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(matches.prefix(6)), id: \.self) { handle in
+                Button {
+                    onSelect(handle)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("@\(handle)")
+                            .font(.app(.body))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(Color.clear)
+                .onHover { _ in /* hover highlight handled by system if needed */ }
+            }
+        }
+        .frame(minWidth: 140, maxWidth: 260, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(radius: 4, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
     }
 }
 

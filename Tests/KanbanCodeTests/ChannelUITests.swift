@@ -111,6 +111,32 @@ struct ChannelUITests {
     }
 
     @MainActor
+    @Test func mentionQueryDetection() {
+        #expect(ChatInputBar.activeMentionQuery(in: "") == nil)
+        #expect(ChatInputBar.activeMentionQuery(in: "hello") == nil)
+        #expect(ChatInputBar.activeMentionQuery(in: "hey @") == "")
+        #expect(ChatInputBar.activeMentionQuery(in: "hey @ali") == "ali")
+        #expect(ChatInputBar.activeMentionQuery(in: "@alice") == "alice")
+        // Preceded by punctuation is OK (start of token after comma)
+        #expect(ChatInputBar.activeMentionQuery(in: "cc:@bo") == "bo")
+        // Mid-word @ is NOT a mention
+        #expect(ChatInputBar.activeMentionQuery(in: "email@example") == nil)
+        // Whitespace breaks the token — no active query at the end
+        #expect(ChatInputBar.activeMentionQuery(in: "hi @alice ") == nil)
+    }
+
+    @MainActor
+    @Test func mentionFiltering() {
+        let candidates = ["alice", "bob", "alfred", "carol"]
+        let all = ChatInputBar.filteredMentionMatches(query: "", candidates: candidates)
+        #expect(all == candidates, "Empty query should return all candidates")
+        let alMatches = ChatInputBar.filteredMentionMatches(query: "al", candidates: candidates)
+        #expect(alMatches.sorted() == ["alfred", "alice"])
+        #expect(ChatInputBar.filteredMentionMatches(query: "A", candidates: candidates).sorted() == ["alfred", "alice"])
+        #expect(ChatInputBar.filteredMentionMatches(query: "zz", candidates: candidates).isEmpty)
+    }
+
+    @MainActor
     @Test func createChannelDialogRendersAndValidates() {
         var isPresented = true
         let binding = Binding(get: { isPresented }, set: { isPresented = $0 })

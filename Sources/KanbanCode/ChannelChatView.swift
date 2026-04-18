@@ -329,6 +329,7 @@ struct ChannelChatView: View {
             isReady: true,
             cardId: "channel:\(channel.name)",
             placeholderOverride: "Message #\(channel.name)",
+            mentionCandidates: channel.members.map { $0.handle },
             onSend: { body, imagePaths in onSend(body, imagePaths) },
             text: $draft,
             pastedImages: $pastedImages
@@ -464,6 +465,7 @@ struct DMChatView: View {
             isReady: true,
             cardId: "dm:\(other.handle)",
             placeholderOverride: "Message @\(other.handle)",
+            mentionCandidates: [other.handle],
             onSend: { body, imagePaths in onSend(body, imagePaths) },
             text: $draft,
             pastedImages: $pastedImages
