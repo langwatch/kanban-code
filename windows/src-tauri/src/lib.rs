@@ -272,7 +272,30 @@ struct DependencyStatus {
 }
 
 async fn command_exists(name: &str) -> bool {
-    tokio::process::Command::new("where")
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let direct_paths = vec![
+            format!("{}/.local/bin/{}", home, name),
+            format!("/usr/local/bin/{}", name),
+            format!("/usr/bin/{}", name),
+        ];
+        for path in &direct_paths {
+            if std::path::Path::new(path).exists() {
+                return true;
+            }
+        }
+        let nvm_versions = format!("{}/.nvm/versions/node", home);
+        if let Ok(entries) = std::fs::read_dir(&nvm_versions) {
+            for entry in entries.flatten() {
+                let bin = entry.path().join("bin").join(name);
+                if bin.exists() {
+                    return true;
+                }
+            }
+        }
+    }
+    tokio::process::Command::new(if cfg!(target_os = "windows") { "where" } else { "which" })
         .arg(name)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
