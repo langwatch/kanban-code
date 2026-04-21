@@ -73,9 +73,9 @@ extension ContentView {
                     try? RemoteShellManager.deploy()
                     shellOverride = RemoteShellManager.shellOverridePath()
                     var env = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
-                    // Gemini CLI uses `bash -c` directly (not $SHELL), so prepend
-                    // our remote dir to PATH so it finds our bash wrapper first.
-                    if assistant == .gemini {
+                    // Some CLIs use `bash -c` directly, so prepend our remote
+                    // dir to PATH so they find Kanban's bash wrapper first.
+                    if assistant.requiresRemotePathWrapper {
                         let remoteDir = RemoteShellManager.remoteDirPath()
                         env["PATH"] = "\(remoteDir):$PATH"
                     }
@@ -101,11 +101,14 @@ extension ContentView {
                 }
 
                 // Snapshot existing session files for detection
-                let sessionFileExt = assistant == .gemini ? ".json" : ".jsonl"
+                let sessionFileExt = ".\(assistant.sessionFileExtension)"
                 let configDir = (NSHomeDirectory() as NSString).appendingPathComponent(assistant.configDirName)
                 let claudeProjectsDir = (configDir as NSString).appendingPathComponent("projects")
                 let encodedProject = SessionFileMover.encodeProjectPath(projectPath)
                 let sessionDir = (claudeProjectsDir as NSString).appendingPathComponent(encodedProject)
+                let existingCodexFiles = assistant == .codex
+                    ? Set(CodexSessionDiscovery.sessionFiles())
+                    : []
 
                 // When worktree is enabled, also snapshot worktree-related directories
                 // (worktrees create sessions in dirs like <encodedProject>-.claude-worktrees-<name>)
@@ -117,6 +120,9 @@ extension ContentView {
                     dirsToSnapshot = slugDirs.map { slug in
                         (tmpDir as NSString).appendingPathComponent(slug).appending("/chats")
                     }
+                } else if assistant == .codex {
+                    // Codex stores sessions recursively under ~/.codex/sessions.
+                    dirsToSnapshot = []
                 } else if worktreeName != nil {
                     let allDirs = (try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? []
                     dirsToSnapshot = [sessionDir] + allDirs
@@ -168,7 +174,7 @@ extension ContentView {
                     }
 
                     if !prompt.isEmpty {
-                        if assistant == .gemini {
+                        if assistant.submitsPromptWithPaste {
                             try await self.tmuxAdapter.pastePrompt(to: tmuxName, text: prompt)
                         } else {
                             try await self.tmuxAdapter.sendPrompt(to: tmuxName, text: prompt)
@@ -177,11 +183,23 @@ extension ContentView {
                 }
 
                 // Detect new session by polling for new session file
-                // Worktree launches and Gemini need more attempts (slower startup)
-                let maxAttempts = (worktreeName != nil || assistant == .gemini) ? 12 : 6
+                // Worktree launches, Gemini, and Codex need more attempts (slower startup)
+                let maxAttempts = (worktreeName != nil || assistant == .gemini || assistant == .codex) ? 12 : 6
                 var sessionLink: SessionLink?
                 for attempt in 0..<maxAttempts {
                     try? await Task.sleep(for: .milliseconds(500))
+
+                    if assistant == .codex {
+                        let currentFiles = Set(CodexSessionDiscovery.sessionFiles())
+                        let newFiles = currentFiles.subtracting(existingCodexFiles)
+                        if let sessionPath = newestFile(from: Array(newFiles)),
+                           let sessionId = await CodexSessionParser.extractSessionId(from: sessionPath) {
+                            KanbanCodeLog.info("launch", "Detected Codex session file after \(attempt+1) attempts: \(sessionId.prefix(8))")
+                            sessionLink = SessionLink(sessionId: sessionId, sessionPath: sessionPath)
+                            break
+                        }
+                        continue
+                    }
 
                     // Build list of dirs to scan (re-list for worktree — dir may appear mid-poll)
                     let dirsToScan: [String]
@@ -242,6 +260,16 @@ extension ContentView {
                 store.dispatch(.launchFailed(cardId: cardId, error: error.localizedDescription))
             }
         }
+    }
+
+    private func newestFile(from paths: [String]) -> String? {
+        paths.compactMap { path -> (String, Date)? in
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let mtime = attrs[.modificationDate] as? Date else { return nil }
+            return (path, mtime)
+        }
+        .max { $0.1 < $1.1 }?
+        .0
     }
 
     /// Extract worktreeLink from a newly-created session file by reading its first line for gitBranch and cwd.
@@ -424,7 +452,7 @@ extension ContentView {
                     }
                     // Always place the forked session in the correct project dir
                     // so `claude --resume` can find it from the project root.
-                    if let fp = forkProjectPath {
+                    if card.link.effectiveAssistant == .claude, let fp = forkProjectPath {
                         let encoded = SessionFileMover.encodeProjectPath(fp)
                         let home = NSHomeDirectory()
                         targetDir = "\(home)/.claude/projects/\(encoded)"
@@ -436,8 +464,11 @@ extension ContentView {
                     sessionPath: sessionPath, targetDirectory: targetDir
                 )
                 let dir = targetDir ?? (sessionPath as NSString).deletingLastPathComponent
-                let ext = card.link.effectiveAssistant == .gemini ? "json" : "jsonl"
-                let newPath = (dir as NSString).appendingPathComponent("\(newSessionId).\(ext)")
+                let newPath = Self.forkedSessionPath(
+                    assistant: card.link.effectiveAssistant,
+                    sessionId: newSessionId,
+                    directory: dir
+                )
                 var newLink = Link(
                     name: (card.link.name ?? card.link.displayTitle) + " (fork)",
                     projectPath: forkProjectPath,
@@ -462,6 +493,25 @@ extension ContentView {
             } catch {
                 KanbanCodeLog.error("fork", "Fork failed: \(error)")
             }
+        }
+    }
+
+    static func forkedSessionPath(
+        assistant: CodingAssistant,
+        sessionId: String,
+        directory: String
+    ) -> String {
+        switch assistant {
+        case .claude:
+            return (directory as NSString).appendingPathComponent("\(sessionId).jsonl")
+        case .gemini:
+            return (directory as NSString).appendingPathComponent("session-forked-\(sessionId).json")
+        case .codex:
+            return CodexSessionStore.sessionFilePath(
+                sessionId: sessionId,
+                in: directory,
+                prefix: "rollout-forked"
+            )
         }
     }
 
@@ -515,9 +565,9 @@ extension ContentView {
                     try? RemoteShellManager.deploy()
                     shellOverride = RemoteShellManager.shellOverridePath()
                     var env = RemoteShellManager.setupEnvironment(remote: remote, projectPath: projectPath)
-                    // Gemini CLI uses `bash -c` directly (not $SHELL), so prepend
-                    // our remote dir to PATH so it finds our bash wrapper first.
-                    if assistant == .gemini {
+                    // Some CLIs use `bash -c` directly, so prepend our remote
+                    // dir to PATH so they find Kanban's bash wrapper first.
+                    if assistant.requiresRemotePathWrapper {
                         let remoteDir = RemoteShellManager.remoteDirPath()
                         env["PATH"] = "\(remoteDir):$PATH"
                     }

@@ -9,7 +9,7 @@ public enum RemoteShellManager {
     /// Deploy the remote shell script and create symlinks for zsh and bash.
     /// Call once at app startup (idempotent — overwrites with latest version).
     /// Both symlinks are needed because Claude Code uses `$SHELL -c` (zsh)
-    /// while Gemini CLI uses `bash -c` directly via PATH lookup.
+    /// while Gemini CLI and Codex CLI may use `bash -c` directly via PATH lookup.
     public static func deploy() throws {
         let fm = FileManager.default
         let remoteDir = Self.remoteDir()
@@ -36,7 +36,7 @@ public enum RemoteShellManager {
     }
 
     /// Returns the remote directory path, for prepending to PATH.
-    /// Gemini CLI uses `bash -c` directly, so we need our `bash` wrapper
+    /// Some CLIs use `bash -c` directly, so we need our `bash` wrapper
     /// to appear before the system bash in PATH.
     public static func remoteDirPath() -> String {
         remoteDir()
@@ -66,13 +66,13 @@ public enum RemoteShellManager {
     private static let remoteShellScript = """
     #!/bin/bash
     #
-    # Remote shell wrapper for coding assistants (Claude Code, Gemini CLI)
+    # Remote shell wrapper for coding assistants (Claude Code, Gemini CLI, Codex CLI)
     # Intercepts shell commands and executes them on the remote machine
     # Falls back to local execution if remote is unavailable
     #
     # Configuration: reads from ~/.kanban-code/settings.json (remote.host, remote.remotePath, remote.localPath)
     #
-    # When used as a `bash` symlink in PATH (for Gemini CLI which hardcodes `bash -c`),
+    # When used as a `bash` symlink in PATH (for CLIs that hardcode `bash -c`),
     # hooks and script files are detected and run locally to avoid SSH overhead.
     #
 

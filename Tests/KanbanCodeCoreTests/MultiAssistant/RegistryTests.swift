@@ -67,15 +67,17 @@ struct RegistryTests {
         #expect(registry.available == [.claude])
     }
 
-    @Test("Register both assistants")
-    func registerBoth() {
+    @Test("Register all assistants")
+    func registerAll() {
         let registry = CodingAssistantRegistry()
         registry.register(.claude, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
         registry.register(.gemini, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
+        registry.register(.codex, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
 
-        #expect(registry.available.count == 2)
+        #expect(registry.available.count == 3)
         #expect(registry.available.contains(.claude))
         #expect(registry.available.contains(.gemini))
+        #expect(registry.available.contains(.codex))
     }
 
     @Test("Unregistered assistant returns nil")
@@ -86,16 +88,15 @@ struct RegistryTests {
         #expect(registry.store(for: .gemini) == nil)
     }
 
-    @Test("Available is sorted by rawValue")
+    @Test("Available follows CodingAssistant.allCases order")
     func availableSorted() {
         let registry = CodingAssistantRegistry()
-        // Register gemini first, then claude
+        // Register out of order.
+        registry.register(.codex, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
         registry.register(.gemini, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
         registry.register(.claude, discovery: MockDiscovery(), detector: MockDetector(), store: MockStore())
 
-        // Should be sorted: claude < gemini alphabetically
-        #expect(registry.available.first == .claude)
-        #expect(registry.available.last == .gemini)
+        #expect(registry.available == [.claude, .gemini, .codex])
     }
 }
 

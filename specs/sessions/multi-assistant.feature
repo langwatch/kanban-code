@@ -1,5 +1,5 @@
 Feature: Multi-Coding-Assistant Support
-  As a developer using multiple AI coding assistants (Claude Code, Gemini CLI)
+  As a developer using multiple AI coding assistants (Claude Code, Gemini CLI, Codex CLI)
   I want Kanban Code to manage sessions from any supported assistant
   So that I can use whichever tool fits each task
 
@@ -13,18 +13,21 @@ Feature: Multi-Coding-Assistant Support
       | ID      | Display Name  | CLI Command | Config Dir |
       | claude  | Claude Code   | claude      | .claude    |
       | gemini  | Gemini CLI    | gemini      | .gemini    |
+      | codex   | Codex CLI     | codex       | .codex     |
 
   Scenario: Assistant capabilities
     Then each assistant should declare its capabilities:
-      | Assistant | Worktree Support | Image Upload | Auto-Approve Flag                  | Resume Flag |
-      | claude    | true             | true         | --dangerously-skip-permissions     | --resume    |
-      | gemini    | false            | false        | --yolo                             | --resume    |
+      | Assistant | Worktree Support | Image Upload | Hooks Support | Auto-Approve Flag                         | Resume Flag |
+      | claude    | true             | true         | true          | --dangerously-skip-permissions            | --resume    |
+      | gemini    | false            | false        | true          | --yolo                                    | --resume    |
+      | codex     | false            | false        | false         | --dangerously-bypass-approvals-and-sandbox | resume      |
 
   Scenario: Assistant prompt characters
     Then each assistant should have a known prompt character for ready detection:
       | Assistant | Prompt Character |
       | claude    | ❯                |
-      | gemini    | >                |
+      | gemini    | Type your message |
+      | codex     | ›                |
 
   # ── Card Assistant Identity ──
 
@@ -42,6 +45,11 @@ Feature: Multi-Coding-Assistant Support
     When links.json is loaded
     Then the card's assistant should be "gemini"
 
+  Scenario: Codex cards persist assistant through JSON round-trip
+    Given a card with assistant "codex" is saved to links.json
+    When links.json is loaded
+    Then the card's assistant should be "codex"
+
   # ── Session Discovery Tags ──
 
   Scenario: Discovered Claude sessions are tagged
@@ -54,10 +62,15 @@ Feature: Multi-Coding-Assistant Support
     When the composite discovery runs
     Then those sessions should have assistant = "gemini"
 
-  Scenario: Composite discovery merges both sources
-    Given 3 Claude sessions and 2 Gemini sessions exist
+  Scenario: Discovered Codex sessions are tagged
+    Given sessions exist under ~/.codex/sessions/
     When the composite discovery runs
-    Then all 5 sessions should be returned
+    Then those sessions should have assistant = "codex"
+
+  Scenario: Composite discovery merges all sources
+    Given 3 Claude sessions and 2 Gemini sessions and 1 Codex session exist
+    When the composite discovery runs
+    Then all 6 sessions should be returned
     And they should be sorted by modification time (newest first)
 
   # ── Settings ──

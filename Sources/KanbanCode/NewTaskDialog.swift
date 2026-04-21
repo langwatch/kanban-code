@@ -289,24 +289,23 @@ struct NewTaskDialog: View {
 
         if runRemotely && hasRemoteConfig {
             parts.append("SHELL=~/.kanban-code/remote/zsh")
-            if selectedAssistant == .gemini {
+            if selectedAssistant.requiresRemotePathWrapper {
                 parts.append("PATH=~/.kanban-code/remote:$PATH")
             }
         }
 
-        var cmd = selectedAssistant.cliCommand
-        if dangerouslySkipPermissions { cmd += " \(selectedAssistant.autoApproveFlag)" }
-
+        let worktreeName: String?
         if createWorktree && isGitRepo && selectedAssistant.supportsWorktree {
             let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
-            if branch.isEmpty {
-                cmd += " --worktree"
-            } else {
-                cmd += " --worktree \(branch)"
-            }
+            worktreeName = branch
+        } else {
+            worktreeName = nil
         }
 
-        parts.append(cmd)
+        parts.append(selectedAssistant.launchCommand(
+            skipPermissions: dangerouslySkipPermissions,
+            worktreeName: worktreeName
+        ))
 
         return parts.joined(separator: " \\\n  ")
     }

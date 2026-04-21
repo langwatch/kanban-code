@@ -121,7 +121,7 @@ public actor EffectHandler {
             }
         case .sendPromptToTmux(let sessionName, let promptBody, let assistant):
             do {
-                if assistant == .gemini {
+                if assistant.submitsPromptWithPaste {
                     try await tmuxAdapter?.pastePrompt(to: sessionName, text: promptBody)
                 } else {
                     try await tmuxAdapter?.sendPrompt(to: sessionName, text: promptBody)
@@ -132,9 +132,12 @@ public actor EffectHandler {
 
         case .sendPromptWithImagesToTmux(let sessionName, let promptBody, let imagePaths, let assistant):
             do {
-                guard let tmux = tmuxAdapter, let setClipboard = setClipboardImage else { return }
-                let images = imagePaths.compactMap { ImageAttachment.fromPath($0) }
+                guard let tmux = tmuxAdapter else { return }
+                let images = assistant.supportsImageUpload
+                    ? imagePaths.compactMap { ImageAttachment.fromPath($0) }
+                    : []
                 if !images.isEmpty {
+                    guard let setClipboard = setClipboardImage else { return }
                     let sender = ImageSender(tmux: tmux)
                     try await sender.waitForReady(sessionName: sessionName, assistant: assistant)
                     try await sender.sendImages(
@@ -144,13 +147,15 @@ public actor EffectHandler {
                         setClipboard: setClipboard
                     )
                 }
-                if assistant == .gemini {
+                if assistant.submitsPromptWithPaste {
                     try await tmux.pastePrompt(to: sessionName, text: promptBody)
                 } else {
                     try await tmux.sendPrompt(to: sessionName, text: promptBody)
                 }
-                for path in imagePaths {
-                    try? FileManager.default.removeItem(atPath: path)
+                if assistant.supportsImageUpload {
+                    for path in imagePaths {
+                        try? FileManager.default.removeItem(atPath: path)
+                    }
                 }
             } catch {
                 KanbanCodeLog.warn("effect", "sendPromptWithImagesToTmux failed: \(error)")

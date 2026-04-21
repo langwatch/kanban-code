@@ -244,32 +244,29 @@ struct LaunchConfirmationDialog: View {
 
         if effectiveRunRemotely {
             parts.append("SHELL=~/.kanban-code/remote/zsh")
-            if assistant == .gemini {
+            if assistant.requiresRemotePathWrapper {
                 parts.append("PATH=~/.kanban-code/remote:$PATH")
             }
         }
 
         if isResume, let sid = sessionId {
-            var resumeCmd = assistant.cliCommand
-            if dangerouslySkipPermissions { resumeCmd += " \(assistant.autoApproveFlag)" }
-            resumeCmd += " \(assistant.resumeFlag) \(sid)"
+            let resumeCmd = assistant.resumeCommand(
+                sessionId: sid,
+                skipPermissions: dangerouslySkipPermissions
+            )
             parts.append("cd \(projectPath) && \(resumeCmd)")
         } else {
-            var cmd = assistant.cliCommand
-            if dangerouslySkipPermissions { cmd += " \(assistant.autoApproveFlag)" }
-
-            if effectiveCreateWorktree && assistant.supportsWorktree {
-                let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let name = worktreeName, !name.isEmpty {
-                    cmd += " --worktree \(name)"
-                } else if !branch.isEmpty {
-                    cmd += " --worktree \(branch)"
-                } else {
-                    cmd += " --worktree"
-                }
+            let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let effectiveWorktreeName: String?
+            if effectiveCreateWorktree {
+                effectiveWorktreeName = (worktreeName?.isEmpty == false) ? worktreeName : branch
+            } else {
+                effectiveWorktreeName = nil
             }
-
-            parts.append(cmd)
+            parts.append(assistant.launchCommand(
+                skipPermissions: dangerouslySkipPermissions,
+                worktreeName: effectiveWorktreeName
+            ))
         }
 
         return parts.joined(separator: " \\\n  ")

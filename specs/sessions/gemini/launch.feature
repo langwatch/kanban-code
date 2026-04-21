@@ -39,21 +39,22 @@ Feature: Launch and Resume Gemini CLI Sessions
   # ── Ready Detection ──
 
   Scenario: Detect Gemini ready prompt
-    Given tmux capture-pane output ends with "> "
+    Given tmux capture-pane output contains "Type your message"
     When checking isReady for assistant "gemini"
     Then it should return true
 
   Scenario: Gemini not ready yet (loading)
-    Given tmux capture-pane output shows "Loading..." with no "> "
+    Given tmux capture-pane output shows "Loading..." with no "Type your message"
     When checking isReady for assistant "gemini"
     Then it should return false
 
   # ── Prompt Sending ──
 
-  Scenario: Send prompt to Gemini via send-keys
-    Given a Gemini session is ready ("> " detected)
+  Scenario: Send prompt to Gemini via bracketed paste
+    Given a Gemini session is ready ("Type your message" detected)
     When a text prompt is sent
-    Then it should be sent via tmux send-keys (same as Claude)
+    Then it should be sent via tmux bracketed paste
+    # This preserves special characters that Gemini otherwise treats as commands
 
   # ── Image Upload ──
 

@@ -28,15 +28,10 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
             cmd = commandOverride
         } else {
             // Build the CLI command (prompt is sent via send-keys after assistant is ready)
-            var built = assistant.cliCommand
-            if skipPermissions { built += " \(assistant.autoApproveFlag)" }
-            if assistant.supportsWorktree, let worktreeName {
-                if worktreeName.isEmpty {
-                    built += " --worktree"
-                } else {
-                    built += " --worktree \(worktreeName)"
-                }
-            }
+            var built = assistant.launchCommand(
+                skipPermissions: skipPermissions,
+                worktreeName: worktreeName
+            )
 
             // Prepend environment variables (SHELL override + KANBAN_CODE_* vars)
             let envPrefix = buildEnvPrefix(shellOverride: shellOverride, extraEnv: extraEnv)
@@ -83,9 +78,10 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
         if let commandOverride, !commandOverride.isEmpty {
             cmd = commandOverride
         } else {
-            var built = assistant.cliCommand
-            if skipPermissions { built += " \(assistant.autoApproveFlag)" }
-            built += " \(assistant.resumeFlag) \(sessionId)"
+            var built = assistant.resumeCommand(
+                sessionId: sessionId,
+                skipPermissions: skipPermissions
+            )
             let envPrefix = buildEnvPrefix(shellOverride: shellOverride, extraEnv: extraEnv)
             if !envPrefix.isEmpty {
                 built = envPrefix + " " + built

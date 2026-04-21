@@ -16,6 +16,10 @@ Feature: Card Assistant Badge
     Given a card with assistant "claude"
     Then the card should display a Claude icon/badge
 
+  Scenario: Codex card shows Codex icon
+    Given a card with assistant "codex"
+    Then the card should display a Codex icon/badge
+
   Scenario: Legacy card without assistant shows Claude icon
     Given an existing card with no assistant field (nil)
     Then the card should display a Claude icon/badge
@@ -33,8 +37,12 @@ Feature: Card Assistant Badge
     When the card detail view is shown
     Then the assistant should be displayed as "Gemini CLI"
 
+  Scenario: Card detail shows Codex assistant name
+    Given a card with assistant "codex" is selected
+    When the card detail view is shown
+    Then the assistant should be displayed as "Codex CLI"
+
   Scenario: Card detail shows migration button
     Given a card with assistant "claude" and a session
     When the card detail view is shown
-    Then a "Migrate to Gemini CLI" button should be available
-    # Only if the other assistant is installed
+    Then migration buttons should be available for other installed assistants

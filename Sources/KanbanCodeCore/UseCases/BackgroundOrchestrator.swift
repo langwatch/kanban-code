@@ -101,7 +101,12 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
             links[idx].manualOverrides.dismissedPRs = nil
             links[idx].discoveredBranches = nil
             links[idx].discoveredRepos = nil
-            let scanned = (try? await JsonlParser.extractPushedBranches(from: sessionPath)) ?? []
+            let scanned: [JsonlParser.DiscoveredBranch]
+            if links[idx].effectiveAssistant == .codex {
+                scanned = (try? await CodexSessionParser.extractPushedBranches(from: sessionPath)) ?? []
+            } else {
+                scanned = (try? await JsonlParser.extractPushedBranches(from: sessionPath)) ?? []
+            }
             links[idx].discoveredBranches = scanned.map(\.branch)
             // Store repo paths for branches that differ from projectPath
             var repos: [String: String] = [:]

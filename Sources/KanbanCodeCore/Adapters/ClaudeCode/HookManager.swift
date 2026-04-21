@@ -1,8 +1,8 @@
 import Foundation
 
-/// Manages hook installation for coding assistants (Claude Code, Gemini CLI).
+/// Manages hook installation for coding assistants that expose settings hooks.
 ///
-/// Both Claude Code and Gemini CLI use the same hook configuration format:
+/// Claude Code and Gemini CLI use the same hook configuration format:
 /// `settings.json` → `hooks` → `{ EventName: [{ matcher, hooks: [{ type, command }] }] }`
 ///
 /// The same hook script (`~/.kanban-code/hook.sh`) works for both because both pass
@@ -17,6 +17,8 @@ public enum HookManager {
             ["Stop", "Notification", "SessionStart", "SessionEnd", "UserPromptSubmit"]
         case .gemini:
             ["AfterAgent", "Notification", "SessionStart", "SessionEnd", "BeforeAgent"]
+        case .codex:
+            []
         }
     }
 
@@ -36,6 +38,8 @@ public enum HookManager {
 
     /// Check if hooks are already installed for the given assistant.
     public static func isInstalled(for assistant: CodingAssistant, settingsPath: String? = nil) -> Bool {
+        guard assistant.supportsHooks else { return false }
+
         let path = settingsPath ?? defaultSettingsPath(for: assistant)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -67,6 +71,10 @@ public enum HookManager {
         settingsPath: String? = nil,
         hookScriptPath: String? = nil
     ) throws {
+        guard assistant.supportsHooks else {
+            throw HookManagerError.unsupportedAssistant(assistant.displayName)
+        }
+
         let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
         let scriptPath = hookScriptPath ?? defaultHookScriptPath()
 
@@ -141,6 +149,8 @@ public enum HookManager {
 
     /// Remove Kanban hooks from the given assistant's settings.
     public static func uninstall(for assistant: CodingAssistant, settingsPath: String? = nil) throws {
+        guard assistant.supportsHooks else { return }
+
         let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
 
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
@@ -361,4 +371,15 @@ public enum HookManager {
     # Empty output — data is consumed by Kanban Code, not displayed in terminal
     printf ''
     """
+}
+
+public enum HookManagerError: LocalizedError {
+    case unsupportedAssistant(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedAssistant(let name):
+            "\(name) does not support Kanban hook installation"
+        }
+    }
 }

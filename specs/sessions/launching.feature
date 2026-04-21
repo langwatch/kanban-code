@@ -330,6 +330,12 @@ Feature: Session Launching
     When I click "Copy resume command"
     Then `cd <projectPath> && claude --resume abc-123` should be copied to clipboard
 
+  Scenario: Copy resume command uses the card's assistant
+    Given a card has assistant "codex"
+    And sessionLink.sessionId = "019da64f-874c-7a03-bde4-7660c09931f2"
+    When I click "Copy resume command"
+    Then `cd <projectPath> && codex resume --no-alt-screen 019da64f-874c-7a03-bde4-7660c09931f2` should be copied to clipboard
+
   Scenario: Copy resume command for card without session
     Given a card has no sessionLink (e.g., backlog issue)
     When I click "Copy resume command"

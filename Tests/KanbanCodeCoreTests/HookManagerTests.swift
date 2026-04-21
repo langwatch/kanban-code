@@ -282,5 +282,23 @@ struct HookManagerTests {
         #expect(gemini.contains("BeforeAgent"))
         #expect(!gemini.contains("Stop"))
         #expect(!gemini.contains("UserPromptSubmit"))
+
+        let codex = HookManager.requiredHooks(for: .codex)
+        #expect(codex.isEmpty)
+    }
+
+    @Test("Codex hooks are unsupported")
+    func codexHooksUnsupported() throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let settingsPath = (dir as NSString).appendingPathComponent("settings.json")
+        let scriptPath = (dir as NSString).appendingPathComponent(".kanban-code/hook.sh")
+
+        #expect(!HookManager.isInstalled(for: .codex, settingsPath: settingsPath))
+        #expect(throws: HookManagerError.self) {
+            try HookManager.install(for: .codex, settingsPath: settingsPath, hookScriptPath: scriptPath)
+        }
+        try HookManager.uninstall(for: .codex, settingsPath: settingsPath)
     }
 }

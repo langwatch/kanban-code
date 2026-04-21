@@ -162,7 +162,7 @@ struct SessionIcon: View {
 
 // MARK: - Assistant Icon
 
-/// Displays the icon for a coding assistant — clawd pixel art for Claude, sparkle for Gemini.
+/// Displays the icon for a coding assistant.
 struct AssistantIcon: View {
     let assistant: CodingAssistant
 
@@ -172,6 +172,8 @@ struct AssistantIcon: View {
             SessionIcon()
         case .gemini:
             GeminiSparkle()
+        case .codex:
+            CodexIcon()
         }
     }
 
@@ -185,6 +187,9 @@ struct AssistantIcon: View {
             return SessionIcon.resizedForMenu(src, to: size)
         case .gemini:
             return geminiMenuImage(size: size)
+        case .codex:
+            guard let src = CodexIcon.menuImage else { return nil }
+            return SessionIcon.resizedForMenu(src, to: size)
         }
     }
 
@@ -198,6 +203,37 @@ struct AssistantIcon: View {
         img.unlockFocus()
         img.isTemplate = true
         return img
+    }
+}
+
+/// Loads the Codex SVG from the SPM bundle resource.
+struct CodexIcon: View {
+    private static let sourceImage: NSImage? = {
+        guard let url = Bundle.appResources.url(
+            forResource: "codex",
+            withExtension: "svg",
+            subdirectory: "Resources"
+        ) else {
+            return nil
+        }
+        let img = NSImage(contentsOf: url)
+        img?.size = NSSize(width: 24, height: 24)
+        img?.isTemplate = true
+        return img
+    }()
+
+    /// NSImage suitable for use in NSMenuItem (template for dark mode support).
+    static var menuImage: NSImage? { sourceImage }
+
+    var body: some View {
+        if let src = Self.sourceImage {
+            Image(nsImage: src)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: "curlybraces")
+                .font(.system(size: 13, weight: .semibold))
+        }
     }
 }
 

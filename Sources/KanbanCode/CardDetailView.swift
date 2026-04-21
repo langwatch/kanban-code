@@ -1590,7 +1590,7 @@ struct CardDetailView: View {
         do {
             // File I/O + JSON parsing runs OFF the main actor to avoid freezing
             let parsed = try await Task.detached { () -> TranscriptReader.ReadResult in
-                if assistant == .gemini {
+                if assistant != .claude {
                     let allTurns = try await store.readTranscript(sessionPath: path)
                     return TranscriptReader.ReadResult(turns: allTurns, totalLineCount: -1, hasMore: false)
                 } else {
@@ -1618,6 +1618,7 @@ struct CardDetailView: View {
 
     private func loadMoreHistory() async {
         guard hasMoreTurns, !isLoadingMore else { return }
+        guard card.link.effectiveAssistant == .claude else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
 
         isLoadingMore = true
@@ -1637,6 +1638,7 @@ struct CardDetailView: View {
     /// Load turns around a specific turn index (for search match navigation).
     /// Loads a page-sized chunk around the target, merging with existing turns.
     private func loadAroundTurn(_ targetIndex: Int) async {
+        guard card.link.effectiveAssistant == .claude else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
         isLoadingMore = true
 
@@ -1798,7 +1800,7 @@ struct CardDetailView: View {
             cmd += "cd \(projectPath) && "
         }
         if let sessionId = card.link.sessionLink?.sessionId {
-            cmd += "claude --resume \(sessionId)"
+            cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
         } else {
             cmd += "# no session yet"
         }

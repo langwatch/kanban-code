@@ -138,7 +138,7 @@ struct SettingsView: View {
         let enabledAssistants = (try? await settingsStore.read())?.enabledAssistants ?? CodingAssistant.allCases
         for assistant in CodingAssistant.allCases {
             let available = await ShellCommand.isAvailable(assistant.cliCommand)
-            let hooks = HookManager.isInstalled(for: assistant)
+            let hooks = assistant.supportsHooks && HookManager.isInstalled(for: assistant)
             assistantStatus[assistant] = AssistantStatus(
                 available: available,
                 hooksInstalled: hooks,
@@ -181,7 +181,7 @@ struct AssistantsSettingsView: View {
                         }
                     ))
 
-                    if status.enabled {
+                    if status.enabled && assistant.supportsHooks {
                         HStack {
                             Label("Hooks", systemImage: status.hooksInstalled ? "checkmark.circle.fill" : "xmark.circle")
                                 .foregroundStyle(status.hooksInstalled ? .green : .secondary)
@@ -206,6 +206,15 @@ struct AssistantsSettingsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                             }
+                        }
+                    } else if status.enabled {
+                        HStack {
+                            Label("Activity", systemImage: "doc.text.magnifyingglass")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("Session file polling")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
                         }
                     }
                 } header: {

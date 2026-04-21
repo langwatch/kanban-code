@@ -42,6 +42,14 @@ Feature: Session Migration Between Assistants
     Then a new .jsonl file should be created in ~/.claude/projects/<encoded>/
     And each line should be a valid JSON object with Claude's schema
 
+  Scenario: Create Codex session from exported assistant text
+    Given exported conversation turns from a Claude or Gemini session
+    When importing into Codex format
+    Then a new JSONL file should be created under ~/.codex/sessions/YYYY/MM/DD/
+    And the first line should be a "session_meta" record with the new session id
+    And user messages should be stored as "response_item" messages with "input_text"
+    And assistant messages should be stored as "response_item" messages with "output_text"
+
   # ── Card Update ──
 
   Scenario: Card is updated after migration
@@ -49,6 +57,12 @@ Feature: Session Migration Between Assistants
     Then the card's assistant should change to "gemini"
     And a new sessionLink should point to the new Gemini session file
     And the old Claude sessionLink should be removed
+
+  Scenario: Card is updated after migration to Codex
+    Given a card with assistant "gemini" is migrated to "codex"
+    Then the card's assistant should change to "codex"
+    And a new sessionLink should point to the new Codex JSONL session file
+    And the old Gemini sessionLink should be removed
 
   Scenario: Card retains other links after migration
     Given a card with a worktreeLink and prLinks

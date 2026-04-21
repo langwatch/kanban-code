@@ -13,10 +13,11 @@ Feature: Onboarding with Multiple Assistants
       | Assistant   | Check Command    |
       | Claude Code | which claude     |
       | Gemini CLI  | which gemini     |
+      | Codex CLI   | which codex      |
 
-  Scenario: Both assistants installed
-    Given both "claude" and "gemini" are on PATH
-    Then both should show green checkmarks
+  Scenario: All assistants installed
+    Given "claude", "gemini", and "codex" are on PATH
+    Then all should show green checkmarks
 
   Scenario: Only Claude installed
     Given "claude" is on PATH but "gemini" is not
@@ -29,9 +30,9 @@ Feature: Onboarding with Multiple Assistants
     And Claude Code should show "Not installed" with install instructions
 
   Scenario: Neither installed
-    Given neither "claude" nor "gemini" is on PATH
-    Then both should show "Not installed"
-    And install instructions should be shown for both
+    Given none of "claude", "gemini", or "codex" is on PATH
+    Then all should show "Not installed"
+    And install instructions should be shown for all enabled assistants
 
   Scenario: Claude install instruction
     Given Claude Code is not installed
@@ -41,11 +42,16 @@ Feature: Onboarding with Multiple Assistants
     Given Gemini CLI is not installed
     Then the install command should be "npm install -g @google/gemini-cli"
 
+  Scenario: Codex install instruction
+    Given Codex CLI is not installed
+    Then the install command should be "npm install -g @openai/codex"
+
   # ── Hooks Step ──
 
-  Scenario: Hooks step checks both assistants
-    Given both Claude and Gemini are installed
-    Then the hooks step should check hook installation for both
+  Scenario: Hooks step checks assistants that support hooks
+    Given Claude, Gemini, and Codex are installed
+    Then the hooks step should check hook installation for Claude and Gemini
+    And Codex should not get a hooks installation step
 
   Scenario: Install Claude hooks
     Given Claude Code is installed but hooks are not installed
@@ -56,6 +62,11 @@ Feature: Onboarding with Multiple Assistants
     Given Gemini CLI is installed but hooks are not installed
     When "Install Gemini Hooks" is clicked
     Then hooks should be installed via Gemini's hook system
+
+  Scenario: Codex uses session file polling instead of hooks
+    Given Codex CLI is installed
+    Then onboarding should not offer "Install Codex Hooks"
+    And Codex activity should be described as session file polling
 
   Scenario: Kill pre-existing sessions warning
     Given Claude hooks were just installed
@@ -77,18 +88,21 @@ Feature: Onboarding with Multiple Assistants
       | Claude Code        | Ready/Not set up |
       | Claude Code Hooks  | Ready/Not set up |
       | Gemini CLI         | Ready/Not set up |
+      | Gemini CLI Hooks   | Ready/Not set up |
+      | Codex CLI          | Ready/Not set up |
       | Pushover           | Ready/Not set up |
       | tmux               | Ready/Not set up |
       | GitHub CLI         | Ready/Not set up |
 
   # ── Dependency Checker ──
 
-  Scenario: DependencyChecker reports both assistants
+  Scenario: DependencyChecker reports all assistants
     When DependencyChecker.checkAll() runs
     Then the status should include:
       | Field             | Type |
       | claudeAvailable   | Bool |
       | geminiAvailable   | Bool |
+      | codexAvailable    | Bool |
       | hooksInstalled    | Bool |
       | tmuxAvailable     | Bool |
       | ghAvailable       | Bool |

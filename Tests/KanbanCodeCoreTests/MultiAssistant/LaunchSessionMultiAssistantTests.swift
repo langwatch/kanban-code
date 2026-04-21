@@ -96,6 +96,50 @@ struct LaunchSessionMultiAssistantTests {
         #expect(!cmd.contains("--worktree"))
     }
 
+    // MARK: - Launch with Codex
+
+    @Test("Launch with Codex uses codex command and tmux-friendly flags")
+    func launchCodex() async throws {
+        let mock = RecordingTmux()
+        let launcher = LaunchSession(tmux: mock)
+
+        _ = try await launcher.launch(
+            sessionName: "test",
+            projectPath: "/tmp/project",
+            prompt: "fix bug",
+            worktreeName: nil,
+            shellOverride: nil,
+            skipPermissions: true,
+            assistant: .codex
+        )
+
+        let cmd = mock.lastCommand ?? ""
+        #expect(cmd.contains("codex"))
+        #expect(cmd.contains("--no-alt-screen"))
+        #expect(cmd.contains("--dangerously-bypass-approvals-and-sandbox"))
+        #expect(!cmd.contains("--yolo"))
+        #expect(!cmd.contains("--dangerously-skip-permissions"))
+    }
+
+    @Test("Launch with Codex skips worktree even when provided")
+    func launchCodexNoWorktree() async throws {
+        let mock = RecordingTmux()
+        let launcher = LaunchSession(tmux: mock)
+
+        _ = try await launcher.launch(
+            sessionName: "test",
+            projectPath: "/tmp/project",
+            prompt: "fix bug",
+            worktreeName: "feat-x",
+            shellOverride: nil,
+            skipPermissions: false,
+            assistant: .codex
+        )
+
+        let cmd = mock.lastCommand ?? ""
+        #expect(!cmd.contains("--worktree"))
+    }
+
     @Test("Launch with Claude includes worktree flag")
     func launchClaudeWithWorktree() async throws {
         let mock = RecordingTmux()
@@ -155,6 +199,28 @@ struct LaunchSessionMultiAssistantTests {
         #expect(cmd.contains("gemini"))
         #expect(cmd.contains("--resume sess_xyz12345-rest"))
         #expect(cmd.contains("--yolo"))
+    }
+
+    @Test("Resume with Codex uses resume subcommand and prefix")
+    func resumeCodex() async throws {
+        let mock = RecordingTmux()
+        let launcher = LaunchSession(tmux: mock)
+
+        let sessionName = try await launcher.resume(
+            sessionId: "019da64f-874c-7a03-bde4-7660c09931f2",
+            projectPath: "/tmp/project",
+            shellOverride: nil,
+            skipPermissions: true,
+            assistant: .codex
+        )
+
+        #expect(sessionName == "codex-019da64f")
+        let cmd = mock.lastCommand ?? ""
+        #expect(cmd.contains("codex resume"))
+        #expect(cmd.contains("--no-alt-screen"))
+        #expect(cmd.contains("--dangerously-bypass-approvals-and-sandbox"))
+        #expect(cmd.contains("019da64f-874c-7a03-bde4-7660c09931f2"))
+        #expect(!cmd.contains("--resume"))
     }
 
     @Test("Resume without skip permissions omits flag")

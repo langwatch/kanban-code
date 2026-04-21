@@ -84,6 +84,25 @@ struct ImageSenderMultiAssistantTests {
         #expect(mock.captureCallCount == 3)
     }
 
+    @Test("waitForReady detects Codex prompt")
+    func waitForReadyCodex() async throws {
+        let mock = MockTmux()
+        mock.capturedPaneOutputs = [
+            "Starting Codex...",
+            "model: gpt-5.4\ncwd: /tmp/project\n›",
+        ]
+
+        let sender = ImageSender(tmux: mock)
+        try await sender.waitForReady(
+            sessionName: "test-codex",
+            assistant: .codex,
+            pollInterval: .milliseconds(10),
+            timeout: .seconds(5)
+        )
+
+        #expect(mock.captureCallCount == 2)
+    }
+
     // MARK: - Timeout errors include assistant name
 
     @Test("Timeout error says 'Gemini CLI' for Gemini")
@@ -124,6 +143,28 @@ struct ImageSenderMultiAssistantTests {
         } catch let error as ImageSendError {
             let message = error.errorDescription ?? ""
             #expect(message.contains("Claude Code"))
+            #expect(!message.contains("Gemini"))
+        }
+    }
+
+    @Test("Timeout error says 'Codex CLI' for Codex")
+    func timeoutErrorCodex() async throws {
+        let mock = MockTmux()
+        mock.capturedPaneOutputs = ["Loading Codex..."]
+
+        let sender = ImageSender(tmux: mock)
+        do {
+            try await sender.waitForReady(
+                sessionName: "test",
+                assistant: .codex,
+                pollInterval: .milliseconds(10),
+                timeout: .milliseconds(50)
+            )
+            Issue.record("Expected error to be thrown")
+        } catch let error as ImageSendError {
+            let message = error.errorDescription ?? ""
+            #expect(message.contains("Codex CLI"))
+            #expect(!message.contains("Claude"))
             #expect(!message.contains("Gemini"))
         }
     }

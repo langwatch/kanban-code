@@ -6,6 +6,7 @@ public enum DependencyChecker {
     public struct Status: Sendable {
         public let claudeAvailable: Bool
         public let geminiAvailable: Bool
+        public let codexAvailable: Bool
         public let hooksInstalled: Bool
         public let pandocAvailable: Bool
         public let wkhtmltoimageAvailable: Bool
@@ -20,7 +21,7 @@ public enum DependencyChecker {
         public let assistantHooks: [CodingAssistant: Bool]
 
         public init(
-            claudeAvailable: Bool, geminiAvailable: Bool = false,
+            claudeAvailable: Bool, geminiAvailable: Bool = false, codexAvailable: Bool = false,
             hooksInstalled: Bool,
             assistantHooks: [CodingAssistant: Bool] = [:],
             pandocAvailable: Bool,
@@ -31,6 +32,7 @@ public enum DependencyChecker {
         ) {
             self.claudeAvailable = claudeAvailable
             self.geminiAvailable = geminiAvailable
+            self.codexAvailable = codexAvailable
             self.hooksInstalled = hooksInstalled
             self.pandocAvailable = pandocAvailable
             self.wkhtmltoimageAvailable = wkhtmltoimageAvailable
@@ -50,6 +52,7 @@ public enum DependencyChecker {
     public static func checkAll(settingsStore: SettingsStore) async -> Status {
         async let claude = ShellCommand.isAvailable("claude")
         async let gemini = ShellCommand.isAvailable("gemini")
+        async let codex = ShellCommand.isAvailable("codex")
         async let pandoc = ShellCommand.isAvailable("pandoc")
         async let wkhtmltoimage = ShellCommand.isAvailable("wkhtmltoimage")
         async let gh = ShellCommand.isAvailable("gh")
@@ -76,6 +79,7 @@ public enum DependencyChecker {
         return await Status(
             claudeAvailable: claude,
             geminiAvailable: gemini,
+            codexAvailable: codex,
             hooksInstalled: hooks[.claude] ?? false,
             assistantHooks: hooks,
             pandocAvailable: pandoc,

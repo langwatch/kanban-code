@@ -26,7 +26,7 @@ export type PRStatus =
   | "closed";
 
 export type LinkSource = "discovered" | "hook" | "manual" | "githubIssue";
-export type CodingAssistant = "claude" | "gemini";
+export type CodingAssistant = "claude" | "gemini" | "codex";
 
 export interface SessionLink {
   sessionId: string;

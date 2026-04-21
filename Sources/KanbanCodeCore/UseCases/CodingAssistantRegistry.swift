@@ -44,8 +44,8 @@ public final class CodingAssistantRegistry: @unchecked Sendable {
         stores.removeValue(forKey: assistant)
     }
 
-    /// All registered assistants, sorted by raw value for deterministic ordering.
+    /// All registered assistants, in the product's preferred assistant order.
     public var available: [CodingAssistant] {
-        Array(discoveries.keys).sorted { $0.rawValue < $1.rawValue }
+        CodingAssistant.allCases.filter { discoveries[$0] != nil }
     }
 }

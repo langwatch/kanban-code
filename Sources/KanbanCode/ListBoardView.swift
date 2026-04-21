@@ -213,7 +213,7 @@ struct ListBoardView: View {
                         .font(.app(.title3))
                         .foregroundStyle(.secondary)
                 }
-                Text("Create a new task or start a Claude session to get going.")
+                Text("Create a new task or start an assistant session to get going.")
                     .font(.app(.caption))
                     .foregroundStyle(.tertiary)
 

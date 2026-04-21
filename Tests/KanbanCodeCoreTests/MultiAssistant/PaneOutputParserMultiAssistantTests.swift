@@ -59,6 +59,23 @@ struct PaneOutputParserMultiAssistantTests {
         #expect(PaneOutputParser.isReady(output, assistant: .gemini) == false)
     }
 
+    // MARK: - isReady with Codex
+
+    @Test("isReady detects Codex prompt")
+    func isReadyCodex() {
+        let output = """
+        model: gpt-5.4
+        cwd: /tmp/project
+        ›
+        """
+        #expect(PaneOutputParser.isReady(output, assistant: .codex) == true)
+    }
+
+    @Test("isReady does not detect Claude prompt as Codex ready")
+    func codexNotReadyWithClaudePrompt() {
+        #expect(PaneOutputParser.isReady("❯", assistant: .codex) == false)
+    }
+
     // MARK: - isClaudeReady backward compat
 
     @Test("isClaudeReady delegates to isReady with .claude")
@@ -75,5 +92,6 @@ struct PaneOutputParserMultiAssistantTests {
     func emptyOutputNotReady() {
         #expect(PaneOutputParser.isReady("", assistant: .claude) == false)
         #expect(PaneOutputParser.isReady("", assistant: .gemini) == false)
+        #expect(PaneOutputParser.isReady("", assistant: .codex) == false)
     }
 }

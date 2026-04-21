@@ -29,8 +29,9 @@ struct OnboardingWizard: View {
             switch assistant {
             case .claude: available = status?.claudeAvailable ?? false
             case .gemini: available = status?.geminiAvailable ?? false
+            case .codex: available = status?.codexAvailable ?? false
             }
-            if available && enabledAssistants.contains(assistant) {
+            if available && enabledAssistants.contains(assistant) && assistant.supportsHooks {
                 result.append(.hooks(assistant))
             }
         }
@@ -168,6 +169,7 @@ struct OnboardingWizard: View {
                     switch assistant {
                     case .claude: status?.claudeAvailable ?? false
                     case .gemini: status?.geminiAvailable ?? false
+                    case .codex: status?.codexAvailable ?? false
                     }
                 }()
 
@@ -204,6 +206,7 @@ struct OnboardingWizard: View {
                 switch assistant {
                 case .claude: return !(status?.claudeAvailable ?? false)
                 case .gemini: return !(status?.geminiAvailable ?? false)
+                case .codex: return !(status?.codexAvailable ?? false)
                 }
             }
 
@@ -218,6 +221,7 @@ struct OnboardingWizard: View {
                             switch assistant {
                             case .claude: status?.claudeAvailable ?? false
                             case .gemini: status?.geminiAvailable ?? false
+                            case .codex: status?.codexAvailable ?? false
                             }
                         }()
 
@@ -565,10 +569,11 @@ struct OnboardingWizard: View {
                             switch assistant {
                             case .claude: status?.claudeAvailable ?? false
                             case .gemini: status?.geminiAvailable ?? false
+                            case .codex: status?.codexAvailable ?? false
                             }
                         }()
                         summaryRow(assistant.displayName, status: available)
-                        if available {
+                        if available && assistant.supportsHooks {
                             summaryRow("  \(assistant.displayName) Hooks", status: status?.assistantHooks[assistant] ?? false)
                         }
                     }

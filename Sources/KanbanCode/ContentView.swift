@@ -171,6 +171,9 @@ struct ContentView: View {
         let geminiDiscovery = GeminiSessionDiscovery()
         let geminiDetector = GeminiActivityDetector()
         let geminiStore = GeminiSessionStore()
+        let codexDiscovery = CodexSessionDiscovery()
+        let codexDetector = CodexActivityDetector()
+        let codexStore = CodexSessionStore()
 
         let enabledAssistants = Self.loadEnabledAssistants()
         let registry = CodingAssistantRegistry()
@@ -179,6 +182,9 @@ struct ContentView: View {
         }
         if enabledAssistants.contains(.gemini) {
             registry.register(.gemini, discovery: geminiDiscovery, detector: geminiDetector, store: geminiStore)
+        }
+        if enabledAssistants.contains(.codex) {
+            registry.register(.codex, discovery: codexDiscovery, detector: codexDetector, store: codexStore)
         }
 
         let discovery = CompositeSessionDiscovery(registry: registry)
@@ -295,6 +301,8 @@ struct ContentView: View {
                         assistantRegistry.register(.claude, discovery: ClaudeCodeSessionDiscovery(), detector: ClaudeCodeActivityDetector(), store: ClaudeCodeSessionStore())
                     case .gemini:
                         assistantRegistry.register(.gemini, discovery: GeminiSessionDiscovery(), detector: GeminiActivityDetector(), store: GeminiSessionStore())
+                    case .codex:
+                        assistantRegistry.register(.codex, discovery: CodexSessionDiscovery(), detector: CodexActivityDetector(), store: CodexSessionStore())
                     }
                 }
             } else {
@@ -322,7 +330,7 @@ struct ContentView: View {
                     cmd += "cd \(projectPath) && "
                 }
                 if let sessionId = card.link.sessionLink?.sessionId {
-                    cmd += "claude --resume \(sessionId)"
+                    cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
                 }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(cmd, forType: .string)
@@ -394,7 +402,7 @@ struct ContentView: View {
                     cmd += "cd \(projectPath) && "
                 }
                 if let sessionId = card.link.sessionLink?.sessionId {
-                    cmd += "claude --resume \(sessionId)"
+                    cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
                 }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(cmd, forType: .string)
@@ -1948,7 +1956,9 @@ struct ContentView: View {
                 onCopyResumeCmd: {
                     var cmd = ""
                     if let pp = card.link.projectPath { cmd += "cd \(pp) && " }
-                    if let sid = card.link.sessionLink?.sessionId { cmd += "claude --resume \(sid)" }
+                    if let sid = card.link.sessionLink?.sessionId {
+                        cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sid, skipPermissions: false)
+                    }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(cmd, forType: .string)
                 },

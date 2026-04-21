@@ -41,6 +41,23 @@ struct LinkAssistantCodableTests {
         #expect(decoded.effectiveAssistant == .gemini)
     }
 
+    @Test("Link with codex assistant round-trips through JSON")
+    func linkCodexRoundTrip() throws {
+        let link = Link(
+            id: "card_test3",
+            projectPath: "/test/project",
+            assistant: .codex
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(link)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(Link.self, from: data)
+        #expect(decoded.assistant == .codex)
+        #expect(decoded.effectiveAssistant == .codex)
+    }
+
     // MARK: - Backward Compatibility
 
     @Test("Link without assistant field decodes as nil, effectiveAssistant is .claude")
@@ -98,6 +115,12 @@ struct LinkAssistantCodableTests {
         #expect(session.assistant == .gemini)
     }
 
+    @Test("Session with codex assistant")
+    func sessionCodexAssistant() {
+        let session = Session(id: "sess-3", assistant: .codex)
+        #expect(session.assistant == .codex)
+    }
+
     // MARK: - effectiveAssistant
 
     @Test("effectiveAssistant returns .claude when assistant is nil")
@@ -111,5 +134,11 @@ struct LinkAssistantCodableTests {
     func effectiveAssistantGemini() {
         let link = Link(id: "card_eff2", assistant: .gemini)
         #expect(link.effectiveAssistant == .gemini)
+    }
+
+    @Test("effectiveAssistant returns .codex when set")
+    func effectiveAssistantCodex() {
+        let link = Link(id: "card_eff3", assistant: .codex)
+        #expect(link.effectiveAssistant == .codex)
     }
 }

@@ -137,7 +137,9 @@ public final class TmuxAdapter: TmuxManagerPort, @unchecked Sendable {
     /// prompt line after Enter, send Enter again.
     /// Also waits through "working" periods (Claude may be mid-thought when
     /// the paste arrived, so the text sits unsent until Claude finishes).
-    /// Checks for: [Pasted text...] indicator, or text after the ❯/› prompt character.
+    /// Checks for: [Pasted text...] indicator, or text after Claude's ❯ prompt character.
+    /// Codex renders submitted prompts as historical `› text` lines, so treating
+    /// `›` as unsent input causes duplicate Enter presses.
     private func ensurePromptSent(sessionName: String) async throws {
         for attempt in 0..<10 {
             try await Task.sleep(for: .milliseconds(attempt == 0 ? 300 : 500))
@@ -148,7 +150,6 @@ public final class TmuxAdapter: TmuxManagerPort, @unchecked Sendable {
                 hasUnsentText = true
             } else {
                 let lastPromptRange = output.range(of: "\u{276F}", options: .backwards)
-                    ?? output.range(of: "\u{203A}", options: .backwards)
                 if let promptRange = lastPromptRange {
                     let afterPrompt = output[promptRange.upperBound...]
                     let sameLine = afterPrompt.prefix(while: { $0 != "\n" })

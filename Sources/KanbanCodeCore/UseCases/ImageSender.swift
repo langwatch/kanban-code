@@ -35,8 +35,8 @@ public actor ImageSender {
         pollInterval: Duration = .milliseconds(500),
         timeout: Duration? = nil
     ) async throws {
-        // Gemini takes longer to start (ASCII art banner, auth, plan info)
-        let effectiveTimeout = timeout ?? (assistant == .gemini ? .seconds(60) : .seconds(30))
+        // Gemini and Codex can take longer to start (auth checks, banners, model setup).
+        let effectiveTimeout = timeout ?? (assistant == .gemini || assistant == .codex ? .seconds(60) : .seconds(30))
         let start = ContinuousClock.now
         while ContinuousClock.now - start < effectiveTimeout {
             let output = try await tmux.capturePane(sessionName: sessionName)

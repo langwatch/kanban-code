@@ -20,22 +20,29 @@ Feature: Coding Assistant Registry
     And registry.detector(for: .gemini) should return GeminiActivityDetector
     And registry.store(for: .gemini) should return GeminiSessionStore
 
+  Scenario: Register Codex adapters
+    When Codex adapters are registered
+    Then registry.discovery(for: .codex) should return CodexSessionDiscovery
+    And registry.detector(for: .codex) should return CodexActivityDetector
+    And registry.store(for: .codex) should return CodexSessionStore
+
   Scenario: Only installed assistants are registered
     Given Gemini CLI is not installed
     Then registry.available should only contain [.claude]
     And registry.discovery(for: .gemini) should return nil
 
-  Scenario: Both assistants registered
-    Given both Claude and Gemini are installed
-    Then registry.available should contain [.claude, .gemini]
+  Scenario: All assistants registered
+    Given Claude, Gemini, and Codex are installed
+    Then registry.available should contain [.claude, .gemini, .codex]
 
   # ── Composite Discovery ──
 
   Scenario: Composite discovery merges all sources
     Given Claude discovery finds sessions [A, B, C]
     And Gemini discovery finds sessions [D, E]
+    And Codex discovery finds sessions [F]
     When composite discovery runs
-    Then it should return [A, B, C, D, E] sorted by modification time
+    Then it should return [A, B, C, D, E, F] sorted by modification time
 
   Scenario: Composite discovery handles one source failing
     Given Claude discovery succeeds with sessions [A, B]
@@ -57,7 +64,7 @@ Feature: Coding Assistant Registry
     Then ClaudeCodeActivityDetector.handleHookEvent should be called
 
   Scenario: Route poll to correct detectors
-    Given session paths include both Claude and Gemini sessions
+    Given session paths include Claude, Gemini, and Codex sessions
     When composite detector polls activity
     Then each session's path should be polled by its assistant's detector
 
@@ -73,8 +80,13 @@ Feature: Coding Assistant Registry
     When readTranscript is called
     Then GeminiSessionStore.readTranscript should handle it
 
+  Scenario: Read Codex transcript uses Codex store
+    Given a card with assistant "codex" and a session path
+    When readTranscript is called
+    Then CodexSessionStore.readTranscript should handle it
+
   Scenario: Search sessions uses all stores
-    Given both Claude and Gemini stores are registered
+    Given Claude, Gemini, and Codex stores are registered
     When searchSessions is called
-    Then both stores should be searched
+    Then all stores should be searched
     And results should be merged and sorted by score

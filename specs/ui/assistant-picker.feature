@@ -29,10 +29,10 @@ Feature: Assistant Picker in Task Creation
     Then only "Claude Code" should appear in the picker
     And the picker should be disabled (single option)
 
-  Scenario: Both assistants installed
-    Given both Claude Code and Gemini CLI are installed
+  Scenario: All assistants installed
+    Given Claude Code, Gemini CLI, and Codex CLI are installed
     When the New Task dialog opens
-    Then both "Claude Code" and "Gemini CLI" should appear in the picker
+    Then "Claude Code", "Gemini CLI", and "Codex CLI" should appear in the picker
 
   # ── Capability-Based UI ──
 
@@ -40,6 +40,11 @@ Feature: Assistant Picker in Task Creation
     Given assistant "gemini" is selected in the picker
     Then the "Create worktree" toggle should be disabled
     And it should show a tooltip "Gemini CLI does not support worktrees"
+
+  Scenario: Worktree toggle disabled for Codex
+    Given assistant "codex" is selected in the picker
+    Then the "Create worktree" toggle should be disabled
+    And it should show a tooltip "Codex CLI does not support worktrees"
 
   Scenario: Worktree toggle enabled for Claude
     Given assistant "claude" is selected in the picker
@@ -51,6 +56,12 @@ Feature: Assistant Picker in Task Creation
     Then the image should NOT be added
     # supportsImageUpload is false for Gemini
 
+  Scenario: Image paste disabled for Codex
+    Given assistant "codex" is selected
+    When the user tries to paste an image (Cmd+V)
+    Then the image should NOT be added
+    # supportsImageUpload is false for Codex
+
   Scenario: Image paste enabled for Claude
     Given assistant "claude" is selected
     When the user pastes an image (Cmd+V)
@@ -61,6 +72,8 @@ Feature: Assistant Picker in Task Creation
     Then the checkbox should show "--dangerously-skip-permissions"
     When assistant is switched to "gemini"
     Then the checkbox should show "--yolo"
+    When assistant is switched to "codex"
+    Then the checkbox should show "--dangerously-bypass-approvals-and-sandbox"
 
   # ── Command Preview ──
 
@@ -72,10 +85,16 @@ Feature: Assistant Picker in Task Creation
     Given assistant "gemini" and skipPermissions true
     Then the command preview should show "gemini --yolo"
 
+  Scenario: Command preview shows Codex command
+    Given assistant "codex" and skipPermissions true
+    Then the command preview should show "codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen"
+
   Scenario: Command preview updates when switching assistant
     Given the command preview shows "claude --dangerously-skip-permissions"
     When the user switches to "gemini"
     Then the preview should update to "gemini --yolo"
+    When the user switches to "codex"
+    Then the preview should update to "codex --dangerously-bypass-approvals-and-sandbox --no-alt-screen"
 
   # ── Launch Confirmation Dialog ──
 
@@ -90,9 +109,19 @@ Feature: Assistant Picker in Task Creation
     When the Launch Confirmation dialog appears
     Then the command preview should use "claude --resume <sessionId>"
 
+  Scenario: Resume confirmation shows Codex subcommand
+    Given a card with assistant "codex" is being resumed
+    When the Launch Confirmation dialog appears
+    Then the command preview should use "codex resume --no-alt-screen <sessionId>"
+
   # ── Queued Prompts ──
 
   Scenario: Queued prompt dialog respects card assistant for images
     Given a card with assistant "gemini" has a queued prompt
+    When editing the queued prompt
+    Then image paste should be disabled in the prompt editor
+
+  Scenario: Queued prompt dialog disables images for Codex
+    Given a card with assistant "codex" has a queued prompt
     When editing the queued prompt
     Then image paste should be disabled in the prompt editor
