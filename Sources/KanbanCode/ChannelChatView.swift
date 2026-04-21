@@ -1,5 +1,66 @@
 import SwiftUI
+import AppKit
 import KanbanCodeCore
+
+/// Last message's rendered height — used as the "near bottom" threshold so
+/// images / tall messages don't prematurely turn off auto-scroll. Reported
+/// via GeometryReader on whichever row is currently last.
+private struct LastMessageHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 80
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+// MARK: - Cmd+click URL helpers (shared by channel + DM chats)
+
+/// Regex matching http(s) URLs. Stops at whitespace / common punctuation
+/// closers so trailing `)` or `.` don't get captured as part of the URL.
+private let chatURLRegex: NSRegularExpression? = {
+    try? NSRegularExpression(pattern: "https?://[^\\s<>\"'\\])*]*[^\\s<>\"'\\]).,:;!?]")
+}()
+
+/// Apply `.link = url` attributes to every URL occurrence in `attr`. Only
+/// called when the user is cmd+hovering the line — plain text otherwise so
+/// `.textSelection` keeps working normally.
+private func applyChatURLLinks(to attr: inout AttributedString, linkColor: Color = .init(red: 0.45, green: 0.65, blue: 1.0)) {
+    guard let regex = chatURLRegex else { return }
+    let text = String(attr.characters)
+    let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+    for match in matches {
+        guard let range = Range(match.range, in: text),
+              let url = URL(string: String(text[range])) else { continue }
+        let startOff = text.distance(from: text.startIndex, to: range.lowerBound)
+        let endOff = text.distance(from: text.startIndex, to: range.upperBound)
+        let chars = attr.characters
+        let attrStart = chars.index(chars.startIndex, offsetBy: startOff)
+        let attrEnd = chars.index(chars.startIndex, offsetBy: endOff)
+        attr[attrStart..<attrEnd].link = url
+        attr[attrStart..<attrEnd].foregroundColor = linkColor
+        attr[attrStart..<attrEnd].underlineStyle = .single
+    }
+}
+
+/// Render `text` as a Text view whose URLs are clickable when the user
+/// is holding cmd AND hovering over the line.
+private struct ChatMessageBody: View {
+    let text: String
+    let isCmdHeld: Bool
+    @State private var hovered = false
+
+    private var linksActive: Bool { isCmdHeld && hovered }
+
+    var body: some View {
+        var attr = AttributedString(text)
+        if linksActive {
+            applyChatURLLinks(to: &attr)
+        }
+        return Text(attr)
+            .font(.app(.body))
+            .textSelection(.enabled)
+            .onHover { hovered = $0 }
+    }
+}
 
 /// Compact card-style tile representing a channel in kanban-board / list modes.
 struct ChannelTile: View {
@@ -109,6 +170,11 @@ struct ChannelChatView: View {
 
     @State private var pastedImages: [Data] = []
     @State private var rosterExpanded = false
+    @State private var isNearBottom: Bool = true
+    @State private var unseenNewCount: Int = 0
+    @State private var isCmdHeld: Bool = false
+    @State private var cmdMonitor: Any?
+    @State private var lastMessageHeight: CGFloat = 80
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -121,6 +187,20 @@ struct ChannelChatView: View {
             composer
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            cmdMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                let cmd = event.modifierFlags.contains(.command)
+                if cmd != isCmdHeld { isCmdHeld = cmd }
+                return event
+            }
+        }
+        .onDisappear {
+            if let m = cmdMonitor {
+                NSEvent.removeMonitor(m)
+                cmdMonitor = nil
+            }
+            isCmdHeld = false
+        }
     }
 
     private var header: some View {
@@ -223,25 +303,93 @@ struct ChannelChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    if !hasRealMessages { emptyState }
-                    ForEach(messages) { m in
-                        messageRow(m)
-                            .id(m.id)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        if !hasRealMessages { emptyState }
+                        let lastId = messages.last?.id
+                        ForEach(messages) { m in
+                            messageRow(m)
+                                .id(m.id)
+                                .background {
+                                    if m.id == lastId {
+                                        GeometryReader { geo in
+                                            Color.clear.preference(
+                                                key: LastMessageHeightKey.self,
+                                                value: geo.size.height
+                                            )
+                                        }
+                                    }
+                                }
+                        }
+                        Color.clear.frame(height: 4).id("__bottom__")
                     }
-                    Color.clear.frame(height: 4).id("__bottom__")
+                    .padding(12)
+                    .textSelection(.enabled)
                 }
-                .padding(12)
-            }
-            .onChange(of: messages.count) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                .onPreferenceChange(LastMessageHeightKey.self) { h in
+                    lastMessageHeight = h
+                }
+                // Track whether the user is reading near the bottom. Threshold
+                // = max(80, last-message-height + 40): if the last message is
+                // a tall image, users scrolled anywhere within it still count
+                // as "near bottom" and get auto-scroll on new messages.
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
+                    let threshold = max(80, lastMessageHeight + 40)
+                    return (maxScroll - geo.contentOffset.y) < threshold
+                } action: { _, nearBottom in
+                    isNearBottom = nearBottom
+                    if nearBottom { unseenNewCount = 0 }
+                }
+                .onChange(of: messages.count) { old, new in
+                    if isNearBottom {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo("__bottom__", anchor: .bottom)
+                        }
+                    } else if new > old {
+                        unseenNewCount += (new - old)
+                    }
+                }
+                // `.onAppear` alone doesn't scroll to the real bottom — the
+                // LazyVStack hasn't realized rows yet, so the scrollable height
+                // is still 0 and `scrollTo` settles mid-content. Call it once
+                // synchronously, then again on the next two runloop ticks to
+                // catch post-layout heights.
+                .task(id: channel.name) {
+                    unseenNewCount = 0
+                    isNearBottom = true
+                    proxy.scrollTo("__bottom__", anchor: .bottom)
+                    try? await Task.sleep(for: .milliseconds(16))
+                    proxy.scrollTo("__bottom__", anchor: .bottom)
+                    try? await Task.sleep(for: .milliseconds(100))
                     proxy.scrollTo("__bottom__", anchor: .bottom)
                 }
+
+                if unseenNewCount > 0 {
+                    Button {
+                        unseenNewCount = 0
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("__bottom__", anchor: .bottom)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down")
+                            Text("\(unseenNewCount) new message\(unseenNewCount == 1 ? "" : "s")")
+                                .font(.app(.caption, weight: .medium))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.accentColor))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             }
-            .onAppear {
-                proxy.scrollTo("__bottom__", anchor: .bottom)
-            }
+            .animation(.easeInOut(duration: 0.15), value: unseenNewCount)
         }
     }
 
@@ -285,8 +433,7 @@ struct ChannelChatView: View {
                         .font(.app(.body, weight: .semibold))
                         .foregroundStyle(.blue.opacity(0.85))
                 }
-                Text(m.body)
-                    .font(.app(.body))
+                ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
                     .foregroundStyle(style)
                 Spacer(minLength: 6)
                 Text(shortTime(m.ts))
@@ -379,6 +526,11 @@ struct DMChatView: View {
     @Binding var draft: String
 
     @State private var pastedImages: [Data] = []
+    @State private var isNearBottom: Bool = true
+    @State private var unseenNewCount: Int = 0
+    @State private var isCmdHeld: Bool = false
+    @State private var cmdMonitor: Any?
+    @State private var lastMessageHeight: CGFloat = 80
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -390,6 +542,20 @@ struct DMChatView: View {
             composer
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            cmdMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                let cmd = event.modifierFlags.contains(.command)
+                if cmd != isCmdHeld { isCmdHeld = cmd }
+                return event
+            }
+        }
+        .onDisappear {
+            if let m = cmdMonitor {
+                NSEvent.removeMonitor(m)
+                cmdMonitor = nil
+            }
+            isCmdHeld = false
+        }
     }
 
     private var header: some View {
@@ -417,44 +583,104 @@ struct DMChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    if messages.isEmpty {
-                        Text("No messages yet. Say hello.")
-                            .font(.app(.caption))
-                            .foregroundStyle(.tertiary)
-                            .padding(.vertical, 24)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                    ForEach(messages) { m in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("@\(m.from.handle)")
-                                    .font(.app(.body, weight: .semibold))
-                                    .foregroundStyle(.blue.opacity(0.85))
-                                Text(m.body)
-                                    .font(.app(.body))
-                                Spacer(minLength: 6)
-                                Text(DateFormatter.hm.string(from: m.ts))
-                                    .font(.app(.caption))
-                                    .foregroundStyle(.tertiary)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        if messages.isEmpty {
+                            Text("No messages yet. Say hello.")
+                                .font(.app(.caption))
+                                .foregroundStyle(.tertiary)
+                                .padding(.vertical, 24)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        let lastId = messages.last?.id
+                        ForEach(messages) { m in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("@\(m.from.handle)")
+                                        .font(.app(.body, weight: .semibold))
+                                        .foregroundStyle(.blue.opacity(0.85))
+                                    ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
+                                    Spacer(minLength: 6)
+                                    Text(DateFormatter.hm.string(from: m.ts))
+                                        .font(.app(.caption))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                if let imgs = m.imagePaths, !imgs.isEmpty {
+                                    ChatMessageImages(paths: imgs)
+                                }
                             }
-                            if let imgs = m.imagePaths, !imgs.isEmpty {
-                                ChatMessageImages(paths: imgs)
+                            .id(m.id)
+                            .background {
+                                if m.id == lastId {
+                                    GeometryReader { geo in
+                                        Color.clear.preference(
+                                            key: LastMessageHeightKey.self,
+                                            value: geo.size.height
+                                        )
+                                    }
+                                }
                             }
                         }
-                        .id(m.id)
+                        Color.clear.frame(height: 4).id("__dm_bottom__")
                     }
-                    Color.clear.frame(height: 4).id("__dm_bottom__")
+                    .padding(12)
+                    .textSelection(.enabled)
                 }
-                .padding(12)
-            }
-            .onChange(of: messages.count) {
-                withAnimation(.easeOut(duration: 0.15)) {
+                .onPreferenceChange(LastMessageHeightKey.self) { h in
+                    lastMessageHeight = h
+                }
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
+                    let threshold = max(80, lastMessageHeight + 40)
+                    return (maxScroll - geo.contentOffset.y) < threshold
+                } action: { _, nearBottom in
+                    isNearBottom = nearBottom
+                    if nearBottom { unseenNewCount = 0 }
+                }
+                .onChange(of: messages.count) { old, new in
+                    if isNearBottom {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo("__dm_bottom__", anchor: .bottom)
+                        }
+                    } else if new > old {
+                        unseenNewCount += (new - old)
+                    }
+                }
+                .task(id: other.handle) {
+                    unseenNewCount = 0
+                    isNearBottom = true
+                    proxy.scrollTo("__dm_bottom__", anchor: .bottom)
+                    try? await Task.sleep(for: .milliseconds(16))
+                    proxy.scrollTo("__dm_bottom__", anchor: .bottom)
+                    try? await Task.sleep(for: .milliseconds(100))
                     proxy.scrollTo("__dm_bottom__", anchor: .bottom)
                 }
+
+                if unseenNewCount > 0 {
+                    Button {
+                        unseenNewCount = 0
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("__dm_bottom__", anchor: .bottom)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down")
+                            Text("\(unseenNewCount) new message\(unseenNewCount == 1 ? "" : "s")")
+                                .font(.app(.caption, weight: .medium))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.accentColor))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             }
-            .onAppear { proxy.scrollTo("__dm_bottom__", anchor: .bottom) }
+            .animation(.easeInOut(duration: 0.15), value: unseenNewCount)
         }
     }
 
