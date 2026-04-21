@@ -73,27 +73,53 @@ struct ActivityDetectorTests {
 
     // MARK: - Stop/Notification + file mtime (resumed work detection)
 
-    @Test("Old Stop event → needsAttention (session truly stopped)")
+    @Test("Old Stop event + file not written after Stop → needsAttention (truly stopped)")
     func stopEventuallyDemotes() async {
         let detector = ClaudeCodeActivityDetector(stopDelay: 1)
-        // Stop happened 10 seconds ago — well past the grace period
+        let stopTime = Date.now.addingTimeInterval(-10)
         await detector.handleHookEvent(HookEvent(
             sessionId: "s1",
             eventName: "Stop",
-            timestamp: Date.now.addingTimeInterval(-10)
+            timestamp: stopTime
         ))
 
-        // Even with a fresh transcript the card should be needsAttention —
-        // the hook event itself is what determines turn boundaries, not mtime.
+        // Transcript mtime == Stop time (Claude's last flush, nothing after).
+        // Outside grace + no further writes → Claude is truly done.
         let dir = NSTemporaryDirectory() + "kanban-code-stop-old-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let path = (dir as NSString).appendingPathComponent("test.jsonl")
         try? "data".write(toFile: path, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.modificationDate: stopTime], ofItemAtPath: path)
         let _ = await detector.pollActivity(sessionPaths: ["s1": path])
 
         let state = await detector.activityState(for: "s1")
-        #expect(state == .needsAttention, "Stop outside grace window should demote regardless of mtime")
+        #expect(state == .needsAttention, "Stop outside grace + no post-Stop writes means Claude is done")
+    }
+
+    @Test("Old Stop event + file written after Stop → activelyWorking (ralph-loop continuation)")
+    func stopWithPostStopWrites() async {
+        // Ralph-loop and similar stop-hook continuation frameworks inject
+        // additional context, so Claude continues writing without firing a
+        // new UserPromptSubmit. The transcript mtime advancing past the
+        // Stop timestamp is the only signal we have.
+        let detector = ClaudeCodeActivityDetector(stopDelay: 1)
+        await detector.handleHookEvent(HookEvent(
+            sessionId: "s1",
+            eventName: "Stop",
+            timestamp: Date.now.addingTimeInterval(-30)
+        ))
+
+        let dir = NSTemporaryDirectory() + "kanban-code-stop-continuation-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = (dir as NSString).appendingPathComponent("test.jsonl")
+        try? "data".write(toFile: path, atomically: true, encoding: .utf8)
+        // Write() sets mtime to now — 30s after the Stop event.
+        let _ = await detector.pollActivity(sessionPaths: ["s1": path])
+
+        let state = await detector.activityState(for: "s1")
+        #expect(state == .activelyWorking, "Post-Stop transcript writes indicate continuation in progress")
     }
 
     @Test("Stop + stale file → needsAttention")

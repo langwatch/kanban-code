@@ -143,6 +143,20 @@ public actor ClaudeCodeActivityDetector: ActivityDetector {
             if sinceStop < stopDelay {
                 return .activelyWorking
             }
+            // Continuation detection: ralph-loop (and similar stop-hook
+            // continuation frameworks) inject `additionalContext` on Stop,
+            // so Claude runs another turn WITHOUT firing a new UserPromptSubmit.
+            // The only signal we have is the transcript file being written to
+            // after the Stop event. If mtime advanced past the Stop timestamp,
+            // Claude is still working.
+            if let path = sessionPaths[sessionId],
+               let fileAge = Self.fileAge(path),
+               fileAge < activeTimeout {
+                let fileMtime = Date.now.addingTimeInterval(-fileAge)
+                if fileMtime.timeIntervalSince(lastEvent.timestamp) > 1.0 {
+                    return .activelyWorking
+                }
+            }
             return .needsAttention
         case "SessionEnd":
             return .ended
