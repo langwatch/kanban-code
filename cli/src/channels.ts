@@ -50,6 +50,9 @@ export interface ChannelMessage {
   /** Absolute paths to images attached to this message, persisted under
    *  `channels/images/<id>/N.<ext>`. Absent for text-only messages. */
   imagePaths?: string[];
+  /** "external" = posted via a public share link by someone outside the team.
+   *  Omitted for internal messages. Drives the warning prefix in tmux fanout. */
+  source?: "external";
 }
 
 interface ChannelsFile {
@@ -365,7 +368,8 @@ export function sendMessage(
   from: { cardId: string | null; handle: string },
   body: string,
   baseDir: string = defaultBaseDir(),
-  imagePaths: string[] = []
+  imagePaths: string[] = [],
+  source?: "external"
 ): ChannelMessage {
   const clean = normalizeChannelName(name);
   const ch = getChannel(clean, baseDir);
@@ -379,6 +383,7 @@ export function sendMessage(
     body,
     type: "message",
     ...(persisted.length > 0 ? { imagePaths: persisted } : {}),
+    ...(source ? { source } : {}),
   };
   appendMessage(clean, msg, baseDir);
   return msg;
