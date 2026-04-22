@@ -47,10 +47,17 @@ public actor CoordinationStore {
     }
 
     /// Write all links to the coordination file (atomic).
+    /// Also maintains a rolling set of daily snapshots under
+    /// `<filePath>.daily-<YYYY-MM-DD>.bak` so we never again lose card
+    /// names/columns if a bug nukes state between runs. Keeps the most
+    /// recent `dailyBackupRetention` snapshots.
     public func writeLinks(_ links: [Link]) throws {
         let fileManager = FileManager.default
         let dir = (filePath as NSString).deletingLastPathComponent
         try fileManager.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        // Rotate-on-write: snapshot yesterday's file (if any) before overwriting.
+        rotateDailyBackupIfNeeded(fileManager: fileManager)
 
         let container = LinksContainer(links: links)
         let data = try encoder.encode(container)
@@ -60,6 +67,43 @@ public actor CoordinationStore {
         try data.write(to: URL(fileURLWithPath: tmpPath))
         _ = try? fileManager.removeItem(atPath: filePath)
         try fileManager.moveItem(atPath: tmpPath, toPath: filePath)
+    }
+
+    // MARK: - Daily backup rotation
+
+    /// How many daily snapshots to keep. Old ones get pruned.
+    private static let dailyBackupRetention = 7
+
+    /// Copy the CURRENT on-disk file to `<filePath>.daily-<today>.bak` if
+    /// today's snapshot doesn't exist yet. Prunes older snapshots beyond
+    /// the retention window. All failures are swallowed — a backup
+    /// shouldn't ever block a real write.
+    private func rotateDailyBackupIfNeeded(fileManager: FileManager) {
+        guard fileManager.fileExists(atPath: filePath) else { return }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        let today = formatter.string(from: Date())
+        let todayPath = "\(filePath).daily-\(today).bak"
+
+        if !fileManager.fileExists(atPath: todayPath) {
+            try? fileManager.copyItem(atPath: filePath, toPath: todayPath)
+        }
+
+        // Prune beyond retention.
+        let parent = (filePath as NSString).deletingLastPathComponent
+        let basename = ((filePath as NSString).lastPathComponent) + ".daily-"
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: parent) else { return }
+        let snapshots = entries
+            .filter { $0.hasPrefix(basename) && $0.hasSuffix(".bak") }
+            .sorted()                       // alphabetical == chronological for YYYY-MM-DD
+            .map { (parent as NSString).appendingPathComponent($0) }
+        if snapshots.count > Self.dailyBackupRetention {
+            for path in snapshots.dropLast(Self.dailyBackupRetention) {
+                try? fileManager.removeItem(atPath: path)
+            }
+        }
     }
 
     /// Get a single link by its id.
