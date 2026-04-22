@@ -1,4 +1,4 @@
-.PHONY: build test run app run-app run-release clean cli install-cli
+.PHONY: build test run app run-app run-release clean cli install-cli web cloudflared
 
 BUNDLE_NAME = KanbanCode.app
 BUNDLE_DIR = build/$(BUNDLE_NAME)
@@ -7,6 +7,16 @@ VERSION ?= 0.1.1
 CONFIG ?= debug
 ARCH := $(shell uname -m)
 BUILD_DIR = .build/$(ARCH)-apple-macosx/$(CONFIG)
+
+# cloudflared bundle: download once per-arch into cli/bin, then copy into the
+# app bundle at `make app` time. Using the quick-tunnel-capable release.
+CLOUDFLARED_VERSION ?= 2024.12.2
+ifeq ($(ARCH),arm64)
+CLOUDFLARED_ASSET = cloudflared-darwin-arm64.tgz
+else
+CLOUDFLARED_ASSET = cloudflared-darwin-amd64.tgz
+endif
+CLOUDFLARED_BIN = cli/bin/cloudflared-$(ARCH)
 
 build:
 	swift build
@@ -17,7 +27,7 @@ test:
 run:
 	swift run KanbanCode
 
-app: build cli install-cli
+app: build cli install-cli web cloudflared
 	@mkdir -p $(BUNDLE_DIR)/Contents/MacOS
 	@mkdir -p $(BUNDLE_DIR)/Contents/Resources
 	@cp $(BUILD_DIR)/KanbanCode $(BUNDLE_DIR)/Contents/MacOS/KanbanCode
@@ -50,10 +60,16 @@ app: build cli install-cli
 	fi
 	@# Bundle the kanban CLI inside the app so it's always available
 	@rm -rf $(BUNDLE_DIR)/Contents/Resources/cli
-	@mkdir -p $(BUNDLE_DIR)/Contents/Resources/cli
+	@mkdir -p $(BUNDLE_DIR)/Contents/Resources/cli/bin
 	@cp -R cli/dist $(BUNDLE_DIR)/Contents/Resources/cli/
 	@cp -R cli/node_modules $(BUNDLE_DIR)/Contents/Resources/cli/
 	@cp cli/package.json $(BUNDLE_DIR)/Contents/Resources/cli/
+	@# Bundle cloudflared — consumed by the share-server via KANBAN_CLOUDFLARED.
+	@cp $(CLOUDFLARED_BIN) $(BUNDLE_DIR)/Contents/Resources/cli/bin/cloudflared
+	@chmod +x $(BUNDLE_DIR)/Contents/Resources/cli/bin/cloudflared
+	@# Bundle the built web client — served by the share-server at `/`.
+	@rm -rf $(BUNDLE_DIR)/Contents/Resources/share-web
+	@cp -R web/dist $(BUNDLE_DIR)/Contents/Resources/share-web
 	@# Code sign so macOS grants notification permissions and Web Inspector can attach
 	@codesign --force --sign "Apple Development" --entitlements KanbanCode.entitlements $(BUNDLE_DIR)
 	@# Register with Launch Services so macOS picks up the icon
@@ -70,6 +86,23 @@ run-release:
 
 cli:
 	@cd cli && npm install --silent && npm run build
+
+web:
+	@cd web && npm install --silent && npm run build
+
+# One-shot download of the cloudflared binary into cli/bin/cloudflared-<arch>.
+# Skipped if already present.
+cloudflared: $(CLOUDFLARED_BIN)
+$(CLOUDFLARED_BIN):
+	@mkdir -p cli/bin
+	@echo "Downloading cloudflared $(CLOUDFLARED_VERSION) for $(ARCH)..."
+	@curl -fsSL -o /tmp/cloudflared.tgz \
+		https://github.com/cloudflare/cloudflared/releases/download/$(CLOUDFLARED_VERSION)/$(CLOUDFLARED_ASSET)
+	@tar -xzf /tmp/cloudflared.tgz -C /tmp
+	@mv /tmp/cloudflared $(CLOUDFLARED_BIN)
+	@chmod +x $(CLOUDFLARED_BIN)
+	@rm -f /tmp/cloudflared.tgz
+	@echo "Installed $(CLOUDFLARED_BIN)"
 
 install-cli: cli
 	@mkdir -p $(HOME)/.local/bin
