@@ -51,6 +51,7 @@ import {
   sendDirectMessage,
 } from "./broadcast.js";
 import { deriveHandle, formatHandle, stripAt } from "./handles.js";
+import { parseDuration, runShare } from "./share-cli.js";
 
 const program = new Command();
 
@@ -893,6 +894,68 @@ channelCmd
       console.error(String((err as Error).message ?? err));
       process.exit(1);
     }
+  });
+
+// ── kanban channel share ────────────────────────────────────────────
+
+channelCmd
+  .command("share")
+  .description(
+    "Start a public share link for a channel. Runs a local Express server, " +
+      "opens a cloudflared tunnel, and keeps running until the duration expires. " +
+      "Writes url/token/port/expiresAt on stdout (one per line) for parent processes.",
+  )
+  .argument("<name>", "Channel name to share")
+  .option("-d, --duration <d>", "How long the link stays live (e.g. 5m, 1h)", "15m")
+  .option("--web-dist <path>", "Directory with the built web client to serve at /")
+  .action(async (name: string, opts: { duration: string; webDist?: string }) => {
+    const clean = normalizeChannelName(name);
+    const ch = getChannel(clean);
+    if (!ch) {
+      console.error(`Channel "#${clean}" does not exist`);
+      process.exit(1);
+    }
+    let durationMs: number;
+    try { durationMs = parseDuration(opts.duration); } catch (err) {
+      console.error(String(err instanceof Error ? err.message : err));
+      process.exit(1);
+    }
+
+    // Bundled with the app? Default web dist lives alongside the CLI bundle.
+    // Swift passes --web-dist explicitly so we only fall through to the
+    // next lookup when run standalone.
+    const webDist = opts.webDist;
+
+    let handle: Awaited<ReturnType<typeof runShare>>;
+    try {
+      handle = await runShare({
+        channelName: clean,
+        durationMs,
+        loadLinks: () => readLinks(),
+        sender: pasteTmuxPrompt,
+        liveSessionProbe: (s) => listTmuxSessions().some((t) => t.name === s),
+        baseDir: join(homedir(), ".kanban-code"),
+        webDistDir: webDist,
+      });
+    } catch (err) {
+      console.error(`Failed to start share: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+
+    // Teardown on parent-initiated signals so the tunnel doesn't outlive us.
+    const shutdown = async (): Promise<void> => {
+      await handle.stop();
+      await handle.done;
+      process.exit(0);
+    };
+    process.on("SIGTERM", () => { void shutdown(); });
+    process.on("SIGINT", () => { void shutdown(); });
+    // Parent (Swift app) closes our stdin when it quits — treat as shutdown.
+    process.stdin.on("end", () => { void shutdown(); });
+    process.stdin.resume();
+
+    await handle.done;
+    process.exit(0);
   });
 
 // ── kanban dm ───────────────────────────────────────────────────────
