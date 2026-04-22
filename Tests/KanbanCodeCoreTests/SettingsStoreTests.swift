@@ -181,15 +181,18 @@ struct SettingsStoreTests {
         let dir = try makeTempDir()
         defer { cleanup(dir) }
 
-        // A settings.json produced by a newer app version that added "codex"
-        // as a coding-assistant value the current Swift enum doesn't know about.
+        // A settings.json produced by a newer app version that adds a yet-
+        // unsupported assistant value. The exact trigger for the real-world
+        // incident was a "codex" entry before that case was merged into the
+        // Swift enum — `someFutureAssistant` stands in so the test keeps its
+        // meaning even as new enum cases get added over time.
         let hostile = """
         {
           "projects": [
             { "path": "/Users/me/Projects/alpha", "name": "alpha", "visible": true },
             { "path": "/Users/me/Projects/beta",  "name": "beta",  "visible": true }
           ],
-          "enabledAssistants": ["claude", "gemini", "codex"],
+          "enabledAssistants": ["claude", "gemini", "someFutureAssistant"],
           "columnOrder": ["backlog", "in_progress", "done"]
         }
         """
