@@ -42,6 +42,19 @@
     --ring: 213 27% 84%;
   }
   * { @apply border-border; }
-  body { @apply bg-background text-foreground; font-feature-settings: "rlig" 1, "calt" 1; }
+  /* Monospace by default — leans into the IRC aesthetic and keeps handles,
+     timestamps, and mentions visually aligned. Override per-component with
+     `font-sans` if a specific spot reads better in a proportional face. */
+  /* Tailwind's text-sm / text-xs / text-[10px] compute from rem → html's
+     font-size. Setting font-size on body alone has no effect on those
+     utility classes, so we shrink the root and let every utility scale
+     together. 13px gives a terminal/IRC density without pinching the
+     line-height. */
+  html { font-size: 13px; }
+  body {
+    @apply bg-background text-foreground font-mono;
+    line-height: 1.5;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
   html, body, #root { height: 100%; }
 }

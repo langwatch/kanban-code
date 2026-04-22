@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import request from "supertest";
@@ -318,9 +318,49 @@ describe("share-server images endpoint", () => {
     const r = await request(app).get("/api/images/img_abc/0.png");
     assert.equal(r.status, 401);
   });
+
+  test("image fetch accepts hyphen-containing msg IDs from the native client", async () => {
+    // Regression: web uploads use `img_<32-hex>` but the Swift app emits
+    // `msg_<UUIDv4-slice>` like `msg_50F2861B-19A` which contains a hyphen.
+    // Early regex rejected it as `bad image path` (400).
+    const app = buildShareApp(mkDeps());
+    const msgId = "msg_50F2861B-19A";
+    const dir = join(base, "channels", "images", msgId);
+    mkdirSync(dir, { recursive: true });
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x99]);
+    writeFileSync(join(dir, "0.png"), png);
+    const r = await request(app).get(`/api/images/${msgId}/0.png?token=tk_good`);
+    assert.equal(r.status, 200, `expected 200, got ${r.status} (${r.text})`);
+    assert.deepEqual(Buffer.from(r.body).subarray(0, 8), png.subarray(0, 8));
+  });
+
+  test("image fetch works when baseDir lives under a dot-prefixed directory", async () => {
+    // Regression: Express's res.sendFile defaults to dotfiles: "ignore", which
+    // silently 404s any path with a dot-segment — e.g. ~/.kanban-code. This
+    // test reproduces that layout and asserts the file comes through.
+    const dotBase = mkdtempSync(join(tmpdir(), ".kanban-test-"));
+    try {
+      createChannel("general", {}, dotBase);
+      const app = buildShareApp(mkDeps({ baseDir: dotBase }));
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xaa, 0xbb]);
+      const up = await request(app)
+        .post("/api/channels/general/images?token=tk_good")
+        .set("Content-Type", "image/png")
+        .send(png);
+      assert.equal(up.status, 200);
+      const parts = (up.body.path as string).split("/");
+      const filename = parts.pop()!;
+      const msgId = parts.pop()!;
+      const get = await request(app).get(`/api/images/${msgId}/${filename}?token=tk_good`);
+      assert.equal(get.status, 200, `sendFile must serve under a dot dir, got ${get.status}`);
+      assert.deepEqual(Buffer.from(get.body).subarray(0, 8), png.subarray(0, 8));
+    } finally {
+      rmSync(dotBase, { recursive: true, force: true });
+    }
+  });
 });
 
-describe("share-server SSE stream", () => {
+describe("share-server long-poll", () => {
   beforeEach(() => {
     base = tmp();
     createChannel("general", {}, base);
@@ -328,91 +368,84 @@ describe("share-server SSE stream", () => {
   });
   afterEach(() => { rmSync(base, { recursive: true, force: true }); });
 
-  test("flushes ~2 KB of padding on connect so CDN buffers commit immediately", async () => {
-    // Regression: without the padding, Cloudflare + HTTP/2 held the tiny
-    // ": connected …" comment in their frame buffer — the browser received
-    // headers but zero body bytes, and EventSource never fired `open`, which
-    // looked identical to "SSE broken" on the client side.
+  test("requires a token", async () => {
     const app = buildShareApp(mkDeps());
-    const { createServer } = await import("node:http");
-    const server = createServer(app);
-    await new Promise<void>((res) => server.listen(0, () => res()));
-    const port = (server.address() as { port: number }).port;
-
-    const resp = await fetch(
-      `http://localhost:${port}/api/channels/general/stream?token=tk_good&handle=dana`,
-    );
-    assert.equal(resp.status, 200);
-    const reader = resp.body!.getReader();
-    // Read everything that arrives within 200 ms — the padding is sent synchronously.
-    const start = Date.now();
-    let total = 0;
-    while (Date.now() - start < 200) {
-      const { done, value } = await Promise.race([
-        reader.read(),
-        new Promise<ReadableStreamReadResult<Uint8Array>>((r) =>
-          setTimeout(() => r({ done: true, value: undefined }), 50),
-        ),
-      ]);
-      if (done) break;
-      if (value) total += value.length;
-    }
-    reader.cancel();
-    server.close();
-    assert.ok(total >= 2000, `expected ≥2 KB of initial bytes (was ${total}) to flush CDN buffers`);
+    const r = await request(app).get("/api/channels/general/poll");
+    assert.equal(r.status, 401);
   });
 
-  test("streams new messages appended to the channel jsonl", async () => {
+  test("returns immediately with messages newer than `since`", async () => {
+    // Seed the jsonl with a message the client has "already seen" and two it
+    // hasn't. Polling with `since=<first id>` should return the other two.
     const app = buildShareApp(mkDeps());
-    const { createServer } = await import("node:http");
-    const server = createServer(app);
-    await new Promise<void>((res) => server.listen(0, () => res()));
-    const port = (server.address() as { port: number }).port;
-
-    // Open an SSE connection and collect events.
-    const received: string[] = [];
-    const url = `http://localhost:${port}/api/channels/general/stream?token=tk_good&handle=dana`;
-    const resp = await fetch(url);
-    assert.equal(resp.status, 200);
-    assert.match(resp.headers.get("content-type") ?? "", /text\/event-stream/);
-
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const readTask = (async () => {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // parse event blocks separated by \n\n
-        let idx: number;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
-          const block = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const dataLine = block.split("\n").find((l) => l.startsWith("data: "));
-          if (dataLine) received.push(dataLine.slice(6));
-        }
-      }
-    })();
-
-    // Give the server a beat to subscribe the watcher, then post a message.
-    await new Promise((r) => setTimeout(r, 50));
-    await request(app)
-      .post("/api/channels/general/send?token=tk_good")
-      .send({ handle: "dana", body: "hi from stream test" });
-
-    // Wait up to 2s for the message to arrive on the stream.
-    const deadline = Date.now() + 2000;
-    while (Date.now() < deadline && !received.some((s) => s.includes("hi from stream test"))) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    reader.cancel();
-    await readTask.catch(() => {});
-    server.close();
-
-    assert.ok(
-      received.some((s) => s.includes("hi from stream test")),
-      `expected a message SSE event, got: ${JSON.stringify(received)}`
+    await request(app).post("/api/channels/general/send?token=tk_good")
+      .send({ handle: "alice", body: "first" });
+    await request(app).post("/api/channels/general/send?token=tk_good")
+      .send({ handle: "alice", body: "second" });
+    await request(app).post("/api/channels/general/send?token=tk_good")
+      .send({ handle: "alice", body: "third" });
+    // The jsonl has a leading `join` entry from beforeEach, so filter to real
+    // messages before picking the `since` id.
+    const sent = readMessages("general", base).filter((m) => m.type === "message");
+    const start = Date.now();
+    const r = await request(app).get(
+      `/api/channels/general/poll?token=tk_good&since=${sent[0].id}`,
     );
+    const elapsed = Date.now() - start;
+    assert.equal(r.status, 200);
+    assert.ok(elapsed < 500, `poll with backlog must return fast, took ${elapsed}ms`);
+    assert.deepEqual(r.body.messages.map((m: { body: string }) => m.body), ["second", "third"]);
+    assert.equal(r.body.lastId, sent[2].id);
+  });
+
+  test("hangs waiting for the next append when there's nothing newer", async () => {
+    // With an empty tail, the poll should block ~until the next message
+    // shows up on the jsonl. Simulate that by sending a message after a
+    // short delay and asserting the poll resolves with it.
+    const app = buildShareApp(mkDeps());
+    await request(app).post("/api/channels/general/send?token=tk_good")
+      .send({ handle: "alice", body: "seed" });
+    const seed = readMessages("general", base).filter((m) => m.type === "message")[0];
+
+    const pollPromise = request(app).get(
+      `/api/channels/general/poll?token=tk_good&since=${seed.id}`,
+    );
+    setTimeout(() => {
+      request(app).post("/api/channels/general/send?token=tk_good")
+        .send({ handle: "alice", body: "async" })
+        .end(() => { /* fire and forget */ });
+    }, 80);
+
+    const r = await pollPromise;
+    assert.equal(r.status, 200);
+    assert.ok(r.body.messages.length >= 1,
+      `expected >=1 msg after async append, got ${JSON.stringify(r.body)}`);
+    assert.ok(r.body.messages.some((m: { body: string }) => m.body === "async"));
+  });
+
+  test("cold-start poll (no `since`) returns empty so the client doesn't re-receive history", async () => {
+    // History is served by the separate /history endpoint. The poll loop's
+    // first iteration passes since=<last id from history>, but the guard
+    // below covers a client that passes no `since`: it must not dump the
+    // entire jsonl in bulk (which would look like every message arriving
+    // twice in the UI).
+    const app = buildShareApp(mkDeps());
+    await request(app).post("/api/channels/general/send?token=tk_good")
+      .send({ handle: "alice", body: "one" });
+    const r = await new Promise<{ status: number; body: { messages: unknown[] } }>((resolve) => {
+      // Add a short timeout so the hanging long-poll doesn't freeze the
+      // test; 150ms is enough to see "nothing came back immediately".
+      const req2 = request(app).get("/api/channels/general/poll?token=tk_good");
+      const timer = setTimeout(() => { req2.abort(); resolve({ status: 0, body: { messages: [] } }); }, 150);
+      req2.end((_err, response) => {
+        clearTimeout(timer);
+        if (response) resolve({ status: response.status, body: response.body });
+        else resolve({ status: 0, body: { messages: [] } });
+      });
+    });
+    // Either we got nothing back in 150ms (the long-poll is hanging — good)
+    // OR we got back an empty array. Anything non-empty is a regression.
+    assert.equal(r.body.messages.length, 0,
+      `cold-start poll must not return history, got ${JSON.stringify(r.body)}`);
   });
 });

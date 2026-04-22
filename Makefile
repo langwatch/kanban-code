@@ -53,11 +53,19 @@ app: build cli install-cli web
 	@# macOS Gatekeeper (unsigned-by-us origin binary), which then breaks
 	@# its outbound network. `npx -y cloudflared` fetches & caches it under
 	@# ~/.npm/_npx/ where it runs without the quarantine xattr.
+	@# Ship only runtime artifacts:
+	@#  • dist/*.js (compiled TypeScript) minus *.test.js
+	@#  • package.json + lockfile so npm can reinstall deterministically
+	@#  • a PROD-only node_modules (no typescript/tsx/esbuild/@types/supertest —
+	@#    those are ~50 MB of dev-time tooling that has no business shipping)
 	@rm -rf $(BUNDLE_DIR)/Contents/Resources/cli
-	@mkdir -p $(BUNDLE_DIR)/Contents/Resources/cli
-	@cp -R cli/dist $(BUNDLE_DIR)/Contents/Resources/cli/
-	@cp -R cli/node_modules $(BUNDLE_DIR)/Contents/Resources/cli/
-	@cp cli/package.json $(BUNDLE_DIR)/Contents/Resources/cli/
+	@mkdir -p $(BUNDLE_DIR)/Contents/Resources/cli/dist
+	@find cli/dist -maxdepth 1 -type f \
+		\( -name '*.js' -o -name '*.d.ts' \) \
+		! -name '*.test.js' ! -name '*.test.d.ts' \
+		-exec cp {} $(BUNDLE_DIR)/Contents/Resources/cli/dist/ \;
+	@cp cli/package.json cli/package-lock.json $(BUNDLE_DIR)/Contents/Resources/cli/
+	@cd $(BUNDLE_DIR)/Contents/Resources/cli && npm ci --omit=dev --ignore-scripts --silent --no-audit --no-fund
 	@# Bundle the built web client — served by the share-server at `/`.
 	@rm -rf $(BUNDLE_DIR)/Contents/Resources/share-web
 	@cp -R web/dist $(BUNDLE_DIR)/Contents/Resources/share-web

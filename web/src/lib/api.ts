@@ -68,9 +68,24 @@ export async function uploadImage(channel: string, file: Blob): Promise<string> 
   return body.path;
 }
 
-/** Open the SSE stream. Returns the EventSource so callers can close it. */
-export function openStream(channel: string, handle: string): EventSource {
-  return new EventSource(authedUrl(`/api/channels/${channel}/stream`, { handle }));
+/** One long-poll round trip. Server either returns immediately with any
+ *  messages newer than `since`, or hangs for ~25 s waiting for the next
+ *  append before returning `{ messages: [], lastId: since }`.
+ *
+ *  The `signal` is the abort hatch for callers (e.g. React unmount) — it
+ *  cancels both the in-flight fetch and any server-side hold. */
+export interface PollResult { messages: ChannelMessage[]; lastId: string }
+export async function pollForMessages(
+  channel: string,
+  since: string,
+  signal: AbortSignal,
+): Promise<PollResult> {
+  const res = await fetch(
+    authedUrl(`/api/channels/${channel}/poll`, since ? { since } : {}),
+    { signal },
+  );
+  if (!res.ok) throw new Error(`poll: ${res.status}`);
+  return (await res.json()) as PollResult;
 }
 
 /** Turn an absolute image filesystem path (the form stored in the jsonl and

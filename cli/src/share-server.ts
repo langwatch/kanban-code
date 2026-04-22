@@ -8,7 +8,7 @@
 
 import express, { Request, Response, NextFunction, Express } from "express";
 import { watch } from "chokidar";
-import { mkdirSync, createReadStream, writeFileSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -47,6 +47,10 @@ export interface ShareServerDeps {
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/i;
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+// Hold an idle long-poll for up to 25 s. Cloudflare quick tunnels terminate
+// requests after 100 s of total time with no progress, so this stays well
+// under that while still keeping the round-trip rate low.
+const LONG_POLL_HOLD_MS = 25_000;
 
 function externalHandle(raw: string): string {
   // Namespaced prefix so agents can see at a glance that this came in from a
@@ -220,7 +224,11 @@ export function buildShareApp(deps: ShareServerDeps): Express {
   app.get("/api/images/:msgId/:filename", requireToken, (req, res) => {
     const msgId = typeof req.params.msgId === "string" ? req.params.msgId : "";
     const filename = typeof req.params.filename === "string" ? req.params.filename : "";
-    if (!/^(?:img|msg)_[a-zA-Z0-9]{1,64}$/.test(msgId) ||
+    // Hyphens allowed so the native Swift client's `msg_UUID-slice` IDs
+    // (e.g. `msg_50F2861B-19A`) round-trip alongside our `img_<hex>`
+    // web-upload IDs. Traversal is still blocked because `/` and `..` are
+    // not in the character class.
+    if (!/^(?:img|msg)_[a-zA-Z0-9_-]{1,64}$/.test(msgId) ||
         !/^[a-zA-Z0-9_-]{1,64}\.(?:png|jpg|jpeg|gif|webp)$/i.test(filename)) {
       res.status(400).type("text/plain").send("bad image path");
       return;
@@ -231,84 +239,75 @@ export function buildShareApp(deps: ShareServerDeps): Express {
       res.status(403).type("text/plain").send("forbidden");
       return;
     }
-    res.sendFile(full, (err) => {
+    // `dotfiles: "allow"` is load-bearing: our baseDir lives under
+    // ~/.kanban-code and Express's default ("ignore") silently 404s any
+    // path with a dot-prefixed segment, regardless of whether the file
+    // actually exists.
+    res.sendFile(full, { dotfiles: "allow" }, (err) => {
       if (err && !res.headersSent) {
         res.status(404).type("text/plain").send("not found");
       }
     });
   });
 
-  // ── SSE stream ────────────────────────────────────────────────────
-  // Emits every `ChannelMessage` appended to the channel jsonl after the
-  // stream is opened. A tail-offset (byte position) is tracked per
-  // connection so chokidar file events translate into exactly-once
-  // delivery of each new line.
-  app.get("/api/channels/:name/stream", requireToken, requireChannel, (req, res) => {
-    // Disable compression buffering; SSE needs flushes.
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    // Hint to any reverse proxy that this is a streaming response.
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    // Kick the downstream buffer past Cloudflare's write threshold. Without
-    // this the initial ": connected" comment (~30 bytes) gets held in the
-    // HTTP/2 frame buffer and EventSource never fires `open`, which looks
-    // identical to "SSE broken" on the client. ~2 KB of padding reliably
-    // commits the flush end-to-end through cloudflared + the CF edge.
-    res.write(`: ${"padding".padEnd(2048, " ")}\n\n`);
-    // Prime the connection so the client's EventSource `open` fires.
-    res.write(`: connected ${new Date().toISOString()}\n\n`);
-
+  // ── Long-polling ──────────────────────────────────────────────────
+  // The obvious choice would be SSE, but Cloudflare's quick-tunnel edge
+  // buffers streaming responses until the origin closes the connection
+  // (see github.com/cloudflare/cloudflared#199), which makes an idle
+  // SSE stream invisible to the browser. X-Accel-Buffering, content-type,
+  // even forked cloudflared — none of it works on trycloudflare.com, and
+  // we have no dashboard access for Transform/Cache rules.
+  //
+  // Long-polling sidesteps the buffer entirely: each response is short-
+  // lived, so the edge has no excuse to hold bytes. The client sends
+  // `?since=<lastId>`; we either return immediately (if newer messages
+  // exist) or hang for up to `LONG_POLL_HOLD_MS`, resolving on the next
+  // jsonl append.
+  app.get("/api/channels/:name/poll", requireToken, requireChannel, (req, res) => {
+    const since = typeof req.query.since === "string" ? req.query.since : "";
     const path = channelLogPath(deps.channelName, deps.baseDir);
-    // Track where we've already emitted up to — start at current EOF so we
-    // don't flood the client with historical messages on connect (client
-    // requests /history for that).
-    let offset = 0;
-    try { offset = statSync(path).size; } catch { /* file may not exist yet */ }
 
+    const flushIfNewer = (): boolean => {
+      const all = readMessages(deps.channelName, deps.baseDir);
+      // `since` is a message id — return everything after it. Empty `since`
+      // is a cold-start poll, which should not flood the client with
+      // history (the client separately calls /history on mount). Return
+      // nothing so we wait on the next append.
+      const idx = since ? all.findIndex((m) => m.id === since) : all.length - 1;
+      // If the caller's `since` id isn't in the log any more (shouldn't
+      // happen — we never rewrite history), treat as cold start and
+      // return the full tail so they re-sync rather than get stuck.
+      const newer = idx < 0 ? all : all.slice(idx + 1);
+      if (newer.length === 0) return false;
+      res.json({ messages: newer, lastId: newer[newer.length - 1].id });
+      return true;
+    };
+
+    if (flushIfNewer()) return;
+
+    // No new messages yet — watch the jsonl until one appears or we time out.
     const watcher = watch(path, {
       persistent: true,
       usePolling: false,
       awaitWriteFinish: { stabilityThreshold: 30, pollInterval: 20 },
       ignoreInitial: true,
     });
-
-    // Keepalive — some proxies kill idle connections; a comment every 20s
-    // prevents that without showing anything to the client.
-    const keepalive = setInterval(() => {
-      res.write(`: keepalive\n\n`);
-    }, 20_000);
-
-    const emitNewLines = (): void => {
-      let size: number;
-      try { size = statSync(path).size; } catch { return; }
-      if (size <= offset) return;
-      const stream = createReadStream(path, { start: offset, end: size - 1 });
-      let buf = "";
-      stream.on("data", (chunk) => {
-        buf += chunk.toString("utf-8");
-      });
-      stream.on("end", () => {
-        const lines = buf.split("\n").filter(Boolean);
-        for (const line of lines) {
-          let msg: ChannelMessage;
-          try { msg = JSON.parse(line) as ChannelMessage; } catch { continue; }
-          res.write(`event: message\ndata: ${JSON.stringify(msg)}\n\n`);
-        }
-        offset = size;
-      });
+    let done = false;
+    let holdTimer: NodeJS.Timeout;
+    const cleanup = (timedOut: boolean): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(holdTimer);
+      watcher.close().catch(() => { /* ignore */ });
+      if (timedOut && !res.headersSent) {
+        res.json({ messages: [], lastId: since });
+      }
     };
-
-    watcher.on("add", emitNewLines);
-    watcher.on("change", emitNewLines);
-
-    req.on("close", () => {
-      clearInterval(keepalive);
-      watcher.close();
-      try { res.end(); } catch { /* already closed */ }
-    });
+    holdTimer = setTimeout(() => cleanup(true), LONG_POLL_HOLD_MS);
+    const onChange = (): void => { if (flushIfNewer()) cleanup(false); };
+    watcher.on("add", onChange);
+    watcher.on("change", onChange);
+    req.on("close", () => cleanup(false));
   });
 
   // ── Static web client ─────────────────────────────────────────────

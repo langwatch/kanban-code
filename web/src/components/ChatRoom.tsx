@@ -29,10 +29,14 @@ export function ChatRoom({ channelName, myHandle }: Props): React.ReactElement {
   const [remainingMs, setRemainingMs] = useState<number>(0);
   const seenIds = useRef<Set<string>>(new Set());
 
-  // Bootstrap: /info + /history, then open SSE stream.
+  // Bootstrap: /info + /history, then run a long-poll loop.
+  //
+  // SSE is the natural fit here but Cloudflare quick-tunnel edges buffer
+  // streaming responses indefinitely. Long-polling keeps each response
+  // short-lived so the edge can't hold bytes (see cloudflare/cloudflared#199).
   useEffect(() => {
+    const ctrl = new AbortController();
     let cancelled = false;
-    let source: EventSource | null = null;
     (async () => {
       try {
         const i = await api.fetchInfo(channelName);
@@ -44,22 +48,34 @@ export function ChatRoom({ channelName, myHandle }: Props): React.ReactElement {
         for (const m of hist) seenIds.current.add(m.id);
         setMessages(hist);
 
-        source = api.openStream(channelName, myHandle);
-        source.addEventListener("message", (e: MessageEvent) => {
+        let since = hist.length > 0 ? hist[hist.length - 1].id : "";
+        while (!cancelled) {
           try {
-            const msg = JSON.parse(e.data) as ChannelMessage;
-            if (seenIds.current.has(msg.id)) return;
-            seenIds.current.add(msg.id);
-            setMessages((prev) => [...prev, msg]);
-          } catch { /* */ }
-        });
+            const { messages: incoming, lastId } = await api.pollForMessages(
+              channelName, since, ctrl.signal,
+            );
+            if (cancelled) return;
+            // Filter anything already seen — protects against the server
+            // returning full history on an unknown `since`.
+            const fresh = incoming.filter((m) => !seenIds.current.has(m.id));
+            if (fresh.length > 0) {
+              for (const m of fresh) seenIds.current.add(m.id);
+              setMessages((prev) => [...prev, ...fresh]);
+            }
+            since = lastId || since;
+          } catch (err) {
+            if (cancelled || (err instanceof Error && err.name === "AbortError")) return;
+            // Transient network blip — back off briefly then resume.
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        }
       } catch (err) {
         if (!cancelled) setInfoError(err instanceof Error ? err.message : String(err));
       }
     })();
     return () => {
       cancelled = true;
-      if (source) source.close();
+      ctrl.abort();
     };
   }, [channelName, myHandle]);
 
