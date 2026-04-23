@@ -1,7 +1,7 @@
 /**
  * Share server — Express app that exposes a channel over a public URL via
- * cloudflared. Read path is SSE (no WebSockets — SSE tunnels cleanly through
- * any HTTP proxy). Write path is plain POST. Broadcast reuses
+ * cloudflared. Read path is long-polling (Cloudflare's quick-tunnel edge
+ * buffers streaming responses). Write path is plain POST. Broadcast reuses
  * `sendAndFanOut()` so messages land in every member's tmux session the same
  * way the Swift UI and CLI already do.
  */
@@ -20,6 +20,7 @@ import {
   type ChannelMessage,
 } from "./channels.js";
 import { sendAndFanOut, type Sender, type LiveSessionProbe } from "./broadcast.js";
+import { buildOpenApiSpec } from "./openapi.js";
 
 /** Injectable dependencies so tests don't need a real tmux or real links file. */
 export interface ShareServerDeps {
@@ -123,6 +124,25 @@ export function buildShareApp(deps: ShareServerDeps): Express {
   app.get("/api/channels", requireToken, (_req, res) => {
     const info = channelInfo();
     res.json({ channels: info ? [info] : [] });
+  });
+
+  // ── OpenAPI discovery for agents ──────────────────────────────────
+  // Served at the conventional RFC 8615 path so agent tools (MCP clients,
+  // ChatGPT plugin runtimes, custom bots) can auto-discover the API
+  // surface. Token-protected: if you can reach this URL you've already
+  // proven you have the share secret. Registered BEFORE express.static so
+  // the dot-prefix doesn't get swallowed by the static middleware's
+  // default `dotfiles: "ignore"`.
+  app.get("/.well-known/openapi.json", requireToken, (req, res) => {
+    // Honor X-Forwarded-* from cloudflared so the spec's `servers[0].url`
+    // reflects the public trycloudflare.com hostname, not localhost.
+    const host = (req.get("x-forwarded-host") ?? req.get("host") ?? "").split(",")[0].trim();
+    const proto = (req.get("x-forwarded-proto") ?? (req.secure ? "https" : "http")).split(",")[0].trim();
+    const publicBaseUrl = host ? `${proto}://${host}` : "";
+    res.type("application/json").send(JSON.stringify(
+      buildOpenApiSpec({ publicBaseUrl, channelName: deps.channelName }),
+      null, 2,
+    ));
   });
 
   // ── Info ──────────────────────────────────────────────────────────

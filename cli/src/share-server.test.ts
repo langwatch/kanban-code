@@ -360,6 +360,58 @@ describe("share-server images endpoint", () => {
   });
 });
 
+describe("share-server /.well-known/openapi.json", () => {
+  beforeEach(() => {
+    base = tmp();
+    createChannel("general", {}, base);
+  });
+  afterEach(() => { rmSync(base, { recursive: true, force: true }); });
+
+  test("requires a token (it's still the share secret)", async () => {
+    const app = buildShareApp(mkDeps());
+    const r = await request(app).get("/.well-known/openapi.json");
+    assert.equal(r.status, 401);
+  });
+
+  test("returns a valid OpenAPI 3.1 spec that documents the main endpoints", async () => {
+    const app = buildShareApp(mkDeps());
+    const r = await request(app).get("/.well-known/openapi.json?token=tk_good");
+    assert.equal(r.status, 200);
+    assert.match(r.headers["content-type"] ?? "", /^application\/json/);
+    const spec = r.body as Record<string, unknown>;
+    assert.equal(spec.openapi, "3.1.0");
+    const paths = spec.paths as Record<string, unknown>;
+    for (const p of [
+      "/api/channels",
+      "/api/channels/{channel}/info",
+      "/api/channels/{channel}/history",
+      "/api/channels/{channel}/poll",
+      "/api/channels/{channel}/send",
+    ]) {
+      assert.ok(paths[p], `expected path ${p} in spec`);
+    }
+    // Security scheme: token as query apiKey.
+    const components = spec.components as { securitySchemes: { apiKey: Record<string, unknown> } };
+    const sec = components.securitySchemes.apiKey;
+    assert.deepEqual({ type: sec.type, in: sec["in"], name: sec.name },
+      { type: "apiKey", in: "query", name: "token" });
+  });
+
+  test("servers[0].url reflects the tunnel host via X-Forwarded headers", async () => {
+    // cloudflared forwards the public hostname in X-Forwarded-Host so agents
+    // that fetch the spec via curl end up with an absolute URL that points
+    // at the shared tunnel, not localhost.
+    const app = buildShareApp(mkDeps());
+    const r = await request(app)
+      .get("/.well-known/openapi.json?token=tk_good")
+      .set("X-Forwarded-Host", "example-tunnel.trycloudflare.com")
+      .set("X-Forwarded-Proto", "https");
+    assert.equal(r.status, 200);
+    const servers = (r.body as { servers: { url: string }[] }).servers;
+    assert.equal(servers[0].url, "https://example-tunnel.trycloudflare.com");
+  });
+});
+
 describe("share-server long-poll", () => {
   beforeEach(() => {
     base = tmp();

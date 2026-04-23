@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { imageFilesystemPathToHttpUrl } from "./api";
+import { imageFilesystemPathToHttpUrl, openApiSpecUrl } from "./api";
 
 function withToken(token: string, fn: () => void): void {
   const orig = window.location.href;
@@ -34,5 +34,23 @@ describe("imageFilesystemPathToHttpUrl", () => {
     withToken("t", () => {
       expect(imageFilesystemPathToHttpUrl("/x/channels/images/img_abc/")).toBeNull();
     });
+  });
+});
+
+describe("openApiSpecUrl", () => {
+  test("builds an absolute URL with the token baked in", () => {
+    withToken("tk_abc123", () => {
+      expect(openApiSpecUrl())
+        .toBe(`${window.location.origin}/.well-known/openapi.json?token=tk_abc123`);
+    });
+  });
+
+  test("omits the query entirely when there's no token", () => {
+    const orig = window.location.href;
+    window.history.replaceState(null, "", "/");
+    try {
+      expect(openApiSpecUrl())
+        .toBe(`${window.location.origin}/.well-known/openapi.json`);
+    } finally { window.history.replaceState(null, "", orig); }
   });
 });

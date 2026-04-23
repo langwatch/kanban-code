@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
 import { ThemeToggle } from "./ThemeToggle";
+import { ApiForAgentsButton } from "./ApiForAgentsButton";
 import * as api from "@/lib/api";
 import type { ChannelInfo, ChannelMessage } from "@/lib/types";
 import { Hash } from "lucide-react";
@@ -123,6 +124,7 @@ export function ChatRoom({ channelName, myHandle }: Props): React.ReactElement {
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">
           {formatRemaining(remainingMs)}
         </span>
+        <ApiForAgentsButton />
         <ThemeToggle className="-mr-1" />
       </header>
 

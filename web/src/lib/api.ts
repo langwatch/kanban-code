@@ -88,6 +88,16 @@ export async function pollForMessages(
   return (await res.json()) as PollResult;
 }
 
+/** Fully-qualified URL to the OpenAPI spec, with the caller's share token
+ *  baked into the query. Use for the "API for Agents" handoff — pasting
+ *  this into any agent tool (MCP, ChatGPT plugin, custom bot) gives them
+ *  everything they need to drive the channel. */
+export function openApiSpecUrl(): string {
+  const base = `${window.location.origin}/.well-known/openapi.json`;
+  const token = getToken();
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+}
+
 /** Turn an absolute image filesystem path (the form stored in the jsonl and
  *  pasted into tmux) into a tokenized HTTP URL the browser can load via
  *  `<img src>`. Returns null when the path doesn't match the expected shape,
