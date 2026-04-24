@@ -14,6 +14,10 @@ public struct Settings: Codable, Sendable {
     public var hasCompletedOnboarding: Bool
     public var defaultAssistant: CodingAssistant?
     public var enabledAssistants: [CodingAssistant]
+    /// User-defined API service configurations (e.g. Ollama, LiteLLM proxy).
+    public var apiServices: [APIService]
+    /// Maps `CodingAssistant.rawValue` → `APIService.id` for the default service per assistant.
+    public var defaultAPIServiceIds: [String: String]
 
     public init(
         projects: [Project] = [],
@@ -27,7 +31,9 @@ public struct Settings: Codable, Sendable {
         columnOrder: [KanbanCodeColumn] = KanbanCodeColumn.allCases,
         hasCompletedOnboarding: Bool = false,
         defaultAssistant: CodingAssistant? = nil,
-        enabledAssistants: [CodingAssistant] = CodingAssistant.allCases
+        enabledAssistants: [CodingAssistant] = CodingAssistant.allCases,
+        apiServices: [APIService] = [],
+        defaultAPIServiceIds: [String: String] = [:]
     ) {
         self.projects = projects
         self.globalView = globalView
@@ -41,12 +47,15 @@ public struct Settings: Codable, Sendable {
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.defaultAssistant = defaultAssistant
         self.enabledAssistants = enabledAssistants
+        self.apiServices = apiServices
+        self.defaultAPIServiceIds = defaultAPIServiceIds
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects, globalView, github, notifications, remote, sessionTimeout
         case promptTemplate, githubIssuePromptTemplate, columnOrder, hasCompletedOnboarding, defaultAssistant
         case enabledAssistants
+        case apiServices, defaultAPIServiceIds
         case skill // backward-compat: old name for promptTemplate
     }
 
@@ -83,6 +92,8 @@ public struct Settings: Codable, Sendable {
         } else {
             enabledAssistants = CodingAssistant.allCases
         }
+        apiServices = (try? container.decodeIfPresent([APIService].self, forKey: .apiServices)) ?? []
+        defaultAPIServiceIds = (try? container.decodeIfPresent([String: String].self, forKey: .defaultAPIServiceIds)) ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -99,6 +110,8 @@ public struct Settings: Codable, Sendable {
         try container.encode(hasCompletedOnboarding, forKey: .hasCompletedOnboarding)
         try container.encodeIfPresent(defaultAssistant, forKey: .defaultAssistant)
         try container.encode(enabledAssistants, forKey: .enabledAssistants)
+        try container.encode(apiServices, forKey: .apiServices)
+        try container.encode(defaultAPIServiceIds, forKey: .defaultAPIServiceIds)
         // Note: "skill" is NOT encoded — only read for backward-compat
     }
 }

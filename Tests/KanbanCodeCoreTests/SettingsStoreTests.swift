@@ -174,6 +174,72 @@ struct SettingsStoreTests {
         #expect(settings.projects[0].githubFilter == "assignee:@me repo:org/repo is:open")
     }
 
+    // MARK: - APIService persistence
+
+    @Test("apiServices defaults to empty array")
+    func apiServicesDefaultEmpty() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let settings = try await SettingsStore(basePath: dir).read()
+        #expect(settings.apiServices.isEmpty)
+    }
+
+    @Test("defaultAPIServiceIds defaults to empty dict")
+    func defaultAPIServiceIdsDefaultEmpty() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let settings = try await SettingsStore(basePath: dir).read()
+        #expect(settings.defaultAPIServiceIds.isEmpty)
+    }
+
+    @Test("apiServices round-trips through SettingsStore")
+    func apiServicesRoundTrip() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+        let store = SettingsStore(basePath: dir)
+
+        var settings = Settings()
+        let service = APIService(
+            id: "svc-1",
+            name: "Ollama Local",
+            assistant: .claude,
+            launcherPrefix: "ollama launch",
+            modelFlag: "qwen3-coder-next:cloud",
+            baseURL: "http://localhost:11434/v1"
+        )
+        settings.apiServices = [service]
+        settings.defaultAPIServiceIds = ["claude": "svc-1"]
+        try await store.write(settings)
+
+        let read = try await store.read()
+        #expect(read.apiServices.count == 1)
+        #expect(read.apiServices[0].id == "svc-1")
+        #expect(read.apiServices[0].name == "Ollama Local")
+        #expect(read.apiServices[0].launcherPrefix == "ollama launch")
+        #expect(read.apiServices[0].modelFlag == "qwen3-coder-next:cloud")
+        #expect(read.apiServices[0].baseURL == "http://localhost:11434/v1")
+        #expect(read.defaultAPIServiceIds["claude"] == "svc-1")
+    }
+
+    @Test("Old settings JSON without apiServices decodes with empty defaults")
+    func backwardCompatNoApiServices() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let json = """
+        {
+          "projects": [{ "path": "/x", "name": "x", "visible": true }]
+        }
+        """
+        let path = (dir as NSString).appendingPathComponent("settings.json")
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+
+        let settings = try await SettingsStore(basePath: dir).read()
+        #expect(settings.projects.count == 1)
+        #expect(settings.apiServices.isEmpty)
+        #expect(settings.defaultAPIServiceIds.isEmpty)
+    }
+
     // MARK: - Forward-compat: unknown values in JSON must not wipe the whole config
 
     @Test("Unknown values in enabledAssistants don't break decoding — regression for 'projects gone on restart'")

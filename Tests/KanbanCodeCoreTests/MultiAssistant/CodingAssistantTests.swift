@@ -171,6 +171,153 @@ struct CodingAssistantTests {
         #expect(command == "codex resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen session-123")
     }
 
+    // MARK: - APIService command building
+
+    @Test("launchCommand without service is unchanged")
+    func launchCommandNoService() {
+        let cmd = CodingAssistant.claude.launchCommand(skipPermissions: true, worktreeName: nil, service: nil)
+        #expect(cmd == "claude --dangerously-skip-permissions")
+    }
+
+    @Test("launchCommand with ollama service inserts launcher + model + separator")
+    func launchCommandWithOllamaService() {
+        let service = APIService(
+            name: "Ollama",
+            assistant: .claude,
+            launcherPrefix: "ollama launch",
+            modelFlag: "qwen3-coder-next:cloud"
+        )
+        let cmd = CodingAssistant.claude.launchCommand(skipPermissions: true, worktreeName: nil, service: service)
+        #expect(cmd == "ollama launch claude --model qwen3-coder-next:cloud -- --dangerously-skip-permissions")
+    }
+
+    @Test("launchCommand with model-only service inserts -- separator")
+    func launchCommandWithModelOnly() {
+        let service = APIService(name: "Model override", assistant: .claude, modelFlag: "claude-opus-4-5")
+        let cmd = CodingAssistant.claude.launchCommand(skipPermissions: false, worktreeName: nil, service: service)
+        #expect(cmd == "claude --model claude-opus-4-5 --")
+    }
+
+    @Test("resumeCommand with ollama service for claude")
+    func resumeCommandClaudeWithService() {
+        let service = APIService(
+            name: "Ollama",
+            assistant: .claude,
+            launcherPrefix: "ollama launch",
+            modelFlag: "qwen3-coder-next:cloud"
+        )
+        let cmd = CodingAssistant.claude.resumeCommand(sessionId: "abc-123", skipPermissions: true, service: service)
+        #expect(cmd == "ollama launch claude --model qwen3-coder-next:cloud -- --dangerously-skip-permissions --resume abc-123")
+    }
+
+    @Test("resumeCommand with ollama service for codex puts resume after separator")
+    func resumeCommandCodexWithService() {
+        let service = APIService(
+            name: "Ollama",
+            assistant: .codex,
+            launcherPrefix: "ollama launch",
+            modelFlag: "qwen3-coder-next:cloud"
+        )
+        let cmd = CodingAssistant.codex.resumeCommand(sessionId: "abc-123", skipPermissions: true, service: service)
+        #expect(cmd == "ollama launch codex --model qwen3-coder-next:cloud -- resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen abc-123")
+    }
+
+    @Test("resumeCommand without service is unchanged for codex")
+    func resumeCommandCodexNoService() {
+        let cmd = CodingAssistant.codex.resumeCommand(sessionId: "abc-123", skipPermissions: true, service: nil)
+        #expect(cmd == "codex resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen abc-123")
+    }
+
+    @Test("launchCommand with worktree and ollama service places worktree after separator")
+    func launchCommandWorktreeWithService() {
+        let service = APIService(
+            name: "Ollama",
+            assistant: .claude,
+            launcherPrefix: "ollama launch",
+            modelFlag: "qwen3"
+        )
+        let cmd = CodingAssistant.claude.launchCommand(skipPermissions: true, worktreeName: "feature-x", service: service)
+        #expect(cmd == "ollama launch claude --model qwen3 -- --dangerously-skip-permissions --worktree feature-x")
+    }
+
+    // MARK: - Command preview with pre-selected default service
+
+    /// Regression: NewTaskDialog / LaunchConfirmationDialog previously showed the
+    /// bare command on first open even when a default API service was pre-selected,
+    /// because the command string was set in onAppear before .task loaded apiServices.
+    /// The fix refreshes the command at the end of .task.  These tests assert the
+    /// pure command-resolution logic that the refresh must produce.
+
+    @Test("Command preview reflects pre-selected default service immediately")
+    func commandPreviewWithPreSelectedService() {
+        // Simulate what happens after .task loads: selectedServiceId is resolved,
+        // apiServices is populated, and commandPreview is re-evaluated.
+        let services = [
+            APIService(
+                id: "svc-default",
+                name: "Ollama",
+                assistant: .claude,
+                launcherPrefix: "ollama launch",
+                modelFlag: "qwen3-coder-next:cloud"
+            )
+        ]
+        let selectedServiceId: String? = "svc-default"
+        let service = selectedServiceId.flatMap { id in services.first { $0.id == id } }
+        let cmd = CodingAssistant.claude.launchCommand(
+            skipPermissions: true,
+            worktreeName: nil,
+            service: service
+        )
+        #expect(cmd == "ollama launch claude --model qwen3-coder-next:cloud -- --dangerously-skip-permissions")
+    }
+
+    @Test("Command preview with nil selectedServiceId shows bare command (Default option)")
+    func commandPreviewWithNilService() {
+        let services = [
+            APIService(id: "svc-1", name: "Ollama", assistant: .claude, launcherPrefix: "ollama launch", modelFlag: "qwen3")
+        ]
+        let selectedServiceId: String? = nil
+        let service = selectedServiceId.flatMap { id in services.first { $0.id == id } }
+        let cmd = CodingAssistant.claude.launchCommand(
+            skipPermissions: true,
+            worktreeName: nil,
+            service: service
+        )
+        #expect(cmd == "claude --dangerously-skip-permissions")
+    }
+
+    @Test("Command preview with unknown service ID (stale ID) shows bare command")
+    func commandPreviewWithStaleServiceId() {
+        let services = [
+            APIService(id: "svc-current", name: "Ollama", assistant: .claude, launcherPrefix: "ollama launch", modelFlag: "qwen3")
+        ]
+        let selectedServiceId: String? = "svc-deleted"
+        let service = selectedServiceId.flatMap { id in services.first { $0.id == id } }
+        let cmd = CodingAssistant.claude.launchCommand(
+            skipPermissions: true,
+            worktreeName: nil,
+            service: service
+        )
+        #expect(cmd == "claude --dangerously-skip-permissions")
+    }
+
+    // MARK: - baseURLEnvKey
+
+    @Test("Claude base URL env key is ANTHROPIC_BASE_URL")
+    func claudeBaseURLEnvKey() {
+        #expect(CodingAssistant.claude.baseURLEnvKey == "ANTHROPIC_BASE_URL")
+    }
+
+    @Test("Codex base URL env key is OPENAI_BASE_URL")
+    func codexBaseURLEnvKey() {
+        #expect(CodingAssistant.codex.baseURLEnvKey == "OPENAI_BASE_URL")
+    }
+
+    @Test("Gemini has no base URL env key")
+    func geminiBaseURLEnvKey() {
+        #expect(CodingAssistant.gemini.baseURLEnvKey == nil)
+    }
+
     // MARK: - Codable
 
     @Test("CodingAssistant Codable round-trip")

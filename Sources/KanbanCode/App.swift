@@ -104,14 +104,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         // Install `kanban` CLI to ~/.local/bin
         Self.installCLI()
 
-        // Set up notifications: delegate must be set BEFORE requesting authorization
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error {
-                print("[Kanban Code] Notification permission error: \(error)")
-            } else if !granted {
-                print("[Kanban Code] Notification permission denied")
+        // UNUserNotificationCenter requires a bundle identifier — skip when running via `swift run`
+        if Bundle.main.bundleIdentifier != nil {
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error {
+                    print("[Kanban Code] Notification permission error: \(error)")
+                } else if !granted {
+                    print("[Kanban Code] Notification permission denied")
+                }
             }
         }
     }

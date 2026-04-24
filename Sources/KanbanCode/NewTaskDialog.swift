@@ -9,9 +9,13 @@ struct NewTaskDialog: View {
     var enabledAssistants: [CodingAssistant] = CodingAssistant.allCases
     /// (prompt, projectPath, title, startImmediately, images) — creates task without an assistant set
     var onCreate: (String, String?, String?, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _ in }
-    /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant) — creates and launches directly (skips LaunchConfirmation)
-    var onCreateAndLaunch: (String, String?, String?, Bool, Bool, Bool, String?, [ImageAttachment], CodingAssistant) -> Void = { _, _, _, _, _, _, _, _, _ in }
+    /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant, apiServiceId) — creates and launches directly (skips LaunchConfirmation)
+    var onCreateAndLaunch: (String, String?, String?, Bool, Bool, Bool, String?, [ImageAttachment], CodingAssistant, String?) -> Void = { _, _, _, _, _, _, _, _, _, _ in }
 
+    private let settingsStore = SettingsStore()
+    @State private var apiServices: [APIService] = []
+    @State private var defaultAPIServiceIds: [String: String] = [:]
+    @State private var selectedServiceId: String? = nil
     @AppStorage("selectedAssistant") private var selectedAssistantRaw: String = CodingAssistant.claude.rawValue
     private var selectedAssistant: CodingAssistant {
         get { CodingAssistant(rawValue: selectedAssistantRaw) ?? .claude }
@@ -70,6 +74,32 @@ struct NewTaskDialog: View {
                     TextField("Project path", text: $customPath)
                         .textFieldStyle(.roundedBorder)
                         .font(.app(.caption))
+                }
+            }
+
+            // Assistant picker (when multiple enabled)
+            if startImmediately && enabledAssistants.count > 1 {
+                Picker("Assistant", selection: $selectedAssistantRaw) {
+                    ForEach(enabledAssistants, id: \.self) { assistant in
+                        Text(assistant.displayName).tag(assistant.rawValue)
+                    }
+                }
+                .onChange(of: selectedAssistantRaw) {
+                    selectedServiceId = defaultAPIServiceIds[selectedAssistant.rawValue]
+                }
+            }
+
+            // API Service picker (when services exist for this assistant)
+            let servicesForAssistant = apiServices.filter { $0.assistant == selectedAssistant }
+            if startImmediately && !servicesForAssistant.isEmpty {
+                Picker("API Service", selection: $selectedServiceId) {
+                    Text("Default").tag(String?.none)
+                    ForEach(servicesForAssistant) { service in
+                        Text(service.name).tag(String?.some(service.id))
+                    }
+                }
+                .onChange(of: selectedServiceId) {
+                    if !commandEdited { command = commandPreview }
                 }
             }
 
@@ -146,18 +176,6 @@ struct NewTaskDialog: View {
 
             // Buttons
             HStack {
-                if startImmediately && enabledAssistants.count > 1 {
-                    Picker(selection: $selectedAssistantRaw) {
-                        ForEach(enabledAssistants, id: \.self) { assistant in
-                            Text(assistant.displayName)
-                                .tag(assistant.rawValue)
-                        }
-                    } label: {
-                        EmptyView()
-                    }
-                    .fixedSize()
-                }
-
                 Spacer()
                 Button("Cancel") {
                     isPresented = false
@@ -193,6 +211,10 @@ struct NewTaskDialog: View {
             }
             command = commandPreview
         }
+        .task { await reloadServices() }
+        .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSettingsChanged)) { _ in
+            Task { await reloadServices() }
+        }
         .onChange(of: prompt) {
             if !commandEdited { command = commandPreview }
         }
@@ -223,10 +245,26 @@ struct NewTaskDialog: View {
         }
         .onChange(of: selectedAssistantRaw) {
             if !commandEdited { command = commandPreview }
+            // Reset to default service for the newly selected assistant
+            selectedServiceId = defaultAPIServiceIds[selectedAssistant.rawValue]
         }
     }
 
     // MARK: - Actions
+
+    private func reloadServices() async {
+        let settings = (try? await settingsStore.read()) ?? Settings()
+        apiServices = settings.apiServices
+        defaultAPIServiceIds = settings.defaultAPIServiceIds
+        // Keep current selection if it still exists; otherwise fall back to the new default.
+        let currentStillValid = selectedServiceId.flatMap { id in
+            apiServices.first { $0.id == id }
+        } != nil
+        if !currentStillValid {
+            selectedServiceId = settings.defaultAPIServiceIds[selectedAssistant.rawValue]
+        }
+        if !commandEdited { command = commandPreview }
+    }
 
     private func submitForm() {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -243,7 +281,8 @@ struct NewTaskDialog: View {
                 dangerouslySkipPermissions,
                 commandEdited ? command : nil,
                 images,
-                selectedAssistant
+                selectedAssistant,
+                selectedServiceId
             )
         } else {
             onCreate(prompt, proj, titleOrNil, false, images)
@@ -302,9 +341,11 @@ struct NewTaskDialog: View {
             worktreeName = nil
         }
 
+        let service = selectedServiceId.flatMap { id in apiServices.first { $0.id == id } }
         parts.append(selectedAssistant.launchCommand(
             skipPermissions: dangerouslySkipPermissions,
-            worktreeName: worktreeName
+            worktreeName: worktreeName,
+            service: service
         ))
 
         return parts.joined(separator: " \\\n  ")

@@ -13,7 +13,8 @@ public protocol SessionLauncher: Sendable {
         commandOverride: String?,
         skipPermissions: Bool,
         preamble: String?,
-        assistant: CodingAssistant
+        assistant: CodingAssistant,
+        service: APIService?
     ) async throws -> String // returns tmux session name
 
     /// Resume an existing session by its ID.
@@ -25,7 +26,8 @@ public protocol SessionLauncher: Sendable {
         commandOverride: String?,
         skipPermissions: Bool,
         preamble: String?,
-        assistant: CodingAssistant
+        assistant: CodingAssistant,
+        service: APIService?
     ) async throws -> String // returns tmux session name
 }
 
@@ -48,7 +50,8 @@ extension SessionLauncher {
             commandOverride: nil,
             skipPermissions: false,
             preamble: nil,
-            assistant: .claude
+            assistant: .claude,
+            service: nil
         )
     }
 
@@ -67,7 +70,8 @@ extension SessionLauncher {
             commandOverride: commandOverride,
             skipPermissions: false,
             preamble: nil,
-            assistant: .claude
+            assistant: .claude,
+            service: nil
         )
     }
 }

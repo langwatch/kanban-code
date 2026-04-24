@@ -121,6 +121,61 @@ struct LinkAssistantCodableTests {
         #expect(session.assistant == .codex)
     }
 
+    // MARK: - apiServiceId
+
+    @Test("Link with apiServiceId round-trips through JSON")
+    func linkApiServiceIdRoundTrip() throws {
+        var link = Link(id: "card_svc1", assistant: .claude)
+        link.apiServiceId = "svc-abc123"
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(link)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(Link.self, from: data)
+        #expect(decoded.apiServiceId == "svc-abc123")
+    }
+
+    @Test("Link without apiServiceId decodes as nil")
+    func backwardCompatNoApiServiceId() throws {
+        let json = """
+        {
+            "id": "card_old2",
+            "column": "backlog",
+            "manualOverrides": {},
+            "manuallyArchived": false,
+            "source": "manual",
+            "isRemote": false
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(Link.self, from: json.data(using: .utf8)!)
+        #expect(decoded.apiServiceId == nil)
+    }
+
+    @Test("Link with apiServiceId encodes the field")
+    func apiServiceIdEncodesField() throws {
+        var link = Link(id: "card_svc2")
+        link.apiServiceId = "svc-xyz"
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(link)
+        let json = String(data: data, encoding: .utf8)!
+        #expect(json.contains("\"apiServiceId\""))
+        #expect(json.contains("\"svc-xyz\""))
+    }
+
+    @Test("Link with nil apiServiceId omits the field")
+    func nilApiServiceIdOmitsField() throws {
+        let link = Link(id: "card_svc3")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(link)
+        let json = String(data: data, encoding: .utf8)!
+        #expect(!json.contains("\"apiServiceId\""))
+    }
+
     // MARK: - effectiveAssistant
 
     @Test("effectiveAssistant returns .claude when assistant is nil")

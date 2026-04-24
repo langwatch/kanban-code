@@ -19,6 +19,12 @@ struct OnboardingWizard: View {
     @State private var runningSessions: [CodingAssistant: Int] = [:]
     @State private var killedSessions: Set<CodingAssistant> = []
     @State private var renderMarkdownImage = false
+    @State private var wizardServiceName: [CodingAssistant: String] = [:]
+    @State private var wizardServiceLauncher: [CodingAssistant: String] = [:]
+    @State private var wizardServiceModel: [CodingAssistant: String] = [:]
+    @State private var wizardServiceBaseURL: [CodingAssistant: String] = [:]
+    @State private var wizardServiceSaved: Set<CodingAssistant> = []
+    @State private var existingDefaultServiceIds: [String: String] = [:]
 
     /// Steps are built dynamically: Welcome, Assistants, [per-assistant hooks...], Dependencies, Notifications, Complete.
     private var steps: [OnboardingStep] {
@@ -56,19 +62,22 @@ struct OnboardingWizard: View {
 
             Divider()
 
-            // Step content
-            Group {
-                switch steps[min(currentStep, totalSteps - 1)] {
-                case .welcome: welcomeStep
-                case .assistants: assistantsStep
-                case .hooks(let assistant): hooksStep(for: assistant)
-                case .dependencies: dependenciesStep
-                case .notifications: notificationsStep
-                case .complete: completeStep
+            // Step content — scrollable so expanded sections don't obscure nav buttons
+            ScrollView {
+                Group {
+                    switch steps[min(currentStep, totalSteps - 1)] {
+                    case .welcome: welcomeStep
+                    case .assistants: assistantsStep
+                    case .hooks(let assistant): hooksStep(for: assistant)
+                    case .dependencies: dependenciesStep
+                    case .notifications: notificationsStep
+                    case .complete: completeStep
+                    }
                 }
+                .id(currentStep)
+                .transition(.push(from: navigatingForward ? .trailing : .leading))
+                .frame(maxWidth: .infinity)
             }
-            .id(currentStep)
-            .transition(.push(from: navigatingForward ? .trailing : .leading))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
@@ -116,6 +125,17 @@ struct OnboardingWizard: View {
         .frame(width: 520, height: 460)
         .task {
             await refreshStatus()
+            if let settings = try? await settingsStore.read() {
+                existingDefaultServiceIds = settings.defaultAPIServiceIds
+                for assistant in CodingAssistant.allCases {
+                    guard let serviceId = settings.defaultAPIServiceIds[assistant.rawValue],
+                          let service = settings.apiServices.first(where: { $0.id == serviceId }) else { continue }
+                    wizardServiceName[assistant] = service.name
+                    wizardServiceLauncher[assistant] = service.launcherPrefix ?? ""
+                    wizardServiceModel[assistant] = service.modelFlag ?? ""
+                    wizardServiceBaseURL[assistant] = service.baseURL ?? ""
+                }
+            }
         }
         .onChange(of: enabledAssistants) {
             if currentStep >= totalSteps {
@@ -197,6 +217,61 @@ struct OnboardingWizard: View {
                         Text("Not Installed")
                             .foregroundStyle(.orange)
                             .font(.app(.caption))
+                    }
+                }
+
+                // Optional API service configuration (e.g. Ollama)
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Name", text: Binding(
+                            get: { wizardServiceName[assistant] ?? "" },
+                            set: { wizardServiceName[assistant] = $0 }
+                        ), prompt: Text("e.g. Ollama (local)"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.app(.caption))
+
+                        TextField("Launcher prefix", text: Binding(
+                            get: { wizardServiceLauncher[assistant] ?? "" },
+                            set: { wizardServiceLauncher[assistant] = $0 }
+                        ), prompt: Text("e.g. ollama launch"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.app(.caption))
+
+                        TextField("Model", text: Binding(
+                            get: { wizardServiceModel[assistant] ?? "" },
+                            set: { wizardServiceModel[assistant] = $0 }
+                        ), prompt: Text("e.g. qwen3-coder-next:cloud"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.app(.caption))
+
+                        TextField("Base URL", text: Binding(
+                            get: { wizardServiceBaseURL[assistant] ?? "" },
+                            set: { wizardServiceBaseURL[assistant] = $0 }
+                        ), prompt: Text("e.g. http://localhost:11434/v1"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.app(.caption))
+
+                        let alreadyConfigured = wizardServiceSaved.contains(assistant)
+                            || existingDefaultServiceIds[assistant.rawValue] != nil
+                        if !alreadyConfigured {
+                            Button("Save as Default Service") {
+                                saveWizardService(for: assistant)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled((wizardServiceName[assistant] ?? "").isEmpty)
+                        }
+                    }
+                    .padding(.leading, 8)
+                } label: {
+                    HStack {
+                        let isConfigured = wizardServiceSaved.contains(assistant)
+                            || existingDefaultServiceIds[assistant.rawValue] != nil
+                        Image(systemName: isConfigured ? "checkmark.circle.fill" : "gearshape")
+                            .foregroundStyle(isConfigured ? Color.green : Color.secondary)
+                        Text("Configure API Service")
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -666,6 +741,30 @@ struct OnboardingWizard: View {
             try? await settingsStore.write(settings)
             NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
         }
+    }
+
+    private func saveWizardService(for assistant: CodingAssistant) {
+        let name = wizardServiceName[assistant] ?? ""
+        guard !name.isEmpty else { return }
+        let launcher = wizardServiceLauncher[assistant].flatMap { $0.isEmpty ? nil : $0 }
+        let model = wizardServiceModel[assistant].flatMap { $0.isEmpty ? nil : $0 }
+        let baseURL = wizardServiceBaseURL[assistant].flatMap { $0.isEmpty ? nil : $0 }
+        let service = APIService(
+            name: name,
+            assistant: assistant,
+            launcherPrefix: launcher,
+            modelFlag: model,
+            baseURL: baseURL
+        )
+        Task {
+            var settings = (try? await settingsStore.read()) ?? Settings()
+            settings.apiServices.removeAll { $0.assistant == assistant && $0.name == name }
+            settings.apiServices.append(service)
+            settings.defaultAPIServiceIds[assistant.rawValue] = service.id
+            try? await settingsStore.write(settings)
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
+        }
+        wizardServiceSaved.insert(assistant)
     }
 
     private func testPushover() {

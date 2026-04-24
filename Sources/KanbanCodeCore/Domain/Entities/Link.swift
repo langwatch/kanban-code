@@ -196,6 +196,10 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
     /// The effective assistant (never nil).
     public var effectiveAssistant: CodingAssistant { assistant ?? .claude }
 
+    /// ID of the `APIService` to use when launching/resuming this card.
+    /// nil means use the global default for the card's assistant (or no service).
+    public var apiServiceId: String?
+
     /// Launch lock — true while an async launch/resume is in progress.
     /// Prevents background reconciliation from overriding card state mid-launch.
     public var isLaunching: Bool?
@@ -342,7 +346,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         // Card-level
         case id, name, projectPath, column, createdAt, updatedAt, lastActivity, lastOpenedAt
         case manualOverrides, manuallyArchived, source, promptBody, promptImagePaths, isRemote, isLaunching, sortOrder
-        case discoveredBranches, discoveredRepos, assistant
+        case discoveredBranches, discoveredRepos, assistant, apiServiceId
         // Typed links (new nested format)
         case sessionLink, tmuxLink, worktreeLink, prLinks, issueLink, queuedPrompts, browserTabs
         // Old format keys (for reading legacy format)
@@ -373,6 +377,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         discoveredBranches = try c.decodeIfPresent([String].self, forKey: .discoveredBranches)
         discoveredRepos = try c.decodeIfPresent([String: String].self, forKey: .discoveredRepos)
         assistant = try c.decodeIfPresent(CodingAssistant.self, forKey: .assistant)
+        apiServiceId = try c.decodeIfPresent(String.self, forKey: .apiServiceId)
 
         // Session link: try nested first, fallback to flat
         if let sl = try c.decodeIfPresent(SessionLink.self, forKey: .sessionLink) {
@@ -459,6 +464,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         try c.encodeIfPresent(discoveredBranches, forKey: .discoveredBranches)
         try c.encodeIfPresent(discoveredRepos, forKey: .discoveredRepos)
         try c.encodeIfPresent(assistant, forKey: .assistant)
+        try c.encodeIfPresent(apiServiceId, forKey: .apiServiceId)
 
         // Always write new nested format
         try c.encodeIfPresent(sessionLink, forKey: .sessionLink)
