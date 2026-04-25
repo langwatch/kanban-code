@@ -25,7 +25,7 @@ app: build cli install-cli web
 	@mkdir -p $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app/Contents/MacOS
 	@cp $(BUILD_DIR)/kanban-code-active-session $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app/Contents/MacOS/kanban-code-active-session
 	@/bin/echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>kanban-code-active-session</string><key>CFBundleIdentifier</key><string>com.kanban-code.active-session</string><key>CFBundleName</key><string>kanban-code-active-session</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>$(VERSION)</string><key>LSUIElement</key><true/></dict></plist>' > $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app/Contents/Info.plist
-	@codesign --force --sign "Apple Development" $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app
+	@codesign --force --sign - $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app
 	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f $(BUNDLE_DIR)/Contents/Helpers/kanban-code-active-session.app 2>/dev/null || true
 	@cp Sources/KanbanCode/Resources/AppIcon.icns $(BUNDLE_DIR)/Contents/Resources/AppIcon.icns
 	@echo '<?xml version="1.0" encoding="UTF-8"?>' > $(BUNDLE_DIR)/Contents/Info.plist
@@ -70,7 +70,7 @@ app: build cli install-cli web
 	@rm -rf $(BUNDLE_DIR)/Contents/Resources/share-web
 	@cp -R web/dist $(BUNDLE_DIR)/Contents/Resources/share-web
 	@# Code sign so macOS grants notification permissions and Web Inspector can attach
-	@codesign --force --sign "Apple Development" --entitlements KanbanCode.entitlements $(BUNDLE_DIR)
+	@codesign --force --sign - --entitlements KanbanCode.entitlements $(BUNDLE_DIR)
 	@# Register with Launch Services so macOS picks up the icon
 	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f $(BUNDLE_DIR) 2>/dev/null || true
 	@echo "Built $(BUNDLE_DIR)"
