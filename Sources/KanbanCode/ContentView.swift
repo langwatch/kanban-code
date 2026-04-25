@@ -2489,6 +2489,7 @@ struct ContentView: View {
                 store.dispatch(.kickChannelMember(channelName: channel.name, member: who))
             },
             activityByHandle: activityMap,
+            myHandle: store.state.humanHandle,
             draft: Binding(
                 get: { store.state.channelDrafts[channel.name] ?? "" },
                 set: { store.dispatch(.setChannelDraft(channelName: channel.name, body: $0)) }
@@ -2526,6 +2527,7 @@ struct ContentView: View {
                 store.dispatch(.sendDirectMessage(to: other, body: body, imagePaths: imagePaths))
             },
             onClose: { store.dispatch(.selectDM(other: nil)) },
+            myHandle: store.state.humanHandle,
             draft: Binding(
                 get: { store.state.dmDrafts[key] ?? "" },
                 set: { store.dispatch(.setDMDraft(other: other, body: $0)) }

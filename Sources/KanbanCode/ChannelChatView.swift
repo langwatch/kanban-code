@@ -220,6 +220,10 @@ struct ChannelChatView: View {
     /// Optional map from handle → activity state (working/idle/needsAttention). Used to
     /// decorate each member chip with a status glyph.
     var activityByHandle: [String: ActivityState] = [:]
+    /// The local user's handle (no cardId). Messages from this handle render with
+    /// a distinct color + a full-width tinted row background so the user can
+    /// spot their own messages at a glance.
+    var myHandle: String = ""
     /// Two-way binding for the draft message. Held by the parent (store) so it
     /// survives drawer switches — avoids losing in-progress typing when the
     /// user jumps to another channel/card and comes back.
@@ -450,11 +454,11 @@ struct ChannelChatView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         if !hasRealMessages { emptyState }
                         let lastId = messages.last?.id
                         ForEach(messages) { m in
-                            messageRow(m)
+                            messageRow(m, mine: isMine(m))
                                 .id(m.id)
                                 .background {
                                     if m.id == lastId {
@@ -469,7 +473,7 @@ struct ChannelChatView: View {
                         }
                         Color.clear.frame(height: 4).id("__bottom__")
                     }
-                    .padding(12)
+                    .padding(.vertical, 12)
                     .textSelection(.enabled)
                 }
                 .onPreferenceChange(LastMessageHeightKey.self) { h in
@@ -558,7 +562,13 @@ struct ChannelChatView: View {
         .padding(.vertical, 48)
     }
 
-    private func messageRow(_ m: ChannelMessage) -> some View {
+    /// True if the message came from the local user (no cardId + handle matches).
+    private func isMine(_ m: ChannelMessage) -> Bool {
+        guard !myHandle.isEmpty, m.type == .message else { return false }
+        return m.from.cardId == nil && m.from.handle == myHandle
+    }
+
+    private func messageRow(_ m: ChannelMessage, mine: Bool) -> some View {
         let style: Color = {
             switch m.type {
             case .join, .leave, .system: return .secondary
@@ -571,12 +581,16 @@ struct ChannelChatView: View {
             default: return ""
             }
         }()
+        // `.green` reads like a self-mention against the default `.blue` used
+        // for everyone else. Opacity knocks it down a touch so it doesn't fight
+        // the message body for attention.
+        let handleColor: Color = mine ? .green.opacity(0.9) : .blue.opacity(0.85)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if !prefix.isEmpty {
                     Text(prefix)
                         .font(.app(.body, weight: .semibold))
-                        .foregroundStyle(.blue.opacity(0.85))
+                        .foregroundStyle(handleColor)
                 }
                 ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
                     .foregroundStyle(style)
@@ -590,6 +604,10 @@ struct ChannelChatView: View {
                     .padding(.leading, prefix.isEmpty ? 0 : 4)
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(mine ? Color.primary.opacity(0.045) : Color.clear)
     }
 
     private struct ActivityGlyph { let name: String; let color: Color; let label: String }
@@ -668,6 +686,8 @@ struct DMChatView: View {
     let onlineForOther: Bool
     var onSend: (String, [String]) -> Void = { _, _ in }
     var onClose: () -> Void = {}
+    /// Local user's handle, used to tint this side's messages. See ChannelChatView.
+    var myHandle: String = ""
     @Binding var draft: String
 
     @State private var pastedImages: [Data] = []
@@ -730,7 +750,7 @@ struct DMChatView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         if messages.isEmpty {
                             Text("No messages yet. Say hello.")
                                 .font(.app(.caption))
@@ -740,11 +760,14 @@ struct DMChatView: View {
                         }
                         let lastId = messages.last?.id
                         ForEach(messages) { m in
+                            let mine = !myHandle.isEmpty
+                                && m.from.cardId == nil
+                                && m.from.handle == myHandle
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     Text("@\(m.from.handle)")
                                         .font(.app(.body, weight: .semibold))
-                                        .foregroundStyle(.blue.opacity(0.85))
+                                        .foregroundStyle(mine ? Color.green.opacity(0.9) : Color.blue.opacity(0.85))
                                     ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
                                     Spacer(minLength: 6)
                                     Text(DateFormatter.hm.string(from: m.ts))
@@ -755,6 +778,10 @@ struct DMChatView: View {
                                     ChatMessageImages(paths: imgs)
                                 }
                             }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(mine ? Color.primary.opacity(0.045) : Color.clear)
                             .id(m.id)
                             .background {
                                 if m.id == lastId {
@@ -769,7 +796,7 @@ struct DMChatView: View {
                         }
                         Color.clear.frame(height: 4).id("__dm_bottom__")
                     }
-                    .padding(12)
+                    .padding(.vertical, 12)
                     .textSelection(.enabled)
                 }
                 .onPreferenceChange(LastMessageHeightKey.self) { h in
