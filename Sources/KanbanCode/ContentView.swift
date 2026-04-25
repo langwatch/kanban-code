@@ -763,8 +763,8 @@ struct ContentView: View {
                     onCreate: { prompt, projectPath, title, startImmediately, images in
                         createManualTask(prompt: prompt, projectPath: projectPath, title: title, startImmediately: startImmediately, images: images)
                     },
-                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant in
-                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: assistant)
+                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, assistant in
+                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, worktreeBranch: worktreeBranch, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: assistant)
                     }
                 )
             }
@@ -2345,7 +2345,7 @@ struct ContentView: View {
         }
     }
 
-    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude) {
+    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, worktreeBranch: String? = nil, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let name: String
         if let title, !title.isEmpty {
@@ -2377,7 +2377,7 @@ struct ContentView: View {
             let project = settings?.projects.first(where: { $0.path == effectivePath })
             let builtPrompt = PromptBuilder.buildPrompt(card: link, project: project, settings: settings)
 
-            let wtName: String? = (createWorktree && assistant.supportsWorktree) ? "" : nil
+            let wtName: String? = (createWorktree && assistant.supportsWorktree) ? (worktreeBranch ?? "") : nil
             executeLaunch(cardId: link.id, prompt: builtPrompt, projectPath: effectivePath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: assistant)
         }
     }

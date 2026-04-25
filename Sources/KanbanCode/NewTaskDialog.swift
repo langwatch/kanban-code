@@ -9,8 +9,8 @@ struct NewTaskDialog: View {
     var enabledAssistants: [CodingAssistant] = CodingAssistant.allCases
     /// (prompt, projectPath, title, startImmediately, images) — creates task without an assistant set
     var onCreate: (String, String?, String?, Bool, [ImageAttachment]) -> Void = { _, _, _, _, _ in }
-    /// (prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant) — creates and launches directly (skips LaunchConfirmation)
-    var onCreateAndLaunch: (String, String?, String?, Bool, Bool, Bool, String?, [ImageAttachment], CodingAssistant) -> Void = { _, _, _, _, _, _, _, _, _ in }
+    /// (prompt, projectPath, title, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, assistant) — creates and launches directly (skips LaunchConfirmation)
+    var onCreateAndLaunch: (String, String?, String?, Bool, String?, Bool, Bool, String?, [ImageAttachment], CodingAssistant) -> Void = { _, _, _, _, _, _, _, _, _, _ in }
 
     @AppStorage("selectedAssistant") private var selectedAssistantRaw: String = CodingAssistant.claude.rawValue
     private var selectedAssistant: CodingAssistant {
@@ -234,11 +234,13 @@ struct NewTaskDialog: View {
         let titleOrNil = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines)
         if let proj { lastSelectedProjectPath = proj }
         if startImmediately {
+            let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
             onCreateAndLaunch(
                 prompt,
                 proj,
                 titleOrNil,
                 createWorktree && isGitRepo && selectedAssistant.supportsWorktree,
+                branch.isEmpty ? nil : branch,
                 runRemotely && hasRemoteConfig,
                 dangerouslySkipPermissions,
                 commandEdited ? command : nil,
