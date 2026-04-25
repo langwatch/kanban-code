@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.1.26](https://github.com/langwatch/kanban-code/compare/v0.1.25...v0.1.26) (2026-04-25)
+
+
+### Features
+
+* [@mention](https://github.com/mention) autocomplete in channel/DM composer ([f87764f](https://github.com/langwatch/kanban-code/commit/f87764fa8268d0e9a9aeecfc74bc13bfa9b66964))
+* add Codex CLI assistant support ([338788f](https://github.com/langwatch/kanban-code/commit/338788f194e1910924626826f1df4403b67b72eb))
+* **api-service:** third-party launcher support (Ollama, model flags, base URL) ([12fd29a](https://github.com/langwatch/kanban-code/commit/12fd29aff58fc47fd596f026240646b9588073e2))
+* **api-service:** third-party launcher support via APIService entity ([0b094e3](https://github.com/langwatch/kanban-code/commit/0b094e353844f6341dcbca89131d60948594e1ae))
+* broadcast message images via inline markdown paths ([a61012e](https://github.com/langwatch/kanban-code/commit/a61012e68ee1e2b4f8d57c6daba4e92b6e82af26))
+* browser tab shortcuts and new-tab link handling ([3e41a9d](https://github.com/langwatch/kanban-code/commit/3e41a9d428f4ee98bb8d0dedb982af0b57354f00))
+* **channels:** kick members, markdown + truncation, logger & codex fixes ([f654acd](https://github.com/langwatch/kanban-code/commit/f654acdeb3b896a142f1d78e5d397d1ec63d7b66))
+* **channels:** tint own messages in channel and DM views ([1db6ccd](https://github.com/langwatch/kanban-code/commit/1db6ccdc4b9959aebf94c1b3134b56dbca99d626))
+* **chat:** arrow-key nav + escape for @-mention picker ([370866f](https://github.com/langwatch/kanban-code/commit/370866f7d27390892d49674db12885d67dcafaa1))
+* **chat:** Enter inserts top mention match when picker is open ([938cfb6](https://github.com/langwatch/kanban-code/commit/938cfb64a7e1e43e7c86fc3a16529bb4d9022038))
+* **chat:** flag external messages with a warning prefix in tmux fanout ([27ce61b](https://github.com/langwatch/kanban-code/commit/27ce61b7f9ae91b1e29a7931d448393e57525e00))
+* **chat:** text selection, cmd+click URLs, smart scroll, and new-messages pill ([f25de70](https://github.com/langwatch/kanban-code/commit/f25de708cd4887d20d0ae4920667243aa1f5ab86))
+* Cmd+Shift+T reopens last closed tab, address bar focused on new tab ([4a1416b](https://github.com/langwatch/kanban-code/commit/4a1416b143e06586298ec3ce9c9407e52904ad75))
+* first-class chat channels for multi-agent coordination ([826c61a](https://github.com/langwatch/kanban-code/commit/826c61a4b5fe4b035f2fa8d507f0f52786c596a1))
+* kanban channel/dm open deep-links into the app ([f25b577](https://github.com/langwatch/kanban-code/commit/f25b577752cd730d860feff48f3dd03862b37a98))
+* **share:** headless share-server + cloudflared tunnel + kanban channel share ([4197980](https://github.com/langwatch/kanban-code/commit/4197980d79b927cd9debf28c3f3b9a4cee88d858))
+* **share:** OpenAPI spec at /.well-known + "API for Agents" button ([637e8bf](https://github.com/langwatch/kanban-code/commit/637e8bf1a1bd7cb4656afa600c6bac259ce68aa8))
+* **share:** robustness, images, theme toggle, and polish ([b702979](https://github.com/langwatch/kanban-code/commit/b7029796ab6b76ab9e9dd7ff2d56d7af94d9ba7d))
+* **share:** swap SSE for long-polling + drop 50 MB of dev deps ([2af885e](https://github.com/langwatch/kanban-code/commit/2af885eb840bb5f006714c405f3ec5d51deba556))
+* **share:** Swift UI for public channel shares ([66539d0](https://github.com/langwatch/kanban-code/commit/66539d0beefb7ed10786b542af1492cd35e3f608))
+* **share:** web client (Vite + React + Tailwind + shadcn) ([59e048f](https://github.com/langwatch/kanban-code/commit/59e048f062b2adb112f551ad1ea976b2cbe304f8))
+* **storage:** rolling 7-day backup snapshots of links.json ([f24c0cd](https://github.com/langwatch/kanban-code/commit/f24c0cd86496aed0867e488c3a2f24b9addd1c89))
+* TypeScript CLI for card inspection and agent orchestration ([f0eb6df](https://github.com/langwatch/kanban-code/commit/f0eb6df18ff255d32c9fc590f5ec559629b3b304))
+
+
+### Bug Fixes
+
+* **activity:** detect ralph-loop / stop-hook continuation via transcript mtime ([87bc0d9](https://github.com/langwatch/kanban-code/commit/87bc0d93c6bfc1dc0493eaac9d0d6ed119fbb721))
+* **activity:** route detectors to their own sessions ([08fcde5](https://github.com/langwatch/kanban-code/commit/08fcde5a42d01d47b9917188e0c2e071dc46c461))
+* apply excluded paths filter to CLI card listing ([b7fe51e](https://github.com/langwatch/kanban-code/commit/b7fe51e5cf1ca1389c0e805e9e4dc8eb99dbbc24))
+* apply same activeTimeout window to Notification handler ([42be99a](https://github.com/langwatch/kanban-code/commit/42be99ab8bfbe4bbdf2fad180054d831f135eac1))
+* **build:** use ad-hoc codesign for local dev builds ([ab7c03b](https://github.com/langwatch/kanban-code/commit/ab7c03b6bdd305ddea0a34bec955ce968796e220))
+* **build:** use ad-hoc codesign for local dev builds ([3135148](https://github.com/langwatch/kanban-code/commit/3135148c71a26b135091d47aed019cbf56bc9e7d))
+* **card-detail:** discard stale transcript loads after card switch ([285635a](https://github.com/langwatch/kanban-code/commit/285635a000fc8bf49a31724f631c3ed090056ba9))
+* **card:** focus terminal on card switch when focusTerminal is already true ([c879b0f](https://github.com/langwatch/kanban-code/commit/c879b0fe4c5686d856c8ef9292dd02c0d23e50c8))
+* chat scroll rewrite, send reliability, terminal selection, tmux discovery ([fb3d256](https://github.com/langwatch/kanban-code/commit/fb3d256eb6b649d3fb373111240838d10d8038ff))
+* **chat:** Enter in @-mention picker inserts selected handle ([9bd673a](https://github.com/langwatch/kanban-code/commit/9bd673a9f0f41617506eb9249e0621c990ab4b30))
+* **chat:** float mention popover above composer (no layout shift) ([1ff85f1](https://github.com/langwatch/kanban-code/commit/1ff85f1eab50b9cf00638779702403c60a707e5c))
+* **chat:** mention popover sits above composer + hover highlight ([bf9de4f](https://github.com/langwatch/kanban-code/commit/bf9de4f3328bb45a7f66cab3a3a305da3d3d4081))
+* **chat:** re-focus chat composer / card terminal on drawer switch ([f0c5347](https://github.com/langwatch/kanban-code/commit/f0c5347b2cf69ac03a81610cdf9e35d6973ea613))
+* disable noUnusedLocals and noUnusedParameters in tsconfig ([919aee8](https://github.com/langwatch/kanban-code/commit/919aee80f36a3381cd97f620da6c27492c8d8a9f))
+* disable noUnusedLocals and noUnusedParameters in tsconfig ([be2eb8b](https://github.com/langwatch/kanban-code/commit/be2eb8bb1caf0056d1b7db1c9fb3fee0731f99d6))
+* native WebKit inspector via entitlements and autoresizing ([3a93ec9](https://github.com/langwatch/kanban-code/commit/3a93ec9b0d78ca2d4a8cf0c0efdbfff8c768bafa))
+* prevent reconcile from reverting configuredProjects ([639ab6a](https://github.com/langwatch/kanban-code/commit/639ab6abc23547ee25d21c319647928acbb46cc4))
+* **reconciler:** catch branch checkout inside existing worktrees ([1985c14](https://github.com/langwatch/kanban-code/commit/1985c14e51dbb38caa9dd4300ae09156b35d2913))
+* **settings:** one bad field can no longer wipe the whole config ([4d0add8](https://github.com/langwatch/kanban-code/commit/4d0add806718c7837f18028c23e93e466a35e1cf))
+* stable notification identifier per channel/dm ([3c7321e](https://github.com/langwatch/kanban-code/commit/3c7321e25476233dfacfd17eee4f2ecf6e78e4f9))
+* Stop grace period instead of 5-min activeTimeout window ([7591122](https://github.com/langwatch/kanban-code/commit/75911221361765b31217b8c93017f5d4a331e7c9))
+* stop Stop-event flicker without promoting dormant sessions ([8185d3d](https://github.com/langwatch/kanban-code/commit/8185d3dae998d7ef94a0c5e9091bd294e247b94e))
+* use stable code signing and disable smart text substitutions ([3b6db1b](https://github.com/langwatch/kanban-code/commit/3b6db1ba7d9279b2f4d8dd0d0a4a99c82f51e926))
+* use which instead of where for command detection on Linux ([a481ebe](https://github.com/langwatch/kanban-code/commit/a481ebe78353659b257961746d4ca11a89424b78))
+* use which instead of where for command detection on Linux ([c8726b5](https://github.com/langwatch/kanban-code/commit/c8726b54440e27c6bd29b3350c205cf376a64edd))
+
+
+### Refactoring
+
+* include markdown image refs in Swift fanout (parity with CLI) ([712b692](https://github.com/langwatch/kanban-code/commit/712b69261fa1c7d48531a4c4d898796d485f242d))
+
 ## [0.1.25](https://github.com/langwatch/kanban-code/compare/v0.1.24...v0.1.25) (2026-04-07)
 
 
