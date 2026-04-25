@@ -15,9 +15,13 @@ struct LaunchConfirmationDialog: View {
     let isResume: Bool
     let sessionId: String?
     let assistant: CodingAssistant
+    let initialServiceId: String?
     @Binding var isPresented: Bool
-    var onLaunch: (String, Bool, String?, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _ in } // (editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images)
+    var onLaunch: (String, Bool, String?, Bool, Bool, String?, [ImageAttachment], String?) -> Void = { _, _, _, _, _, _, _, _ in } // (editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, apiServiceId)
 
+    private let settingsStore = SettingsStore()
+    @State private var apiServices: [APIService] = []
+    @State private var selectedServiceId: String?
     @State private var prompt: String
     @State private var images: [ImageAttachment]
     @State private var command: String = ""
@@ -40,8 +44,9 @@ struct LaunchConfirmationDialog: View {
         sessionId: String? = nil,
         promptImagePaths: [String] = [],
         assistant: CodingAssistant = .claude,
+        initialServiceId: String? = nil,
         isPresented: Binding<Bool>,
-        onLaunch: @escaping (String, Bool, String?, Bool, Bool, String?, [ImageAttachment]) -> Void = { _, _, _, _, _, _, _ in }
+        onLaunch: @escaping (String, Bool, String?, Bool, Bool, String?, [ImageAttachment], String?) -> Void = { _, _, _, _, _, _, _, _ in }
     ) {
         self.cardId = cardId
         self.projectPath = projectPath
@@ -54,8 +59,10 @@ struct LaunchConfirmationDialog: View {
         self.isResume = isResume
         self.sessionId = sessionId
         self.assistant = assistant
+        self.initialServiceId = initialServiceId
         self._isPresented = isPresented
         self.onLaunch = onLaunch
+        self._selectedServiceId = State(initialValue: initialServiceId)
         self._prompt = State(initialValue: initialPrompt)
         self._images = State(initialValue: promptImagePaths.compactMap { ImageAttachment.fromPath($0) })
         self._runRemotely = State(initialValue: UserDefaults.standard.object(forKey: "runRemotely_\(projectPath)") as? Bool ?? true)
@@ -79,6 +86,20 @@ struct LaunchConfirmationDialog: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                    }
+
+                    // API Service picker
+                    let servicesForAssistant = apiServices.filter { $0.assistant == assistant }
+                    if !servicesForAssistant.isEmpty {
+                        Picker("API Service", selection: $selectedServiceId) {
+                            Text("Default").tag(String?.none)
+                            ForEach(servicesForAssistant) { service in
+                                Text(service.name).tag(String?.some(service.id))
+                            }
+                        }
+                        .onChange(of: selectedServiceId) {
+                            if !commandEdited { command = commandPreview }
+                        }
                     }
 
                     // Worktree name (if applicable, launch only)
@@ -198,6 +219,10 @@ struct LaunchConfirmationDialog: View {
         .onAppear {
             command = commandPreview
         }
+        .task { await reloadServices() }
+        .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSettingsChanged)) { _ in
+            Task { await reloadServices() }
+        }
         .onChange(of: prompt) {
             if !commandEdited { command = commandPreview }
         }
@@ -219,13 +244,28 @@ struct LaunchConfirmationDialog: View {
 
     // MARK: - Actions
 
+    private func reloadServices() async {
+        let settings = (try? await settingsStore.read()) ?? Settings()
+        apiServices = settings.apiServices
+        // If the current selection still exists keep it; otherwise fall back to default.
+        let currentStillValid = selectedServiceId.flatMap { id in
+            apiServices.first { $0.id == id }
+        } != nil
+        if !currentStillValid {
+            selectedServiceId = initialServiceId == nil
+                ? settings.defaultAPIServiceIds[assistant.rawValue]
+                : nil
+        }
+        if !commandEdited { command = commandPreview }
+    }
+
     private func submitForm() {
         if !isResume {
             guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         }
         let override = commandEdited ? command : nil
         let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
-        onLaunch(prompt, effectiveCreateWorktree, branch.isEmpty ? nil : branch, effectiveRunRemotely, dangerouslySkipPermissions, override, images)
+        onLaunch(prompt, effectiveCreateWorktree, branch.isEmpty ? nil : branch, effectiveRunRemotely, dangerouslySkipPermissions, override, images, selectedServiceId)
         isPresented = false
     }
 
@@ -249,10 +289,12 @@ struct LaunchConfirmationDialog: View {
             }
         }
 
+        let service = selectedServiceId.flatMap { id in apiServices.first { $0.id == id } }
         if isResume, let sid = sessionId {
             let resumeCmd = assistant.resumeCommand(
                 sessionId: sid,
-                skipPermissions: dangerouslySkipPermissions
+                skipPermissions: dangerouslySkipPermissions,
+                service: service
             )
             parts.append("cd \(projectPath) && \(resumeCmd)")
         } else {
@@ -265,7 +307,8 @@ struct LaunchConfirmationDialog: View {
             }
             parts.append(assistant.launchCommand(
                 skipPermissions: dangerouslySkipPermissions,
-                worktreeName: effectiveWorktreeName
+                worktreeName: effectiveWorktreeName,
+                service: service
             ))
         }
 

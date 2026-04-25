@@ -18,6 +18,7 @@ struct LaunchConfig: Identifiable {
     let sessionId: String?
     let promptImagePaths: [String]
     let assistant: CodingAssistant
+    let apiServiceId: String?
 
     init(
         cardId: String,
@@ -31,7 +32,8 @@ struct LaunchConfig: Identifiable {
         isResume: Bool = false,
         sessionId: String? = nil,
         promptImagePaths: [String] = [],
-        assistant: CodingAssistant = .claude
+        assistant: CodingAssistant = .claude,
+        apiServiceId: String? = nil
     ) {
         self.cardId = cardId
         self.projectPath = projectPath
@@ -45,6 +47,7 @@ struct LaunchConfig: Identifiable {
         self.sessionId = sessionId
         self.promptImagePaths = promptImagePaths
         self.assistant = assistant
+        self.apiServiceId = apiServiceId
     }
 }
 
@@ -763,8 +766,8 @@ struct ContentView: View {
                     onCreate: { prompt, projectPath, title, startImmediately, images in
                         createManualTask(prompt: prompt, projectPath: projectPath, title: title, startImmediately: startImmediately, images: images)
                     },
-                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant in
-                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: assistant)
+                    onCreateAndLaunch: { prompt, projectPath, title, createWorktree, runRemotely, skipPermissions, commandOverride, images, assistant, apiServiceId in
+                        createManualTaskAndLaunch(prompt: prompt, projectPath: projectPath, title: title, createWorktree: createWorktree, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: assistant, apiServiceId: apiServiceId)
                     }
                 )
             }
@@ -804,16 +807,17 @@ struct ContentView: View {
                     sessionId: config.sessionId,
                     promptImagePaths: config.promptImagePaths,
                     assistant: config.assistant,
+                    initialServiceId: config.apiServiceId,
                     isPresented: Binding(
                         get: { launchConfig != nil },
                         set: { if !$0 { launchConfig = nil } }
                     )
-                ) { editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images in
+                ) { editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, selectedServiceId in
                     if config.isResume {
-                        executeResume(cardId: config.cardId, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, assistant: config.assistant)
+                        executeResume(cardId: config.cardId, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, assistant: config.assistant, serviceIdOverride: selectedServiceId)
                     } else {
                         let wtName: String? = createWorktree ? (worktreeBranch ?? config.worktreeName ?? "") : nil
-                        executeLaunch(cardId: config.cardId, prompt: editedPrompt, projectPath: config.projectPath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: config.assistant)
+                        executeLaunch(cardId: config.cardId, prompt: editedPrompt, projectPath: config.projectPath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: config.assistant, serviceIdOverride: selectedServiceId)
                     }
                 }
             }
@@ -2345,7 +2349,7 @@ struct ContentView: View {
         }
     }
 
-    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude) {
+    private func createManualTaskAndLaunch(prompt: String, projectPath: String?, title: String? = nil, createWorktree: Bool, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude, apiServiceId: String? = nil) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let name: String
         if let title, !title.isEmpty {
@@ -2358,7 +2362,7 @@ struct ContentView: View {
             var mutable = img
             return try? mutable.saveToPersistent()
         }
-        let link = Link(
+        var link = Link(
             name: name,
             projectPath: projectPath,
             column: .inProgress,
@@ -2367,6 +2371,7 @@ struct ContentView: View {
             promptImagePaths: imagePaths,
             assistant: assistant
         )
+        link.apiServiceId = apiServiceId
         let effectivePath = projectPath ?? NSHomeDirectory()
 
         store.dispatch(.createManualTask(link))

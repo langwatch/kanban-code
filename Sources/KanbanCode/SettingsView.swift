@@ -127,7 +127,7 @@ struct SettingsView: View {
             AmphetamineSettingsView()
                 .tabItem { Label("Amphetamine", systemImage: "bolt.fill") }
         }
-        .frame(width: 520, height: 460)
+        .frame(width: 520, height: 520)
         .task {
             await checkAvailability()
         }
@@ -159,10 +159,19 @@ struct AssistantStatus {
 
 // MARK: - Assistants
 
+private struct ServiceSheetRequest: Identifiable {
+    let id = UUID()
+    let assistant: CodingAssistant
+    let existingService: APIService? // nil = add mode
+}
+
 struct AssistantsSettingsView: View {
     @Binding var assistantStatus: [CodingAssistant: AssistantStatus]
 
     private let settingsStore = SettingsStore()
+    @State private var apiServices: [APIService] = []
+    @State private var defaultAPIServiceIds: [String: String] = [:]
+    @State private var serviceSheetRequest: ServiceSheetRequest? = nil
 
     var body: some View {
         Form {
@@ -217,6 +226,68 @@ struct AssistantsSettingsView: View {
                                 .font(.caption)
                         }
                     }
+
+                    // API Services subsection
+                    let services = apiServices.filter { $0.assistant == assistant }
+                    if !services.isEmpty {
+                        ForEach(services) { service in
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(service.name)
+                                        .font(.body)
+                                    Group {
+                                        if let launcher = service.launcherPrefix, let model = service.modelFlag {
+                                            Text("\(launcher) \(assistant.cliCommand) --model \(model) -- …")
+                                        } else if let model = service.modelFlag {
+                                            Text("--model \(model) -- …")
+                                        } else if let launcher = service.launcherPrefix {
+                                            Text("\(launcher) \(assistant.cliCommand) -- …")
+                                        }
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                }
+                                Spacer()
+                                Button {
+                                    toggleDefault(service: service, for: assistant)
+                                } label: {
+                                    Image(systemName: defaultAPIServiceIds[assistant.rawValue] == service.id
+                                        ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(defaultAPIServiceIds[assistant.rawValue] == service.id
+                                            ? Color.blue : Color.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help(defaultAPIServiceIds[assistant.rawValue] == service.id
+                                    ? "Default for \(assistant.displayName)" : "Set as default")
+
+                                Button {
+                                    serviceSheetRequest = ServiceSheetRequest(assistant: assistant, existingService: service)
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Edit service")
+
+                                Button(role: .destructive) {
+                                    deleteService(service, for: assistant)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Button {
+                        serviceSheetRequest = ServiceSheetRequest(assistant: assistant, existingService: nil)
+                    } label: {
+                        Label("Add API Service", systemImage: "plus")
+                            .font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
                 } header: {
                     HStack {
                         Text(assistant.displayName)
@@ -236,6 +307,18 @@ struct AssistantsSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .task { await loadServices() }
+        .sheet(item: $serviceSheetRequest) { request in
+            AddAPIServiceSheet(assistant: request.assistant, existingService: request.existingService) { service in
+                if let existing = request.existingService,
+                   let idx = apiServices.firstIndex(where: { $0.id == existing.id }) {
+                    apiServices[idx] = service
+                } else {
+                    apiServices.append(service)
+                }
+                saveServices()
+            }
+        }
     }
 
     private func saveEnabledAssistants() {
@@ -246,6 +329,122 @@ struct AssistantsSettingsView: View {
             try? await settingsStore.write(settings)
             NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
         }
+    }
+
+    private func loadServices() async {
+        let settings = (try? await settingsStore.read()) ?? Settings()
+        apiServices = settings.apiServices
+        defaultAPIServiceIds = settings.defaultAPIServiceIds
+    }
+
+    private func saveServices() {
+        let services = apiServices
+        let defaults = defaultAPIServiceIds
+        Task {
+            var settings = (try? await settingsStore.read()) ?? Settings()
+            settings.apiServices = services
+            settings.defaultAPIServiceIds = defaults
+            try? await settingsStore.write(settings)
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
+        }
+    }
+
+    private func toggleDefault(service: APIService, for assistant: CodingAssistant) {
+        if defaultAPIServiceIds[assistant.rawValue] == service.id {
+            defaultAPIServiceIds.removeValue(forKey: assistant.rawValue)
+        } else {
+            defaultAPIServiceIds[assistant.rawValue] = service.id
+        }
+        saveServices()
+    }
+
+    private func deleteService(_ service: APIService, for assistant: CodingAssistant) {
+        apiServices.removeAll { $0.id == service.id }
+        if defaultAPIServiceIds[assistant.rawValue] == service.id {
+            defaultAPIServiceIds.removeValue(forKey: assistant.rawValue)
+        }
+        saveServices()
+    }
+}
+
+// MARK: - Add API Service sheet
+
+struct AddAPIServiceSheet: View {
+    let assistant: CodingAssistant
+    let existingService: APIService?
+    let onSave: (APIService) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var launcherPrefix = ""
+    @State private var modelFlag = ""
+    @State private var baseURL = ""
+
+    init(assistant: CodingAssistant, existingService: APIService? = nil, onSave: @escaping (APIService) -> Void) {
+        self.assistant = assistant
+        self.existingService = existingService
+        self.onSave = onSave
+        _name = State(initialValue: existingService?.name ?? "")
+        _launcherPrefix = State(initialValue: existingService?.launcherPrefix ?? "")
+        _modelFlag = State(initialValue: existingService?.modelFlag ?? "")
+        _baseURL = State(initialValue: existingService?.baseURL ?? "")
+    }
+
+    private var isEditing: Bool { existingService != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("\(isEditing ? "Edit" : "Add") API Service — \(assistant.displayName)")
+                .font(.headline)
+                .padding()
+
+            Form {
+                Section {
+                    TextField("Name", text: $name, prompt: Text("e.g. Ollama (local)"))
+                    TextField("Launcher prefix", text: $launcherPrefix, prompt: Text("e.g. ollama launch"))
+                    TextField("Model", text: $modelFlag, prompt: Text("e.g. qwen3-coder-next:cloud"))
+                    TextField("Base URL", text: $baseURL, prompt: Text("e.g. http://localhost:11434/v1"))
+                } header: {
+                    Text("Command preview:")
+                        .font(.caption)
+                } footer: {
+                    Text(previewCommand)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape)
+                Button(isEditing ? "Save" : "Add") {
+                    let service = APIService(
+                        id: existingService?.id ?? UUID().uuidString,
+                        name: name.isEmpty ? "Unnamed" : name,
+                        assistant: assistant,
+                        launcherPrefix: launcherPrefix.isEmpty ? nil : launcherPrefix,
+                        modelFlag: modelFlag.isEmpty ? nil : modelFlag,
+                        baseURL: baseURL.isEmpty ? nil : baseURL
+                    )
+                    onSave(service)
+                    dismiss()
+                }
+                .keyboardShortcut(.return)
+                .buttonStyle(.borderedProminent)
+                .disabled(name.isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 420, height: 400)
+    }
+
+    private var previewCommand: String {
+        let prefix = launcherPrefix.isEmpty ? nil : launcherPrefix
+        let model = modelFlag.isEmpty ? nil : modelFlag
+        let service = APIService(name: "", assistant: assistant, launcherPrefix: prefix, modelFlag: model)
+        return assistant.launchCommand(skipPermissions: true, worktreeName: nil, service: service)
     }
 }
 

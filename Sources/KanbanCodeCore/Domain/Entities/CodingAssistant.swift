@@ -159,35 +159,61 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    public func launchCommand(skipPermissions: Bool, worktreeName: String?) -> String {
-        var parts = [cliCommand]
-        if skipPermissions { parts.append(autoApproveFlag) }
-        parts.append(contentsOf: interactiveLaunchFlags)
-        if supportsWorktree, let worktreeName {
-            if worktreeName.isEmpty {
-                parts.append("--worktree")
-            } else {
-                parts.append("--worktree")
-                parts.append(worktreeName)
-            }
+    /// Environment variable used to override the API base URL for this assistant's backend.
+    public var baseURLEnvKey: String? {
+        switch self {
+        case .claude: "ANTHROPIC_BASE_URL"
+        case .codex:  "OPENAI_BASE_URL"
+        case .gemini: nil
         }
-        return parts.joined(separator: " ")
     }
 
-    public func resumeCommand(sessionId: String, skipPermissions: Bool) -> String {
+    /// Builds the tmux launch command, optionally wrapping with an `APIService`.
+    ///
+    /// Without service: `claude --dangerously-skip-permissions --worktree foo`
+    /// With service:    `ollama launch claude --model qwen3 -- --dangerously-skip-permissions --worktree foo`
+    public func launchCommand(skipPermissions: Bool, worktreeName: String?, service: APIService? = nil) -> String {
+        var prefix: [String] = []
+        if let launcher = service?.launcherPrefix { prefix.append(contentsOf: launcher.split(separator: " ").map(String.init)) }
+        prefix.append(cliCommand)
+        if let model = service?.modelFlag { prefix += ["--model", model] }
+
+        var flags: [String] = []
+        if skipPermissions { flags.append(autoApproveFlag) }
+        flags.append(contentsOf: interactiveLaunchFlags)
+        if supportsWorktree, let worktreeName {
+            flags += worktreeName.isEmpty ? ["--worktree"] : ["--worktree", worktreeName]
+        }
+
+        let sep: [String] = service?.needsSeparator == true ? ["--"] : []
+        return (prefix + sep + flags).joined(separator: " ")
+    }
+
+    /// Builds the tmux resume command, optionally wrapping with an `APIService`.
+    ///
+    /// Without service: `claude --dangerously-skip-permissions --resume <id>`
+    /// With service:    `ollama launch claude --model qwen3 -- --dangerously-skip-permissions --resume <id>`
+    public func resumeCommand(sessionId: String, skipPermissions: Bool, service: APIService? = nil) -> String {
+        var prefix: [String] = []
+        if let launcher = service?.launcherPrefix { prefix.append(contentsOf: launcher.split(separator: " ").map(String.init)) }
+        prefix.append(cliCommand)
+        if let model = service?.modelFlag { prefix += ["--model", model] }
+        let sep: [String] = service?.needsSeparator == true ? ["--"] : []
+
         switch self {
         case .codex:
-            var parts = [cliCommand, "resume"]
-            if skipPermissions { parts.append(autoApproveFlag) }
-            parts.append(contentsOf: interactiveLaunchFlags)
-            parts.append(sessionId)
-            return parts.joined(separator: " ")
+            // "resume" subcommand goes after -- when a separator is present
+            var flags = ["resume"]
+            if skipPermissions { flags.append(autoApproveFlag) }
+            flags.append(contentsOf: interactiveLaunchFlags)
+            flags.append(sessionId)
+            return (prefix + sep + flags).joined(separator: " ")
         case .claude, .gemini:
-            var parts = [cliCommand]
-            if skipPermissions { parts.append(autoApproveFlag) }
-            parts.append(resumeFlag)
-            parts.append(sessionId)
-            return parts.joined(separator: " ")
+            var flags: [String] = []
+            if skipPermissions { flags.append(autoApproveFlag) }
+            flags.append(resumeFlag)
+            flags.append(sessionId)
+            return (prefix + sep + flags).joined(separator: " ")
         }
     }
 }

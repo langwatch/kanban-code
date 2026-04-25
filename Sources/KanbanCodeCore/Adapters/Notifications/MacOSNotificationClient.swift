@@ -8,6 +8,8 @@ public final class MacOSNotificationClient: NotifierPort, @unchecked Sendable {
     public init() {}
 
     public func sendNotification(title: String, message: String, imageData: Data?, cardId: String?) async throws {
+        // UNUserNotificationCenter requires a bundle identifier — unavailable under `swift run`.
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
 
         // Check current authorization status

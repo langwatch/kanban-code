@@ -46,12 +46,13 @@ extension ContentView {
                 hasRemoteConfig: projectIsUnderRemote,
                 remoteHost: globalRemote?.host,
                 promptImagePaths: card.link.promptImagePaths ?? [],
-                assistant: card.link.effectiveAssistant
+                assistant: card.link.effectiveAssistant,
+                apiServiceId: card.link.apiServiceId
             )
         }
     }
 
-    func executeLaunch(cardId: String, prompt: String, projectPath: String, worktreeName: String?, runRemotely: Bool = true, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude) {
+    func executeLaunch(cardId: String, prompt: String, projectPath: String, worktreeName: String?, runRemotely: Bool = true, skipPermissions: Bool = true, commandOverride: String? = nil, images: [ImageAttachment] = [], assistant: CodingAssistant = .claude, serviceIdOverride: String? = nil) {
         // IMMEDIATE state update via reducer — no more dual memory+disk writes
         store.dispatch(.launchCard(cardId: cardId, prompt: prompt, projectPath: projectPath, worktreeName: worktreeName, runRemotely: runRemotely, commandOverride: commandOverride))
         shouldFocusTerminal = true
@@ -100,6 +101,19 @@ extension ContentView {
                     preamble = nil
                 }
 
+                // Resolve API service for this card and inject base URL env var if needed
+                let cardLink = store.state.cards.first(where: { $0.id == cardId })?.link
+                let resolvedServiceId = serviceIdOverride ?? cardLink?.apiServiceId ?? settings?.defaultAPIServiceIds[assistant.rawValue]
+                let resolvedService = resolvedServiceId.flatMap { sid in
+                    settings?.apiServices.first { $0.id == sid && $0.assistant == assistant }
+                }
+                var serviceExtraEnv = extraEnv
+                if let svc = resolvedService,
+                   let envKey = assistant.baseURLEnvKey,
+                   let url = svc.baseURL, !url.isEmpty {
+                    serviceExtraEnv[envKey] = url
+                }
+
                 // Snapshot existing session files for detection
                 let sessionFileExt = ".\(assistant.sessionFileExtension)"
                 let configDir = (NSHomeDirectory() as NSString).appendingPathComponent(assistant.configDirName)
@@ -145,11 +159,12 @@ extension ContentView {
                     prompt: prompt,
                     worktreeName: assistant.supportsWorktree ? worktreeName : nil,
                     shellOverride: shellOverride,
-                    extraEnv: extraEnv,
+                    extraEnv: serviceExtraEnv,
                     commandOverride: commandOverride,
                     skipPermissions: skipPermissions,
                     preamble: preamble,
-                    assistant: assistant
+                    assistant: assistant,
+                    service: resolvedService
                 )
                 KanbanCodeLog.info("launch", "Tmux session created: \(tmuxName)")
 
@@ -431,7 +446,8 @@ extension ContentView {
             remoteHost: globalRemote?.host,
             isResume: true,
             sessionId: sessionId,
-            assistant: card.link.effectiveAssistant
+            assistant: card.link.effectiveAssistant,
+            apiServiceId: card.link.apiServiceId
         )
     }
 
@@ -515,7 +531,7 @@ extension ContentView {
         }
     }
 
-    func executeResume(cardId: String, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String?, assistant: CodingAssistant = .claude) {
+    func executeResume(cardId: String, runRemotely: Bool, skipPermissions: Bool = true, commandOverride: String?, assistant: CodingAssistant = .claude, serviceIdOverride: String? = nil) {
         guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
         let sessionId = card.link.sessionLink?.sessionId ?? card.link.id
         // For worktree cards, cd into the worktree — that's where Claude stored the session data.
@@ -592,15 +608,27 @@ extension ContentView {
                     preamble = nil
                 }
 
+                let resumeServiceId = serviceIdOverride ?? card.link.apiServiceId ?? settings?.defaultAPIServiceIds[assistant.rawValue]
+                let resolvedService = resumeServiceId.flatMap { sid in
+                    settings?.apiServices.first { $0.id == sid && $0.assistant == assistant }
+                }
+                var serviceExtraEnv = extraEnv
+                if let svc = resolvedService,
+                   let envKey = assistant.baseURLEnvKey,
+                   let url = svc.baseURL, !url.isEmpty {
+                    serviceExtraEnv[envKey] = url
+                }
+
                 let actualTmuxName = try await launcher.resume(
                     sessionId: sessionId,
                     projectPath: projectPath,
                     shellOverride: shellOverride,
-                    extraEnv: extraEnv,
+                    extraEnv: serviceExtraEnv,
                     commandOverride: commandOverride,
                     skipPermissions: skipPermissions,
                     preamble: preamble,
-                    assistant: assistant
+                    assistant: assistant,
+                    service: resolvedService
                 )
                 KanbanCodeLog.info("resume", "Resume launched for card=\(cardId.prefix(12)) actualTmux=\(actualTmuxName)")
 
@@ -611,4 +639,5 @@ extension ContentView {
             }
         }
     }
+
 }
