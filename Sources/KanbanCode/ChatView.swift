@@ -850,16 +850,44 @@ private struct ScrollBottomTracker: ViewModifier {
     @Binding var hasNewMessages: Bool
     @Binding var shouldAutoScroll: Bool
 
+    /// True while the user is actively driving the scroll (touch / mouse /
+    /// momentum). We only demote `shouldAutoScroll` during these phases so
+    /// content-growth-induced "not at bottom" transitions (a tall assistant
+    /// message arrives and pushes the viewport up) don't accidentally turn
+    /// off auto-scroll.
+    @State private var userDrivenScroll: Bool = false
+
     func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: Bool.self, of: { geo in
-            geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 150
-        }, action: { _, newAtBottom in
-            isAtBottom = newAtBottom
-            if newAtBottom {
-                hasNewMessages = false
-                shouldAutoScroll = true
+        content
+            .onScrollPhaseChange { _, newPhase in
+                switch newPhase {
+                case .interacting, .tracking, .decelerating:
+                    userDrivenScroll = true
+                case .idle, .animating:
+                    userDrivenScroll = false
+                @unknown default:
+                    userDrivenScroll = false
+                }
             }
-        })
+            .onScrollGeometryChange(for: Bool.self, of: { geo in
+                geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 150
+            }, action: { _, newAtBottom in
+                isAtBottom = newAtBottom
+                if newAtBottom {
+                    hasNewMessages = false
+                    shouldAutoScroll = true
+                } else if userDrivenScroll {
+                    // The user scrolled away from the bottom — disable
+                    // auto-scroll immediately. Without this, `shouldAutoScroll`
+                    // only flipped to false inside `handleNewTurns` *after*
+                    // the next message arrived, so that first new message
+                    // would yank the user back down mid-read. The
+                    // `userDrivenScroll` guard avoids demoting when a tall
+                    // message simply pushed the viewport off the bottom on
+                    // its own (content grew under us).
+                    shouldAutoScroll = false
+                }
+            })
     }
 }
 

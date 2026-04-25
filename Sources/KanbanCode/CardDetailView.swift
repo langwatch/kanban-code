@@ -69,6 +69,9 @@ struct CardDetailView: View {
     @State private var turns: [ConversationTurn] = []
     @State private var isLoadingHistory = false
     @State private var isReloadingHistory = false
+    /// The card.id of the in-flight history load. Used to stale-check results
+    /// when the user switches cards mid-load — see loadHistory().
+    @State private var historyLoadCardId: String?
     @State private var hasMoreTurns = false
     // Per-card chat drafts (keyed by card ID, persisted to disk)
     @State private var chatDrafts: [String: ChatDraft] = ChatDraft.loadAll()
@@ -1584,11 +1587,27 @@ struct CardDetailView: View {
     private static let chatPageSize = 80
 
     private func loadHistory() async {
-        guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
-        // Prevent concurrent reloads — they race on lastLineNumber and duplicate turns
-        guard !isReloadingHistory else { return }
+        // Capture which card this load is for. If the user switches cards
+        // mid-load, the in-flight transcript read still resolves — but the
+        // result belongs to the old card and must not stomp on the new card's
+        // (possibly empty) `turns`. Without this check, you'd see the previous
+        // card's chat content in the newly-opened card.
+        let myCardId = card.id
+
+        // Within a single card, concurrent reloads race on lastLineNumber and
+        // duplicate turns — keep that guard. But never block a *different*
+        // card's load: if the in-flight one is for the previous card, let the
+        // new load proceed (the old load's stale-check below will discard its
+        // result, so they can't race on `turns`).
+        if isReloadingHistory && historyLoadCardId == myCardId { return }
         isReloadingHistory = true
-        defer { isReloadingHistory = false }
+        historyLoadCardId = myCardId
+        defer {
+            // Only the load that owns the slot clears the flag.
+            if historyLoadCardId == myCardId { isReloadingHistory = false }
+        }
+
+        guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
 
         if turns.isEmpty { isLoadingHistory = true }
         let baseSize = preferChatView ? Self.chatPageSize : Self.pageSize
@@ -1608,6 +1627,9 @@ struct CardDetailView: View {
                 }
             }.value
 
+            // Stale-check: discard if the user switched cards while we read.
+            guard card.id == myCardId else { return }
+
             // Back on main actor — update @State.
             // Always use the fresh tail — it picks up content changes from
             // mergeConsecutiveAssistantTurns (partial → full response).
@@ -1623,13 +1645,14 @@ struct CardDetailView: View {
         } catch {
             // Silently fail — empty history is fine
         }
-        isLoadingHistory = false
+        if card.id == myCardId { isLoadingHistory = false }
     }
 
     private func loadMoreHistory() async {
         guard hasMoreTurns, !isLoadingMore else { return }
         guard card.link.effectiveAssistant == .claude else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
+        let myCardId = card.id
 
         isLoadingMore = true
         let newCount = turns.count + (preferChatView ? Self.chatPageSize : Self.pageSize)
@@ -1637,12 +1660,14 @@ struct CardDetailView: View {
             let result = try await Task.detached {
                 try await TranscriptReader.readTail(from: path, maxTurns: newCount)
             }.value
+            // Stale-check — see loadHistory().
+            guard card.id == myCardId else { return }
             turns = result.turns
             hasMoreTurns = result.hasMore
         } catch {
             // Silently fail
         }
-        isLoadingMore = false
+        if card.id == myCardId { isLoadingMore = false }
     }
 
     /// Load turns around a specific turn index (for search match navigation).
@@ -1650,6 +1675,7 @@ struct CardDetailView: View {
     private func loadAroundTurn(_ targetIndex: Int) async {
         guard card.link.effectiveAssistant == .claude else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
+        let myCardId = card.id
         isLoadingMore = true
 
         let halfPage = Self.pageSize / 2
@@ -1658,13 +1684,15 @@ struct CardDetailView: View {
 
         do {
             let chunk = try await TranscriptReader.readRange(from: path, turnRange: rangeStart..<rangeEnd)
+            // Stale-check — see loadHistory().
+            guard card.id == myCardId else { return }
             var byIndex: [Int: ConversationTurn] = [:]
             for t in turns { byIndex[t.index] = t }
             for t in chunk { byIndex[t.index] = t }
             turns = byIndex.values.sorted { $0.index < $1.index }
             hasMoreTurns = (turns.first?.index ?? 0) > 0
         } catch { }
-        isLoadingMore = false
+        if card.id == myCardId { isLoadingMore = false }
     }
 
     // MARK: - File watcher
