@@ -752,6 +752,45 @@ struct ReducerTests {
         #expect(state.links["card_main2"] != nil)
     }
 
+    @Test("Reconciled drops stale orphan worktree cards removed after branch refresh")
+    func reconciledDropsStaleOrphansRemovedAfterBranchRefresh() {
+        let worktreePath = "/project/.claude/worktrees/generated-name"
+        let staleOldBranch = Link(
+            id: "card_old_branch",
+            projectPath: "/project",
+            source: .discovered,
+            worktreeLink: WorktreeLink(path: worktreePath, branch: "generated-name")
+        )
+        let staleOtherOldBranch = Link(
+            id: "card_other_old_branch",
+            projectPath: "/project",
+            source: .discovered,
+            worktreeLink: WorktreeLink(path: worktreePath, branch: "fix/old")
+        )
+        let keeper = Link(
+            id: "card_keeper",
+            projectPath: "/project",
+            source: .discovered,
+            worktreeLink: WorktreeLink(path: worktreePath, branch: "feat/current")
+        )
+
+        var state = stateWith([staleOldBranch, staleOtherOldBranch, keeper])
+
+        // CardReconciler refreshed all three links by path to `feat/current`,
+        // then deduped the two stale orphans. The reducer starts from full
+        // state, so it must also drop the now-absent stale orphans.
+        let result = ReconciliationResult(
+            links: [keeper],
+            sessions: [],
+            activityMap: [:],
+            tmuxSessions: []
+        )
+        let _ = Reducer.reduce(state: &state, action: .reconciled(result))
+
+        #expect(state.links.count == 1)
+        #expect(state.links["card_keeper"] != nil)
+    }
+
     // MARK: - Merge Cards
 
     @Test("mergeCards transfers session from source to target")

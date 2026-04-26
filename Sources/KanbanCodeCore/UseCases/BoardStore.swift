@@ -1632,6 +1632,28 @@ public enum Reducer {
                 mergedLinks[link.id] = link
             }
 
+            // Honor reconciler removals for bare orphan worktree cards.
+            //
+            // `mergedLinks` starts from full in-memory state so concurrent edits
+            // survive an async reconcile. That also means cards removed by the
+            // reconciler stay alive unless the reducer explicitly drops them.
+            // When worktree branches are refreshed by path, several stale orphan
+            // worktree cards can collapse to one keeper in `CardReconciler`. If
+            // we keep the removed orphans here, the next reconcile sees them
+            // again, logs the same branch-change/dedup work every few seconds,
+            // and creates avoidable UI hitches.
+            let reconciledIds = Set(result.links.map(\.id))
+            for (id, link) in mergedLinks {
+                guard !reconciledIds.contains(id),
+                      link.sessionLink == nil,
+                      link.source != .manual,
+                      link.name == nil,
+                      link.worktreeLink != nil
+                else { continue }
+                mergedLinks.removeValue(forKey: id)
+                KanbanCodeLog.info("store", "Dropped reconciler-removed orphan \(id.prefix(12))")
+            }
+
             if !preservedIds.isEmpty {
                 KanbanCodeLog.info("store", "Preserved \(preservedIds.count) card(s) modified during reconciliation")
             }
