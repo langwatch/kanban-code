@@ -366,6 +366,21 @@ struct ChannelReducerTests {
         #expect(state.channelLastReadMessageId["general"] == "m1")
     }
 
+    @Test func channelMessagesLoadedEmptyReloadPreservesExistingMessages() {
+        var state = AppState()
+        let p = ChannelParticipant(cardId: "card_A", handle: "alice")
+        let existing = [
+            ChannelMessage(id: "m1", ts: Date(timeIntervalSince1970: 100), from: p, body: "one"),
+            ChannelMessage(id: "m2", ts: Date(timeIntervalSince1970: 200), from: p, body: "two"),
+        ]
+        state.channelMessages["general"] = existing
+
+        let effects = Reducer.reduce(state: &state, action: .channelMessagesLoaded(channelName: "general", messages: []))
+
+        #expect(effects.isEmpty)
+        #expect(state.channelMessages["general"] == existing)
+    }
+
     @Test func draftActionsPersistToState() {
         var state = AppState()
         let effects = Reducer.reduce(state: &state, action: .setChannelDraft(channelName: "general", body: "hey"))

@@ -780,6 +780,10 @@ public enum Reducer {
 
         case .channelMessagesLoaded(let name, let messages):
             let isFirstLoad = state.channelMessages[name] == nil
+            if !isFirstLoad, messages.isEmpty, state.channelMessages[name]?.isEmpty == false {
+                KanbanCodeLog.warn("channels", "Ignoring empty reload for #\(name); preserving existing messages")
+                return []
+            }
             state.channelMessages[name] = messages
             var effects: [Effect] = []
 
@@ -905,6 +909,10 @@ public enum Reducer {
         case .dmMessagesLoaded(let other, let messages):
             let key = Self.dmKey(other)
             let isFirstLoad = state.dmMessages[key] == nil
+            if !isFirstLoad, messages.isEmpty, state.dmMessages[key]?.isEmpty == false {
+                KanbanCodeLog.warn("channels", "Ignoring empty DM reload for @\(other.handle); preserving existing messages")
+                return []
+            }
             state.dmMessages[key] = messages
             var effects: [Effect] = []
 

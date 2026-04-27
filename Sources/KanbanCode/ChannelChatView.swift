@@ -13,12 +13,30 @@ private struct LastMessageHeightKey: PreferenceKey {
     }
 }
 
+struct ChannelPullRequestReference: Identifiable, Equatable {
+    let id: String
+    let number: Int
+    let url: URL?
+    let status: PRStatus?
+    let unresolvedThreads: Int
+    let title: String?
+    let handle: String
+    let cardId: String
+}
+
 // MARK: - Cmd+click URL helpers (shared by channel + DM chats)
 
 /// Regex matching http(s) URLs. Stops at whitespace / common punctuation
 /// closers so trailing `)` or `.` don't get captured as part of the URL.
 private let chatURLRegex: NSRegularExpression? = {
     try? NSRegularExpression(pattern: "https?://[^\\s<>\"'\\])*]*[^\\s<>\"'\\]).,:;!?]")
+}()
+
+private let chatPullRequestRefRegex: NSRegularExpression? = {
+    try? NSRegularExpression(
+        pattern: #"(?<![&/a-zA-Z0-9\[(\]])(?:[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)?#\d+(?![^\[]*\])"#,
+        options: []
+    )
 }()
 
 /// Apply `.link = url` attributes to every URL occurrence in `attr`. Only
@@ -42,6 +60,41 @@ private func applyChatURLLinks(to attr: inout AttributedString, linkColor: Color
     }
 }
 
+private func applyChatPullRequestLinks(
+    to attr: inout AttributedString,
+    urlForNumber: (Int) -> URL?,
+    linkColor: Color = .blue
+) {
+    guard let regex = chatPullRequestRefRegex else { return }
+    let text = String(attr.characters)
+    let nsText = text as NSString
+    let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+    for match in matches {
+        guard let textRange = Range(match.range, in: text) else { continue }
+        let ref = nsText.substring(with: match.range)
+        guard let hashIndex = ref.firstIndex(of: "#"),
+              let number = Int(ref[ref.index(after: hashIndex)...]) else { continue }
+
+        let prefix = String(ref[ref.startIndex..<hashIndex])
+        let url: URL?
+        if prefix.isEmpty {
+            url = urlForNumber(number)
+        } else {
+            url = URL(string: "https://github.com/\(prefix)/pull/\(number)")
+        }
+        guard let url else { continue }
+
+        let startOff = text.distance(from: text.startIndex, to: textRange.lowerBound)
+        let endOff = text.distance(from: text.startIndex, to: textRange.upperBound)
+        let chars = attr.characters
+        let attrStart = chars.index(chars.startIndex, offsetBy: startOff)
+        let attrEnd = chars.index(chars.startIndex, offsetBy: endOff)
+        attr[attrStart..<attrEnd].link = url
+        attr[attrStart..<attrEnd].foregroundColor = linkColor
+        attr[attrStart..<attrEnd].underlineStyle = .single
+    }
+}
+
 /// Render a chat message body with:
 ///   • Markdown — block-level constructs (headings, code fences, tables,
 ///     blockquotes) go through MarkdownUI so they actually render as such;
@@ -55,6 +108,7 @@ private func applyChatURLLinks(to attr: inout AttributedString, linkColor: Color
 private struct ChatMessageBody: View {
     let text: String
     let isCmdHeld: Bool
+    var urlForPullRequestNumber: (Int) -> URL? = { _ in nil }
     @State private var hovered = false
     @State private var expanded = false
 
@@ -110,6 +164,7 @@ private struct ChatMessageBody: View {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )
         var attr = parsed ?? AttributedString(displayText)
+        applyChatPullRequestLinks(to: &attr, urlForNumber: urlForPullRequestNumber)
         if linksActive { applyChatURLLinks(to: &attr) }
         return attr
     }
@@ -213,6 +268,8 @@ struct ChannelChatView: View {
     var onClose: () -> Void = {}
     var onCopyDMCommand: (ChannelMember) -> Void = { _ in }
     var onOpenDM: (ChannelMember) -> Void = { _ in }
+    var onOpenCard: (String) -> Void = { _ in }
+    var onOpenPullRequest: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// Right-click → "Remove @<handle> from #<channel>". Used to evict dead
     /// agents whose tmux session is gone so their slot frees up for a new
     /// link (no more `_2` handles on rejoin).
@@ -224,6 +281,7 @@ struct ChannelChatView: View {
     /// a distinct color + a full-width tinted row background so the user can
     /// spot their own messages at a glance.
     var myHandle: String = ""
+    var pullRequests: [ChannelPullRequestReference] = []
     /// Two-way binding for the draft message. Held by the parent (store) so it
     /// survives drawer switches — avoids losing in-progress typing when the
     /// user jumps to another channel/card and comes back.
@@ -241,19 +299,45 @@ struct ChannelChatView: View {
     @State private var cmdMonitor: Any?
     @State private var lastMessageHeight: CGFloat = 80
     @State private var showingShareDialog: Bool = false
+    @State private var showSearch = false
+    @State private var searchText = ""
+    @State private var activeQuery = ""
+    @State private var searchMatchMessageIds: [String] = []
+    @State private var currentMatchPosition = 0
+    @State private var searchDebounceTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var currentMatchMessageId: String? {
+        guard showSearch, !searchMatchMessageIds.isEmpty,
+              currentMatchPosition < searchMatchMessageIds.count else { return nil }
+        return searchMatchMessageIds[currentMatchPosition]
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            shareBanner
-            if rosterExpanded { rosterRow }
-            Divider()
-            messageList
-            Divider()
-            composer
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                header
+                shareBanner
+                if rosterExpanded { rosterRow }
+                Divider()
+                messageList
+                Divider()
+                composer
+            }
+            if showSearch {
+                channelSearchBar
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            Button("") {
+                showSearch = true
+                isSearchFieldFocused = true
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .hidden()
+        }
         .onAppear {
             cmdMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 let cmd = event.modifierFlags.contains(.command)
@@ -262,6 +346,7 @@ struct ChannelChatView: View {
             }
         }
         .onDisappear {
+            searchDebounceTask?.cancel()
             if let m = cmdMonitor {
                 NSEvent.removeMonitor(m)
                 cmdMonitor = nil
@@ -326,6 +411,9 @@ struct ChannelChatView: View {
             }
             .buttonStyle(.plain)
             .help("Show members")
+            if !pullRequests.isEmpty {
+                prStrip
+            }
             Spacer()
             if shareController != nil {
                 shareButton
@@ -340,6 +428,41 @@ struct ChannelChatView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private var prStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(pullRequests) { ref in
+                    Button {
+                        if let url = ref.url {
+                            onOpenPullRequest(url)
+                        }
+                    } label: {
+                        PRBadge(
+                            status: ref.status,
+                            prNumber: ref.number,
+                            unresolvedThreads: ref.unresolvedThreads
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(ref.url == nil)
+                    .help(prHelp(ref))
+                }
+            }
+        }
+        .frame(maxWidth: 360)
+    }
+
+    private func prHelp(_ ref: ChannelPullRequestReference) -> String {
+        var parts = ["PR #\(ref.number)", "@\(ref.handle)"]
+        if let title = ref.title, !title.isEmpty {
+            parts.append(title)
+        }
+        if ref.url == nil {
+            parts.append("No GitHub URL recorded yet")
+        }
+        return parts.joined(separator: " - ")
     }
 
     /// Header action: start / manage a public share. Label + icon reflects state.
@@ -412,9 +535,19 @@ struct ChannelChatView: View {
                     .foregroundStyle(glyph.color)
                     .help(glyph.label)
             }
-            Text("@\(m.handle)")
-                .font(.app(.caption))
-                .foregroundStyle(online ? Color.primary : .secondary)
+            if let cardId = m.cardId {
+                Button { onOpenCard(cardId) } label: {
+                    Text("@\(m.handle)")
+                        .font(.app(.caption))
+                        .foregroundStyle(online ? Color.primary : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open card details for @\(m.handle)")
+            } else {
+                Text("@\(m.handle)")
+                    .font(.app(.caption))
+                    .foregroundStyle(online ? Color.primary : .secondary)
+            }
             if m.cardId != nil {
                 Button { onOpenDM(m) } label: {
                     Image(systemName: "message")
@@ -460,6 +593,14 @@ struct ChannelChatView: View {
                         ForEach(messages) { m in
                             messageRow(m, mine: isMine(m))
                                 .id(m.id)
+                                .overlay {
+                                    if currentMatchMessageId == m.id {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.accentColor.opacity(0.75), lineWidth: 1.5)
+                                            .padding(.horizontal, 4)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                                 .background {
                                     if m.id == lastId {
                                         GeometryReader { geo in
@@ -499,6 +640,15 @@ struct ChannelChatView: View {
                     } else if new > old {
                         unseenNewCount += (new - old)
                     }
+                    if showSearch, !activeQuery.isEmpty {
+                        runSearch(scrollToMostRecent: false)
+                    }
+                }
+                .onChange(of: currentMatchPosition) {
+                    scrollToCurrentSearchMatch(proxy)
+                }
+                .onChange(of: searchMatchMessageIds) {
+                    scrollToCurrentSearchMatch(proxy)
                 }
                 // `.onAppear` alone doesn't scroll to the real bottom — the
                 // LazyVStack hasn't realized rows yet, so the scrollable height
@@ -539,6 +689,129 @@ struct ChannelChatView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: unseenNewCount)
+        }
+    }
+
+    private var channelSearchBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+
+            TextField("Search channel...", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.app(.callout))
+                .focused($isSearchFieldFocused)
+                .onKeyPress(.escape) { dismissSearch(); return .handled }
+                .onSubmit { navigateSearch(forward: false) }
+                .onChange(of: searchText) { scheduleSearch() }
+
+            if !activeQuery.isEmpty {
+                if searchMatchMessageIds.isEmpty {
+                    Text("0 results")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(searchMatchMessageIds.count - currentMatchPosition)/\(searchMatchMessageIds.count)")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+
+                    Button { navigateSearch(forward: false) } label: {
+                        Image(systemName: "chevron.up").font(.app(.caption2))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+
+                    Button { navigateSearch(forward: true) } label: {
+                        Image(systemName: "chevron.down").font(.app(.caption2))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            Button { dismissSearch() } label: {
+                Image(systemName: "xmark").font(.app(.caption2))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar, in: RoundedRectangle(cornerRadius: 6))
+        .padding(.leading, 16)
+        .padding(.trailing, 52)
+        .padding(.top, 6)
+        .zIndex(1)
+    }
+
+    private func scheduleSearch() {
+        searchDebounceTask?.cancel()
+        if searchText.isEmpty {
+            activeQuery = ""
+            searchMatchMessageIds = []
+            currentMatchPosition = 0
+            return
+        }
+        guard searchText.count >= 2 else { return }
+        searchDebounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            activeQuery = searchText
+            runSearch(scrollToMostRecent: true)
+        }
+    }
+
+    private func runSearch(scrollToMostRecent: Bool) {
+        let query = activeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            searchMatchMessageIds = []
+            currentMatchPosition = 0
+            return
+        }
+
+        let matches = messages.filter { message in
+            messageSearchText(message).localizedCaseInsensitiveContains(query)
+        }.map(\.id)
+
+        searchMatchMessageIds = matches
+        if matches.isEmpty {
+            currentMatchPosition = 0
+        } else if scrollToMostRecent {
+            currentMatchPosition = matches.count - 1
+        } else {
+            currentMatchPosition = min(currentMatchPosition, matches.count - 1)
+        }
+    }
+
+    private func messageSearchText(_ message: ChannelMessage) -> String {
+        "@\(message.from.handle)\n\(message.body)"
+    }
+
+    private func navigateSearch(forward: Bool) {
+        guard !searchMatchMessageIds.isEmpty else { return }
+        if forward {
+            currentMatchPosition = (currentMatchPosition + 1) % searchMatchMessageIds.count
+        } else {
+            currentMatchPosition = (currentMatchPosition - 1 + searchMatchMessageIds.count) % searchMatchMessageIds.count
+        }
+    }
+
+    private func dismissSearch() {
+        searchDebounceTask?.cancel()
+        showSearch = false
+        isSearchFieldFocused = false
+        searchText = ""
+        activeQuery = ""
+        searchMatchMessageIds = []
+        currentMatchPosition = 0
+    }
+
+    private func scrollToCurrentSearchMatch(_ proxy: ScrollViewProxy) {
+        guard let id = currentMatchMessageId else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 
@@ -588,11 +861,29 @@ struct ChannelChatView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if !prefix.isEmpty {
-                    Text(prefix)
-                        .font(.app(.body, weight: .semibold))
-                        .foregroundStyle(handleColor)
+                    if let cardId = m.from.cardId {
+                        Button { onOpenCard(cardId) } label: {
+                            Text(prefix)
+                                .font(.app(.body, weight: .semibold))
+                                .foregroundStyle(handleColor)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open card details for \(prefix)")
+                    } else {
+                        Text(prefix)
+                            .font(.app(.body, weight: .semibold))
+                            .foregroundStyle(handleColor)
+                    }
                 }
-                ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
+                ChatMessageBody(
+                    text: m.body,
+                    isCmdHeld: isCmdHeld,
+                    urlForPullRequestNumber: { urlForPullRequest(number: $0, from: m) }
+                )
+                    .environment(\.openURL, OpenURLAction { url in
+                        onOpenPullRequest(url)
+                        return .handled
+                    })
                     .foregroundStyle(style)
                 Spacer(minLength: 6)
                 Text(shortTime(m.ts))
@@ -608,6 +899,14 @@ struct ChannelChatView: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(mine ? Color.primary.opacity(0.045) : Color.clear)
+    }
+
+    private func urlForPullRequest(number: Int, from message: ChannelMessage) -> URL? {
+        let senderRefs = pullRequests.filter { $0.cardId == message.from.cardId }
+        if let url = senderRefs.first(where: { $0.number == number })?.url {
+            return url
+        }
+        return pullRequests.first(where: { $0.number == number })?.url
     }
 
     private struct ActivityGlyph { let name: String; let color: Color; let label: String }
@@ -686,6 +985,7 @@ struct DMChatView: View {
     let onlineForOther: Bool
     var onSend: (String, [String]) -> Void = { _, _ in }
     var onClose: () -> Void = {}
+    var onOpenCard: (String) -> Void = { _ in }
     /// Local user's handle, used to tint this side's messages. See ChannelChatView.
     var myHandle: String = ""
     @Binding var draft: String
@@ -727,8 +1027,17 @@ struct DMChatView: View {
         HStack(spacing: 8) {
             Image(systemName: "message.fill")
                 .foregroundStyle(.secondary)
-            Text("@\(other.handle)")
-                .font(.app(.title3, weight: .semibold))
+            if let cardId = other.cardId {
+                Button { onOpenCard(cardId) } label: {
+                    Text("@\(other.handle)")
+                        .font(.app(.title3, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .help("Open card details for @\(other.handle)")
+            } else {
+                Text("@\(other.handle)")
+                    .font(.app(.title3, weight: .semibold))
+            }
             Circle().fill(onlineForOther ? Color.green : Color.secondary.opacity(0.35))
                 .frame(width: 7, height: 7)
             Text(onlineForOther ? "online" : "offline")
@@ -765,9 +1074,20 @@ struct DMChatView: View {
                                 && m.from.handle == myHandle
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text("@\(m.from.handle)")
-                                        .font(.app(.body, weight: .semibold))
-                                        .foregroundStyle(mine ? Color.green.opacity(0.9) : Color.blue.opacity(0.85))
+                                    let prefix = "@\(m.from.handle)"
+                                    if let cardId = m.from.cardId {
+                                        Button { onOpenCard(cardId) } label: {
+                                            Text(prefix)
+                                                .font(.app(.body, weight: .semibold))
+                                                .foregroundStyle(mine ? Color.green.opacity(0.9) : Color.blue.opacity(0.85))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Open card details for \(prefix)")
+                                    } else {
+                                        Text(prefix)
+                                            .font(.app(.body, weight: .semibold))
+                                            .foregroundStyle(mine ? Color.green.opacity(0.9) : Color.blue.opacity(0.85))
+                                    }
                                     ChatMessageBody(text: m.body, isCmdHeld: isCmdHeld)
                                     Spacer(minLength: 6)
                                     Text(DateFormatter.hm.string(from: m.ts))

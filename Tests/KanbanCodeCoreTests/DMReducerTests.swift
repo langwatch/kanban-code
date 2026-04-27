@@ -37,6 +37,21 @@ struct DMReducerTests {
         #expect(state.dmMessages[Reducer.dmKey(other)]?.count == 1)
     }
 
+    @Test func dmMessagesLoadedEmptyReloadPreservesExistingMessages() {
+        var state = AppState()
+        let other = ChannelParticipant(cardId: "card_A", handle: "alice")
+        let existing = [
+            ChannelMessage(id: "m1", ts: Date(timeIntervalSince1970: 100), from: other, body: "one"),
+            ChannelMessage(id: "m2", ts: Date(timeIntervalSince1970: 200), from: other, body: "two"),
+        ]
+        state.dmMessages[Reducer.dmKey(other)] = existing
+
+        let effects = Reducer.reduce(state: &state, action: .dmMessagesLoaded(other: other, messages: []))
+
+        #expect(effects.isEmpty)
+        #expect(state.dmMessages[Reducer.dmKey(other)] == existing)
+    }
+
     @Test func sendDirectMessageEmitsDiskEffectWithTmuxSession() {
         var state = AppState()
         state.links["card_A"] = mkLink(id: "card_A", tmuxName: "sess-a")

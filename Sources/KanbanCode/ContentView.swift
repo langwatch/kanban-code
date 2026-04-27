@@ -2472,6 +2472,7 @@ struct ContentView: View {
         let msgs = store.state.channelMessages[channel.name] ?? []
         let onlineMap = channelOnlineByHandle(channel)
         let activityMap = channelActivityByHandle(channel)
+        let pullRequests = channelPullRequestReferences(channel: channel, messages: msgs)
         ChannelChatView(
             channel: channel,
             messages: msgs,
@@ -2489,18 +2490,65 @@ struct ContentView: View {
                 let other = ChannelParticipant(cardId: m.cardId, handle: m.handle)
                 store.dispatch(.selectDM(other: other))
             },
+            onOpenCard: { cardId in
+                openCardFromChat(cardId)
+            },
             onKickMember: { m in
                 let who = ChannelParticipant(cardId: m.cardId, handle: m.handle)
                 store.dispatch(.kickChannelMember(channelName: channel.name, member: who))
             },
             activityByHandle: activityMap,
             myHandle: store.state.humanHandle,
+            pullRequests: pullRequests,
             draft: Binding(
                 get: { store.state.channelDrafts[channel.name] ?? "" },
                 set: { store.dispatch(.setChannelDraft(channelName: channel.name, body: $0)) }
             ),
             shareController: shareController
         )
+    }
+
+    private func channelPullRequestReferences(
+        channel: Channel,
+        messages: [ChannelMessage]
+    ) -> [ChannelPullRequestReference] {
+        var handlesByCardId: [String: String] = [:]
+        for member in channel.members {
+            if let cardId = member.cardId {
+                handlesByCardId[cardId] = member.handle
+            }
+        }
+        for message in messages {
+            if let cardId = message.from.cardId {
+                handlesByCardId[cardId] = message.from.handle
+            }
+        }
+
+        var refs: [ChannelPullRequestReference] = []
+        var seen: Set<String> = []
+        for cardId in handlesByCardId.keys.sorted() {
+            guard let link = store.state.links[cardId] else { continue }
+            let handle = handlesByCardId[cardId] ?? link.name ?? cardId
+            for pr in link.prLinks {
+                let key = pr.url ?? "\(link.projectPath ?? "")#\(pr.number)"
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                refs.append(ChannelPullRequestReference(
+                    id: key,
+                    number: pr.number,
+                    url: pr.url.flatMap(URL.init(string:)),
+                    status: pr.status,
+                    unresolvedThreads: pr.unresolvedThreads ?? 0,
+                    title: pr.title,
+                    handle: handle,
+                    cardId: cardId
+                ))
+            }
+        }
+        return refs.sorted {
+            if $0.number != $1.number { return $0.number < $1.number }
+            return $0.handle < $1.handle
+        }
     }
 
     private func channelActivityByHandle(_ ch: Channel) -> [String: ActivityState] {
@@ -2532,12 +2580,23 @@ struct ContentView: View {
                 store.dispatch(.sendDirectMessage(to: other, body: body, imagePaths: imagePaths))
             },
             onClose: { store.dispatch(.selectDM(other: nil)) },
+            onOpenCard: { cardId in
+                openCardFromChat(cardId)
+            },
             myHandle: store.state.humanHandle,
             draft: Binding(
                 get: { store.state.dmDrafts[key] ?? "" },
                 set: { store.dispatch(.setDMDraft(other: other, body: $0)) }
             )
         )
+    }
+
+    private func openCardFromChat(_ cardId: String) {
+        guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
+        switchToProjectIfNeeded(for: card)
+        store.dispatch(.selectChannel(name: nil))
+        store.dispatch(.selectDM(other: nil))
+        store.dispatch(.selectCard(cardId: cardId))
     }
 
     private func channelOnlineByHandle(_ ch: Channel) -> [String: Bool] {

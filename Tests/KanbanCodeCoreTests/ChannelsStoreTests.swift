@@ -58,6 +58,23 @@ struct ChannelsStoreTests {
         #expect(msgs[0].type == .message)
     }
 
+    @Test func loadMessagesWithLimitReturnsTail() async throws {
+        let base = tmpBase()
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let store = ChannelsStore(baseDir: base)
+        _ = try await store.createChannel(name: "general", by: ChannelParticipant(cardId: nil, handle: "user"))
+        for idx in 0..<5 {
+            _ = try await store.send(
+                channel: "general",
+                from: ChannelParticipant(cardId: nil, handle: "user"),
+                body: "message \(idx)"
+            )
+        }
+
+        let msgs = await store.loadMessages(channel: "general", limit: 2)
+        #expect(msgs.map(\.body) == ["message 3", "message 4"])
+    }
+
     @Test func jsonlOnDiskInteroperatesWithCLIFormat() async throws {
         // Write a file using the same format the TS CLI writes, then read it
         // back through the Swift store and verify we parse it correctly.

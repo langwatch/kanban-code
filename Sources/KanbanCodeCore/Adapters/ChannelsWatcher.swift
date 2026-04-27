@@ -41,19 +41,19 @@ public final class ChannelsWatcher: @unchecked Sendable {
 
     public func stop() {
         lock.lock(); defer { lock.unlock() }
+        // DispatchSource cancel handlers own fd cleanup. Closing here as well
+        // risks double-close if the kernel reuses the descriptor number.
         channelsFileSource?.cancel()
         channelsFileSource = nil
-        if channelsFileFd >= 0 { close(channelsFileFd); channelsFileFd = -1 }
+        channelsFileFd = -1
         for (_, src) in perChannelSources { src.cancel() }
-        for (_, fd) in perChannelFds { close(fd) }
         perChannelSources.removeAll()
         perChannelFds.removeAll()
         readStateSource?.cancel(); readStateSource = nil
-        if readStateFd >= 0 { close(readStateFd); readStateFd = -1 }
+        readStateFd = -1
         dmDirSource?.cancel(); dmDirSource = nil
-        if dmDirFd >= 0 { close(dmDirFd); dmDirFd = -1 }
+        dmDirFd = -1
         for (_, src) in perDMSources { src.cancel() }
-        for (_, fd) in perDMFds { close(fd) }
         perDMSources.removeAll()
         perDMFds.removeAll()
     }
@@ -163,10 +163,9 @@ public final class ChannelsWatcher: @unchecked Sendable {
     private func unwatchChannelLog(name: String) {
         lock.lock()
         let src = perChannelSources.removeValue(forKey: name)
-        let fd = perChannelFds.removeValue(forKey: name)
+        perChannelFds.removeValue(forKey: name)
         lock.unlock()
         src?.cancel()
-        if let fd = fd, fd >= 0 { close(fd) }
     }
 
     // MARK: - Read state
@@ -271,10 +270,9 @@ public final class ChannelsWatcher: @unchecked Sendable {
     private func unwatchDMLog(key: String) {
         lock.lock()
         let src = perDMSources.removeValue(forKey: key)
-        let fd = perDMFds.removeValue(forKey: key)
+        perDMFds.removeValue(forKey: key)
         lock.unlock()
         src?.cancel()
-        if let fd = fd, fd >= 0 { close(fd) }
     }
 
     // MARK: - Nonisolated factory (critical: keeps event handler out of @MainActor)

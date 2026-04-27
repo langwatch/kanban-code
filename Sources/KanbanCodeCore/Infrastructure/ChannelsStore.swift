@@ -44,20 +44,13 @@ public actor ChannelsStore {
         }
     }
 
-    public func loadMessages(channel: String) -> [ChannelMessage] {
+    public func loadMessages(channel: String, limit: Int? = nil) -> [ChannelMessage] {
         let logPath = logPath(for: channel)
-        guard FileManager.default.fileExists(atPath: logPath),
-              let text = try? String(contentsOfFile: logPath, encoding: .utf8)
-        else { return [] }
-        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line -> ChannelMessage? in
-            guard let data = line.data(using: .utf8) else { return nil }
-            return try? decoder.decode(ChannelMessage.self, from: data)
-        }
+        return loadMessages(at: logPath, limit: limit)
     }
 
     public func tailMessages(channel: String, count: Int) -> [ChannelMessage] {
-        let all = loadMessages(channel: channel)
-        return Array(all.suffix(count))
+        loadMessages(channel: channel, limit: count)
     }
 
     public func logPath(for channel: String) -> String {
@@ -65,6 +58,52 @@ public actor ChannelsStore {
     }
 
     public func channelsFilePath() -> String { channelsPath }
+
+    private func loadMessages(at path: String, limit: Int?) -> [ChannelMessage] {
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+        let lines: [Substring]
+        if let limit, limit > 0 {
+            lines = tailLines(at: path, maxLines: limit)
+        } else {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+            lines = Array(text.split(separator: "\n", omittingEmptySubsequences: true))
+        }
+
+        return lines.compactMap { line -> ChannelMessage? in
+            guard let data = line.data(using: .utf8) else { return nil }
+            return try? decoder.decode(ChannelMessage.self, from: data)
+        }
+    }
+
+    private func tailLines(at path: String, maxLines: Int) -> [Substring] {
+        guard maxLines > 0,
+              let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        else { return [] }
+        defer { try? handle.close() }
+
+        let chunkSize: UInt64 = 64 * 1024
+        guard let fileSize = try? handle.seekToEnd() else { return [] }
+        var offset = fileSize
+        var data = Data()
+        var newlineCount = 0
+
+        while offset > 0, newlineCount <= maxLines {
+            let readSize = min(chunkSize, offset)
+            offset -= readSize
+            do {
+                try handle.seek(toOffset: offset)
+                guard let chunk = try handle.read(upToCount: Int(readSize)) else { break }
+                data.insert(contentsOf: chunk, at: 0)
+                newlineCount = data.reduce(0) { $0 + ($1 == UInt8(ascii: "\n") ? 1 : 0) }
+            } catch {
+                return []
+            }
+        }
+
+        let text = String(decoding: data, as: UTF8.self)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        return Array(lines.suffix(maxLines))
+    }
 
     // MARK: - Writes
 
@@ -266,15 +305,9 @@ public actor ChannelsStore {
         return ((baseDir as NSString).appendingPathComponent("dm") as NSString).appendingPathComponent(file)
     }
 
-    public func loadDMMessages(between a: ChannelParticipant, and b: ChannelParticipant) -> [ChannelMessage] {
+    public func loadDMMessages(between a: ChannelParticipant, and b: ChannelParticipant, limit: Int? = nil) -> [ChannelMessage] {
         let path = dmLogPath(partyA: a, partyB: b)
-        guard FileManager.default.fileExists(atPath: path),
-              let text = try? String(contentsOfFile: path, encoding: .utf8)
-        else { return [] }
-        return text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
-            guard let data = line.data(using: .utf8) else { return nil }
-            return try? decoder.decode(ChannelMessage.self, from: data)
-        }
+        return loadMessages(at: path, limit: limit)
     }
 
     public func sendDirectMessage(
@@ -389,9 +422,8 @@ public actor ChannelsStore {
         body: String,
         imagePaths: [String] = []
     ) throws -> ChannelMessage {
-        var all = loadChannels()
+        let all = loadChannels()
         guard all.contains(where: { $0.name == name }) else { throw StoreError.channelMissing }
-        _ = all // reserved for future metadata bumps
         let id = "msg_\(UUID().uuidString.prefix(12))"
         let persistedImages = try persistImages(messageId: id, sourcePaths: imagePaths)
         let msg = ChannelMessage(

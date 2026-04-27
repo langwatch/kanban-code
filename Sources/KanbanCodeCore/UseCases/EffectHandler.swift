@@ -4,6 +4,8 @@ import UserNotifications
 /// Executes side effects produced by the Reducer.
 /// All async operations (disk, network, tmux) go through here.
 public actor EffectHandler {
+    private static let channelMessageTailLimit = 500
+
     private let coordinationStore: CoordinationStore
     private let tmuxAdapter: TmuxManagerPort?
     private let setClipboardImage: (@Sendable (Data) -> Void)?
@@ -171,7 +173,7 @@ public actor EffectHandler {
             await dispatch(.channelsLoaded(channels: channels))
 
         case .loadChannelMessages(let name):
-            let msgs = await channelsStore.loadMessages(channel: name)
+            let msgs = await channelsStore.loadMessages(channel: name, limit: Self.channelMessageTailLimit)
             await dispatch(.channelMessagesLoaded(channelName: name, messages: msgs))
 
         case .createChannelOnDisk(let name, let by):
@@ -251,7 +253,7 @@ public actor EffectHandler {
             }
 
         case .loadDMMessages(let self_, let other):
-            let msgs = await channelsStore.loadDMMessages(between: self_, and: other)
+            let msgs = await channelsStore.loadDMMessages(between: self_, and: other, limit: Self.channelMessageTailLimit)
             await dispatch(.dmMessagesLoaded(other: other, messages: msgs))
 
         case .notifyDMReceived(let fromHandle, let body):
