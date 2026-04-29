@@ -137,6 +137,44 @@ struct ChannelUITests {
     }
 
     @MainActor
+    @Test func mentionFilteringMatchesHandleSegments() {
+        let candidates = ["langwatch_nlp_go_sarah", "langwatch-nlp-go-bob", "alice"]
+        #expect(ChatInputBar.filteredMentionMatches(query: "sarah", candidates: candidates) == ["langwatch_nlp_go_sarah"])
+        #expect(ChatInputBar.filteredMentionMatches(query: "bob", candidates: candidates) == ["langwatch-nlp-go-bob"])
+        #expect(ChatInputBar.filteredMentionMatches(query: "lngs", candidates: candidates) == ["langwatch_nlp_go_sarah"])
+    }
+
+    @MainActor
+    @Test func channelSearchParsesFromFilter() {
+        let parsed = ChannelSearchQuery.parse("from:@me deploy notes")
+        #expect(parsed.fromQuery == "me")
+        #expect(parsed.bodyQuery == "deploy notes")
+
+        let parsedBare = ChannelSearchQuery.parse("from:langwatch_nlp_go_sarah")
+        #expect(parsedBare.fromQuery == "langwatch_nlp_go_sarah")
+        #expect(parsedBare.bodyQuery.isEmpty)
+    }
+
+    @MainActor
+    @Test func channelSearchFromFilterMatchesMeAndSegments() {
+        #expect(ChannelChatView.handleMatchesFromQuery(
+            handle: "rchaves",
+            query: "me",
+            myHandle: "rchaves"
+        ))
+        #expect(!ChannelChatView.handleMatchesFromQuery(
+            handle: "langwatch_nlp_go_sarah",
+            query: "me",
+            myHandle: "rchaves"
+        ))
+        #expect(ChannelChatView.handleMatchesFromQuery(
+            handle: "langwatch_nlp_go_sarah",
+            query: "sarah",
+            myHandle: "rchaves"
+        ))
+    }
+
+    @MainActor
     @Test func createChannelDialogRendersAndValidates() {
         var isPresented = true
         let binding = Binding(get: { isPresented }, set: { isPresented = $0 })

@@ -683,6 +683,7 @@ struct ChatInputBar: View {
                     onArrowUp: { moveMentionSelection(by: -1) },
                     onArrowDown: { moveMentionSelection(by: 1) },
                     onEnterIntercept: { computeMentionReplacement() },
+                    onTabIntercept: { computeMentionReplacement() },
                     onImagePaste: { data in pastedImages.append(data) },
                     onEscape: { handleEscape() }
                 )
@@ -876,7 +877,31 @@ struct ChatInputBar: View {
     static func filteredMentionMatches(query: String, candidates: [String]) -> [String] {
         let q = query.lowercased()
         if q.isEmpty { return candidates }
-        return candidates.filter { $0.lowercased().hasPrefix(q) }
+        return candidates.filter { handleMatches(query: q, candidate: $0) }
+    }
+
+    static func handleMatches(query: String, candidate: String) -> Bool {
+        let q = query.lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@").union(.whitespacesAndNewlines))
+        guard !q.isEmpty else { return true }
+
+        let c = candidate.lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@").union(.whitespacesAndNewlines))
+        if c.hasPrefix(q) { return true }
+
+        let parts = c.split { $0 == "_" || $0 == "-" }.map(String.init)
+        if parts.contains(where: { $0.hasPrefix(q) }) { return true }
+
+        // Initials across underscore/dash-separated handles:
+        // `lngs` can match `langwatch_nlp_go_sarah`.
+        var idx = q.startIndex
+        for part in parts {
+            guard idx < q.endIndex else { break }
+            if part.first == q[idx] {
+                idx = q.index(after: idx)
+            }
+        }
+        return idx == q.endIndex
     }
 
     /// Replace the trailing `@<partial>` with `@<handle> ` and dismiss the picker.

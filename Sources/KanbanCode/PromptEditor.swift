@@ -25,6 +25,9 @@ struct PromptEditor: NSViewRepresentable {
     /// `onSubmit` is NOT called. Used for @-mention autocomplete — typing
     /// `@ali<Enter>` must visibly expand to `@alice ` in the editor.
     var onEnterIntercept: (() -> String?)?
+    /// Tab-key intercept. Used by @-mention autocomplete so Tab accepts the
+    /// selected suggestion instead of moving focus away from the composer.
+    var onTabIntercept: (() -> String?)?
     var onImagePaste: ((Data) -> Void)?
     var onEscape: (() -> Void)?
 
@@ -62,6 +65,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onArrowUp = onArrowUp
         textView.onArrowDown = onArrowDown
         textView.onEnterIntercept = onEnterIntercept
+        textView.onTabIntercept = onTabIntercept
         textView.onImagePaste = onImagePaste
         textView.onEscape = onEscape
         textView.placeholderString = placeholder
@@ -103,6 +107,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onArrowUp = onArrowUp
         textView.onArrowDown = onArrowDown
         textView.onEnterIntercept = onEnterIntercept
+        textView.onTabIntercept = onTabIntercept
         textView.onImagePaste = onImagePaste
         textView.onEscape = onEscape
         textView.font = font
@@ -191,6 +196,7 @@ final class SubmitTextView: NSTextView {
     var onArrowUp: (() -> Bool)?
     var onArrowDown: (() -> Bool)?
     var onEnterIntercept: (() -> String?)?
+    var onTabIntercept: (() -> String?)?
     var onImagePaste: ((Data) -> Void)?
     var onEscape: (() -> Void)?
     var placeholderString: String = ""
@@ -226,6 +232,7 @@ final class SubmitTextView: NSTextView {
         }
 
         let isReturn = event.keyCode == 36 // Return key
+        let isTab = event.keyCode == 48
         let hasShift = event.modifierFlags.contains(.shift)
         let hasCmd = event.modifierFlags.contains(.command)
 
@@ -265,6 +272,15 @@ final class SubmitTextView: NSTextView {
         if isReturn && hasShift {
             // Shift+Enter → insert newline
             insertNewline(nil)
+            return
+        }
+
+        if isTab {
+            if let handler = onTabIntercept, let replacement = handler() {
+                replaceTextAndCursorToEnd(replacement)
+                return
+            }
+            super.keyDown(with: event)
             return
         }
 
@@ -318,6 +334,16 @@ final class SubmitTextView: NSTextView {
     private func replaceTextAndCursorToStart(_ newText: String) {
         string = newText
         setSelectedRange(NSRange(location: 0, length: 0))
+        if let delegate = self.delegate as? PromptEditor.Coordinator {
+            delegate.parent.text = newText
+        }
+        (enclosingScrollView as? PromptEditorScrollView)?.recalcIntrinsicHeight()
+        needsDisplay = true
+    }
+
+    private func replaceTextAndCursorToEnd(_ newText: String) {
+        string = newText
+        setSelectedRange(NSRange(location: (newText as NSString).length, length: 0))
         if let delegate = self.delegate as? PromptEditor.Coordinator {
             delegate.parent.text = newText
         }

@@ -24,6 +24,38 @@ struct ChannelPullRequestReference: Identifiable, Equatable {
     let cardId: String
 }
 
+struct ChannelSearchQuery: Equatable {
+    var bodyQuery: String
+    var fromQuery: String?
+
+    var isEmpty: Bool {
+        bodyQuery.isEmpty && (fromQuery?.isEmpty ?? true)
+    }
+
+    static func parse(_ raw: String) -> ChannelSearchQuery {
+        let tokens = raw.split(whereSeparator: \.isWhitespace).map(String.init)
+        var bodyTokens: [String] = []
+        var fromQuery: String?
+
+        for token in tokens {
+            let lower = token.lowercased()
+            if lower.hasPrefix("from:@") {
+                fromQuery = String(token.dropFirst("from:@".count))
+            } else if lower.hasPrefix("from:") {
+                fromQuery = String(token.dropFirst("from:".count))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            } else {
+                bodyTokens.append(token)
+            }
+        }
+
+        return ChannelSearchQuery(
+            bodyQuery: bodyTokens.joined(separator: " "),
+            fromQuery: fromQuery
+        )
+    }
+}
+
 // MARK: - Cmd+click URL helpers (shared by channel + DM chats)
 
 /// Regex matching http(s) URLs. Stops at whitespace / common punctuation
@@ -305,6 +337,7 @@ struct ChannelChatView: View {
     @State private var activeQuery = ""
     @State private var searchMatchMessageIds: [String] = []
     @State private var currentMatchPosition = 0
+    @State private var searchFromSelectedIndex = 0
     @State private var searchDebounceTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
     @FocusState private var isSearchFieldFocused: Bool
@@ -313,6 +346,36 @@ struct ChannelChatView: View {
         guard showSearch, !searchMatchMessageIds.isEmpty,
               currentMatchPosition < searchMatchMessageIds.count else { return nil }
         return searchMatchMessageIds[currentMatchPosition]
+    }
+
+    private var activeSearchFromQuery: String? {
+        Self.activeFromQuery(in: searchText)
+    }
+
+    private var searchFromMatches: [String] {
+        guard let query = activeSearchFromQuery else { return [] }
+        return Self.filteredFromHandles(
+            query: query,
+            candidates: searchHandleCandidates,
+            myHandle: myHandle
+        )
+    }
+
+    private var searchHandleCandidates: [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        func append(_ handle: String) {
+            let trimmed = handle.trimmingCharacters(in: CharacterSet(charactersIn: "@").union(.whitespacesAndNewlines))
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return }
+            out.append(trimmed)
+        }
+        append("me")
+        append(myHandle)
+        for member in channel.members { append(member.handle) }
+        for message in messages { append(message.from.handle) }
+        return out
     }
 
     var body: some View {
@@ -694,53 +757,78 @@ struct ChannelChatView: View {
     }
 
     private var channelSearchBar: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.app(.caption))
-                .foregroundStyle(.secondary)
-
-            TextField("Search channel...", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.app(.callout))
-                .focused($isSearchFieldFocused)
-                .onKeyPress(.escape) { dismissSearch(); return .handled }
-                .onSubmit { navigateSearch(forward: false) }
-                .onChange(of: searchText) { scheduleSearch() }
-
-            if !activeQuery.isEmpty {
-                if searchMatchMessageIds.isEmpty {
-                    Text("0 results")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("\(searchMatchMessageIds.count - currentMatchPosition)/\(searchMatchMessageIds.count)")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-
-                    Button { navigateSearch(forward: false) } label: {
-                        Image(systemName: "chevron.up").font(.app(.caption2))
-                    }
-                    .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.app(.caption))
                     .foregroundStyle(.secondary)
 
-                    Button { navigateSearch(forward: true) } label: {
-                        Image(systemName: "chevron.down").font(.app(.caption2))
+                TextField("Search channel...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.app(.callout))
+                    .focused($isSearchFieldFocused)
+                    .onKeyPress(.escape) { dismissSearch(); return .handled }
+                    .onKeyPress(.downArrow) { moveSearchFromSelection(by: 1) ? .handled : .ignored }
+                    .onKeyPress(.upArrow) { moveSearchFromSelection(by: -1) ? .handled : .ignored }
+                    .onKeyPress(.tab) { acceptSearchFromSuggestion() ? .handled : .ignored }
+                    .onSubmit {
+                        if !acceptSearchFromSuggestion() {
+                            navigateSearch(forward: false)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .onChange(of: searchText) {
+                        searchFromSelectedIndex = 0
+                        scheduleSearch()
+                    }
+
+                if !activeQuery.isEmpty {
+                    if searchMatchMessageIds.isEmpty {
+                        Text("0 results")
+                            .font(.app(.caption2))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("\(searchMatchMessageIds.count - currentMatchPosition)/\(searchMatchMessageIds.count)")
+                            .font(.app(.caption2))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+
+                        Button { navigateSearch(forward: false) } label: {
+                            Image(systemName: "chevron.up").font(.app(.caption2))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+
+                        Button { navigateSearch(forward: true) } label: {
+                            Image(systemName: "chevron.down").font(.app(.caption2))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
                 }
-            }
 
-            Button { dismissSearch() } label: {
-                Image(systemName: "xmark").font(.app(.caption2))
+                Button { dismissSearch() } label: {
+                    Image(systemName: "xmark").font(.app(.caption2))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.bar, in: RoundedRectangle(cornerRadius: 6))
+
+            if activeSearchFromQuery != nil, !searchFromMatches.isEmpty {
+                MentionSuggestionList(
+                    matches: searchFromMatches,
+                    selectedIndex: searchFromSelectedIndex,
+                    onHover: { idx in searchFromSelectedIndex = idx }
+                ) { handle in
+                    replaceActiveFromQuery(with: handle)
+                }
+                .fixedSize()
+                .padding(.leading, 24)
+                .transition(.opacity)
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.bar, in: RoundedRectangle(cornerRadius: 6))
         .padding(.leading, 16)
         .padding(.trailing, 52)
         .padding(.top, 6)
@@ -749,31 +837,33 @@ struct ChannelChatView: View {
 
     private func scheduleSearch() {
         searchDebounceTask?.cancel()
-        if searchText.isEmpty {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
             activeQuery = ""
             searchMatchMessageIds = []
             currentMatchPosition = 0
             return
         }
-        guard searchText.count >= 2 else { return }
+        guard trimmed.count >= 2 else { return }
         searchDebounceTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            activeQuery = searchText
+            activeQuery = trimmed
             runSearch(scrollToMostRecent: true)
         }
     }
 
     private func runSearch(scrollToMostRecent: Bool) {
         let query = activeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
+        let parsed = ChannelSearchQuery.parse(query)
+        guard !parsed.isEmpty else {
             searchMatchMessageIds = []
             currentMatchPosition = 0
             return
         }
 
         let matches = messages.filter { message in
-            messageSearchText(message).localizedCaseInsensitiveContains(query)
+            messageMatchesSearch(message, parsed: parsed)
         }.map(\.id)
 
         searchMatchMessageIds = matches
@@ -788,6 +878,92 @@ struct ChannelChatView: View {
 
     private func messageSearchText(_ message: ChannelMessage) -> String {
         "@\(message.from.handle)\n\(message.body)"
+    }
+
+    private func messageMatchesSearch(_ message: ChannelMessage, parsed: ChannelSearchQuery) -> Bool {
+        if let fromQuery = parsed.fromQuery,
+           !Self.handleMatchesFromQuery(handle: message.from.handle, query: fromQuery, myHandle: myHandle) {
+            return false
+        }
+
+        guard !parsed.bodyQuery.isEmpty else { return true }
+        if parsed.fromQuery != nil {
+            return message.body.localizedCaseInsensitiveContains(parsed.bodyQuery)
+        }
+        return messageSearchText(message).localizedCaseInsensitiveContains(parsed.bodyQuery)
+    }
+
+    static func handleMatchesFromQuery(handle: String, query: String, myHandle: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: CharacterSet(charactersIn: "@").union(.whitespacesAndNewlines))
+        guard !trimmed.isEmpty else { return true }
+        if trimmed.caseInsensitiveCompare("me") == .orderedSame {
+            return !myHandle.isEmpty && handle.caseInsensitiveCompare(myHandle) == .orderedSame
+        }
+        return ChatInputBar.handleMatches(query: trimmed, candidate: handle)
+    }
+
+    static func activeFromQuery(in text: String) -> String? {
+        guard let range = activeFromTokenRange(in: text) else { return nil }
+        let token = String(text[range])
+        let lower = token.lowercased()
+        guard lower.hasPrefix("from:@") else { return nil }
+        let queryStart = token.index(token.startIndex, offsetBy: "from:@".count)
+        let query = token[queryStart...]
+        for c in query where !(c.isLetter || c.isNumber || c == "_" || c == "-") {
+            return nil
+        }
+        return String(query)
+    }
+
+    static func filteredFromHandles(query: String, candidates: [String], myHandle: String) -> [String] {
+        let unique = candidates.reduce(into: [String]()) { acc, handle in
+            let key = handle.lowercased()
+            if !acc.contains(where: { $0.lowercased() == key }) {
+                acc.append(handle)
+            }
+        }
+        let matches = ChatInputBar.filteredMentionMatches(query: query, candidates: unique)
+        if query.isEmpty || ChatInputBar.handleMatches(query: query, candidate: "me") {
+            return matches
+        }
+        return matches.filter { handle in
+            if handle.caseInsensitiveCompare("me") == .orderedSame {
+                return !myHandle.isEmpty
+            }
+            return true
+        }
+    }
+
+    private func moveSearchFromSelection(by delta: Int) -> Bool {
+        guard activeSearchFromQuery != nil, !searchFromMatches.isEmpty else { return false }
+        let capped = min(searchFromMatches.count, 6)
+        searchFromSelectedIndex = (searchFromSelectedIndex + delta + capped) % capped
+        return true
+    }
+
+    private func acceptSearchFromSuggestion() -> Bool {
+        guard activeSearchFromQuery != nil, !searchFromMatches.isEmpty else { return false }
+        let visible = Array(searchFromMatches.prefix(6))
+        let idx = max(0, min(searchFromSelectedIndex, visible.count - 1))
+        replaceActiveFromQuery(with: visible[idx])
+        return true
+    }
+
+    private func replaceActiveFromQuery(with handle: String) {
+        guard let range = Self.activeFromTokenRange(in: searchText) else { return }
+        searchText.replaceSubrange(range, with: "from:@\(handle) ")
+        searchFromSelectedIndex = 0
+        activeQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        runSearch(scrollToMostRecent: true)
+    }
+
+    private static func activeFromTokenRange(in text: String) -> Range<String.Index>? {
+        guard let lastWhitespace = text.lastIndex(where: \.isWhitespace) else {
+            return text.lowercased().hasPrefix("from:@") ? text.startIndex..<text.endIndex : nil
+        }
+        let tokenStart = text.index(after: lastWhitespace)
+        let token = text[tokenStart...]
+        return token.lowercased().hasPrefix("from:@") ? tokenStart..<text.endIndex : nil
     }
 
     private func navigateSearch(forward: Bool) {
@@ -807,6 +983,7 @@ struct ChannelChatView: View {
         activeQuery = ""
         searchMatchMessageIds = []
         currentMatchPosition = 0
+        searchFromSelectedIndex = 0
     }
 
     private func scrollToCurrentSearchMatch(_ proxy: ScrollViewProxy) {
