@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.27](https://github.com/langwatch/kanban-code/compare/v0.1.26...v0.1.27) (2026-04-29)
+
+
+### Features
+
+* **channels:** improve navigation search and memory use ([40007df](https://github.com/langwatch/kanban-code/commit/40007df07208cbe8a258886c5ac4ecc0027156a0))
+
+
+### Bug Fixes
+
+* **reconciler:** drop stale orphan worktrees ([6ad2572](https://github.com/langwatch/kanban-code/commit/6ad25727579f0dcc611aa15e6661085fc2b47986))
+* **search:** stabilize quick palette selection ([3e83afb](https://github.com/langwatch/kanban-code/commit/3e83afb1bd110edca49f48191323e8e384e45623))
+
 ## [0.1.26](https://github.com/langwatch/kanban-code/compare/v0.1.25...v0.1.26) (2026-04-25)
 
 
