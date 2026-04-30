@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.28](https://github.com/langwatch/kanban-code/compare/v0.1.27...v0.1.28) (2026-04-30)
+
+
+### Features
+
+* **channels:** add from filters to search ([7c8a4d1](https://github.com/langwatch/kanban-code/commit/7c8a4d1c1f8b7305315fdf6649aa199ccbb2bfe3))
+* **ui:** add channel activity and navigation cues ([bd9ab1e](https://github.com/langwatch/kanban-code/commit/bd9ab1eb8e676c3a4733d84e08a51cc7d37c0930))
+
+
+### Bug Fixes
+
+* **launch:** keep prompt text with image attachments ([36d305a](https://github.com/langwatch/kanban-code/commit/36d305ad8d00dee8c24e902c0b4ecdb34c18647a))
+
 ## [0.1.27](https://github.com/langwatch/kanban-code/compare/v0.1.26...v0.1.27) (2026-04-29)
 
 
