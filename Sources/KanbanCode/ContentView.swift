@@ -58,6 +58,25 @@ private struct RenameTarget: Identifiable, Equatable {
     var id: String { name }
 }
 
+private enum DrawerNavigationTarget: Equatable {
+    case card(String)
+    case channel(String)
+    case dm(ChannelParticipant)
+
+    init?(_ drawer: Drawer) {
+        switch drawer {
+        case .none:
+            return nil
+        case .card(let id):
+            self = .card(id)
+        case .channel(let name):
+            self = .channel(name)
+        case .dm(let participant):
+            self = .dm(participant)
+        }
+    }
+}
+
 struct ContentView: View {
     // Properties are internal (not private) to allow extensions in separate files
     @State var store: BoardStore
@@ -98,6 +117,9 @@ struct ContentView: View {
     @State var channelGithubBaseURLByCardId: [String: String] = [:]
     @State var isToolbarMerging = false
     @State var toolbarMergeError: String?
+    @State private var navigationBackStack: [DrawerNavigationTarget] = []
+    @State private var navigationForwardStack: [DrawerNavigationTarget] = []
+    @State private var suppressNextNavigationRecord = false
     // showSearch and isExpandedDetail live in AppState (store.state.paletteOpen / detailExpanded)
     var showSearch: Bool {
         get { store.state.paletteOpen }
@@ -682,6 +704,9 @@ struct ContentView: View {
                     }
                 }
                 selectedCardIdPersisted = store.state.selectedCardId ?? ""
+            }
+            .onChange(of: store.state.openDrawer) { oldValue, newValue in
+                recordNavigationChange(from: oldValue, to: newValue)
             }
             .onChange(of: store.state.detailExpanded) {
                 if !store.state.detailExpanded {
@@ -1285,6 +1310,12 @@ struct ContentView: View {
                 }
 
                 ToolbarItem(placement: .navigation) {
+                    if isExpandedDetail {
+                        navigationHistoryControls
+                    }
+                }
+
+                ToolbarItem(placement: .navigation) {
                     projectSelectorMenu
                 }
 
@@ -1550,6 +1581,105 @@ struct ContentView: View {
         close(fd)
     }
 
+    // MARK: - Navigation History
+
+    private var canNavigateBack: Bool {
+        navigationBackStack.contains(where: isNavigationTargetAvailable)
+    }
+
+    private var canNavigateForward: Bool {
+        navigationForwardStack.contains(where: isNavigationTargetAvailable)
+    }
+
+    private var navigationHistoryControls: some View {
+        HStack(spacing: 2) {
+            Button {
+                navigateBack()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(!canNavigateBack)
+            .help("Back")
+
+            Button {
+                navigateForward()
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .disabled(!canNavigateForward)
+            .help("Forward")
+        }
+    }
+
+    private func recordNavigationChange(from oldDrawer: Drawer, to newDrawer: Drawer) {
+        if suppressNextNavigationRecord {
+            suppressNextNavigationRecord = false
+            return
+        }
+
+        let oldTarget = DrawerNavigationTarget(oldDrawer)
+        let newTarget = DrawerNavigationTarget(newDrawer)
+        guard oldTarget != newTarget else { return }
+
+        if let oldTarget {
+            navigationBackStack.append(oldTarget)
+            if navigationBackStack.count > 100 {
+                navigationBackStack.removeFirst(navigationBackStack.count - 100)
+            }
+        }
+        navigationForwardStack.removeAll()
+    }
+
+    private func navigateBack() {
+        while let target = navigationBackStack.popLast() {
+            guard isNavigationTargetAvailable(target) else { continue }
+            if let current = DrawerNavigationTarget(store.state.openDrawer) {
+                navigationForwardStack.append(current)
+            }
+            applyNavigationTarget(target)
+            return
+        }
+    }
+
+    private func navigateForward() {
+        while let target = navigationForwardStack.popLast() {
+            guard isNavigationTargetAvailable(target) else { continue }
+            if let current = DrawerNavigationTarget(store.state.openDrawer) {
+                navigationBackStack.append(current)
+            }
+            applyNavigationTarget(target)
+            return
+        }
+    }
+
+    private func applyNavigationTarget(_ target: DrawerNavigationTarget) {
+        guard DrawerNavigationTarget(store.state.openDrawer) != target else { return }
+        suppressNextNavigationRecord = true
+
+        switch target {
+        case .card(let id):
+            if let card = store.state.cards.first(where: { $0.id == id }) {
+                switchToProjectIfNeeded(for: card)
+            }
+            store.dispatch(.selectCard(cardId: id))
+        case .channel(let name):
+            store.dispatch(.selectChannel(name: name))
+        case .dm(let participant):
+            store.dispatch(.selectDM(other: participant))
+        }
+    }
+
+    private func isNavigationTargetAvailable(_ target: DrawerNavigationTarget) -> Bool {
+        switch target {
+        case .card(let id):
+            return store.state.links[id] != nil
+        case .channel(let name):
+            return store.state.channels.contains { $0.name == name }
+        case .dm:
+            return true
+        }
+    }
+
     // MARK: - Project Selector
 
     private var projectSelectorMenu: some View {
@@ -1687,6 +1817,22 @@ struct ContentView: View {
             }
         }
         .keyboardShortcut(AppShortcut.toggleSidebar.key, modifiers: AppShortcut.toggleSidebar.modifiers)
+        .hidden()
+
+        // Cmd+[ / Cmd+] — browser-style navigation in expanded mode
+        Button("") {
+            if AppShortcut.navigateBack.isActive(in: shortcutContext), canNavigateBack {
+                navigateBack()
+            }
+        }
+        .keyboardShortcut(AppShortcut.navigateBack.key, modifiers: AppShortcut.navigateBack.modifiers)
+        .hidden()
+        Button("") {
+            if AppShortcut.navigateForward.isActive(in: shortcutContext), canNavigateForward {
+                navigateForward()
+            }
+        }
+        .keyboardShortcut(AppShortcut.navigateForward.key, modifiers: AppShortcut.navigateForward.modifiers)
         .hidden()
 
         // Cmd+T — new terminal tab (only when detail open on terminal tab)

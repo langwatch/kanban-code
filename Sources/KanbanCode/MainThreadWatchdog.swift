@@ -4,14 +4,16 @@ import os
 
 /// Detects main thread hangs by pinging from a background thread.
 /// Logs any hang > threshold to ~/.kanban-code/logs/main-thread-hangs.log
-/// Dormant by default — call start() to enable. In release builds,
-/// only starts when KANBAN_WATCHDOG=1 environment variable is set.
+/// Dormant by default. start() only enables sampling when
+/// KANBAN_WATCHDOG=1 is set.
 final class MainThreadWatchdog: @unchecked Sendable {
     static let shared = MainThreadWatchdog()
 
-    private let checkInterval: TimeInterval = 0.016  // 16ms (1 frame at 60fps)
-    private let hangThreshold: TimeInterval = 0.032   // 32ms — 2 dropped frames
+    private let checkInterval: TimeInterval = 0.5
+    private let hangThreshold: TimeInterval = 0.5
+    private let minLogInterval: TimeInterval = 10
     private let _isRunning = os.OSAllocatedUnfairLock(initialState: false)
+    private let lastLogTime = os.OSAllocatedUnfairLock(initialState: Date.distantPast)
     private let logPath: String
     private let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -27,10 +29,9 @@ final class MainThreadWatchdog: @unchecked Sendable {
     }
 
     func start() {
-        #if !DEBUG
-        // In release builds, only run if explicitly opted in
+        // This watchdog is diagnostic-only. Running it during normal use can
+        // amplify a UI hang by writing a log line every sampling interval.
         guard ProcessInfo.processInfo.environment["KANBAN_WATCHDOG"] == "1" else { return }
-        #endif
 
         let alreadyRunning = _isRunning.withLock { val -> Bool in
             if val { return true }
@@ -54,9 +55,9 @@ final class MainThreadWatchdog: @unchecked Sendable {
                 let elapsed = CACurrentMediaTime() - pingTime
 
                 if result == .timedOut {
-                    self.log(String(format: "HANG: main thread blocked for >500ms at %.3f", pingTime))
+                    self.logThrottled(String(format: "HANG: main thread blocked for >500ms at %.3f", pingTime))
                 } else if elapsed > self.hangThreshold {
-                    self.log(String(format: "HITCH: main thread blocked for %.1fms at %.3f", elapsed * 1000, pingTime))
+                    self.logThrottled(String(format: "HITCH: main thread blocked for %.1fms at %.3f", elapsed * 1000, pingTime))
                 }
 
                 Thread.sleep(forTimeInterval: self.checkInterval)
@@ -72,13 +73,28 @@ final class MainThreadWatchdog: @unchecked Sendable {
         let timestamp = formatter.string(from: Date())
         let line = "[\(timestamp)] \(message)\n"
         if let data = line.data(using: .utf8) {
-            if let fh = FileHandle(forWritingAtPath: logPath) {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                try? fh.close()
-            } else {
-                try? data.write(to: URL(fileURLWithPath: logPath))
+            do {
+                let url = URL(fileURLWithPath: logPath)
+                if !FileManager.default.fileExists(atPath: logPath) {
+                    FileManager.default.createFile(atPath: logPath, contents: nil)
+                }
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                // Diagnostic logging must never make an existing hang worse.
             }
         }
+    }
+
+    private func logThrottled(_ message: String) {
+        let shouldLog = lastLogTime.withLock { last -> Bool in
+            let now = Date()
+            guard now.timeIntervalSince(last) >= minLogInterval else { return false }
+            last = now
+            return true
+        }
+        if shouldLog { log(message) }
     }
 }

@@ -38,6 +38,8 @@ enum AppShortcut: CaseIterable {
     case toggleExpanded         // Cmd+Enter (only when palette closed)
     case toggleSidebar          // Cmd+B (only in expanded mode, palette closed)
     case newTerminal            // Cmd+T (only when detail open on terminal tab, palette closed)
+    case navigateBack           // Cmd+[ (only in expanded mode, palette closed)
+    case navigateForward        // Cmd+] (only in expanded mode, palette closed)
 
     // Palette-specific
     case deepSearch             // Cmd+Enter (only when palette open)
@@ -62,7 +64,7 @@ enum AppShortcut: CaseIterable {
     static var allCases: [AppShortcut] {
         [.openPaletteK, .openPaletteP, .openCommandMode,
          .newTask, .openSettings,
-         .toggleExpanded, .toggleSidebar, .newTerminal, .deepSearch,
+         .toggleExpanded, .toggleSidebar, .newTerminal, .navigateBack, .navigateForward, .deepSearch,
          .stopAssistant, .browserReload, .browserFocusAddress, .reopenClosedTab,
          .deselect, .deleteCard, .deleteCardForward,
          .project1, .project2, .project3, .project4, .project5,
@@ -79,6 +81,8 @@ enum AppShortcut: CaseIterable {
         case .toggleExpanded, .deepSearch: return .return
         case .toggleSidebar: return "b"
         case .newTerminal: return "t"
+        case .navigateBack: return "["
+        case .navigateForward: return "]"
         case .browserReload: return "r"
         case .browserFocusAddress: return "l"
         case .reopenClosedTab: return "t"
@@ -106,6 +110,7 @@ enum AppShortcut: CaseIterable {
         case .toggleExpanded, .deepSearch: return .command
         case .toggleSidebar: return .command
         case .newTerminal: return .command
+        case .navigateBack, .navigateForward: return .command
         case .browserReload, .browserFocusAddress: return .command
         case .reopenClosedTab: return [.command, .shift]
         case .stopAssistant: return []
@@ -154,6 +159,9 @@ enum AppShortcut: CaseIterable {
         // New terminal only when detail is open on terminal tab AND palette is closed
         case .newTerminal:
             return ctx.detailOpen && ctx.terminalTabActive && !ctx.paletteOpen
+
+        case .navigateBack, .navigateForward:
+            return ctx.expandedDetail && !ctx.paletteOpen && !ctx.promptEditorFocused
 
         // Deep search only when palette is open
         case .deepSearch:

@@ -143,12 +143,15 @@ private struct ChatMessageBody: View {
     var urlForPullRequestNumber: (Int) -> URL? = { _ in nil }
     @State private var hovered = false
     @State private var expanded = false
+    @State private var selectionEnabled = false
+    @State private var selectionActivationToken = 0
 
     /// Chosen to match ChatMessageView.textTruncationLimit (4 KB). At the
     /// default font, that's roughly 50 lines — long enough that a normal
     /// reply is never clipped, short enough that a pasted design doc or
     /// LLM "thinking out loud" dump doesn't eat the whole scroll.
     private static let truncationLimit = 4_000
+    private static let selectionRetentionSeconds: UInt64 = 10 * 60
 
     private var linksActive: Bool { isCmdHeld && hovered }
     private var isTruncated: Bool { text.count > Self.truncationLimit && !expanded }
@@ -171,19 +174,46 @@ private struct ChatMessageBody: View {
                 .help("Expand the full message")
             }
         }
-        .onHover { hovered = $0 }
+        .onHover { isHovered in
+            hovered = isHovered
+            if isHovered { activateSelectionWindow() }
+        }
     }
 
     @ViewBuilder
     private var messageContent: some View {
         if displayText.containsBlockMarkdown {
-            Markdown(displayText)
-                .markdownTheme(chatMarkdownTheme)
-                .textSelection(.enabled)
+            if selectionEnabled {
+                Markdown(displayText)
+                    .markdownTheme(chatMarkdownTheme)
+                    .textSelection(.enabled)
+            } else {
+                Markdown(displayText)
+                    .markdownTheme(chatMarkdownTheme)
+            }
         } else {
-            Text(inlineAttributed)
-                .font(.app(.body))
-                .textSelection(.enabled)
+            if selectionEnabled {
+                Text(inlineAttributed)
+                    .font(.app(.body))
+                    .textSelection(.enabled)
+            } else {
+                Text(inlineAttributed)
+                    .font(.app(.body))
+            }
+        }
+    }
+
+    private func activateSelectionWindow() {
+        selectionEnabled = true
+        selectionActivationToken += 1
+        let token = selectionActivationToken
+        Task {
+            try? await Task.sleep(nanoseconds: Self.selectionRetentionSeconds * 1_000_000_000)
+            await MainActor.run {
+                if selectionActivationToken == token && !hovered {
+                    selectionEnabled = false
+                }
+            }
         }
     }
 
@@ -328,6 +358,7 @@ struct ChannelChatView: View {
     @State private var rosterExpanded = false
     @State private var isNearBottom: Bool = true
     @State private var unseenNewCount: Int = 0
+    @State private var distanceFromBottom: CGFloat = 0
     @State private var isCmdHeld: Bool = false
     @State private var cmdMonitor: Any?
     @State private var lastMessageHeight: CGFloat = 80
@@ -339,8 +370,15 @@ struct ChannelChatView: View {
     @State private var currentMatchPosition = 0
     @State private var searchFromSelectedIndex = 0
     @State private var searchDebounceTask: Task<Void, Never>?
+    @State private var retainedMessages: [ChannelMessage] = []
     @FocusState private var inputFocused: Bool
     @FocusState private var isSearchFieldFocused: Bool
+
+    private static let retainedScrollbackLimit = 2_000
+
+    private var displayedMessages: [ChannelMessage] {
+        retainedMessages.isEmpty ? messages : retainedMessages
+    }
 
     private var currentMatchMessageId: String? {
         guard showSearch, !searchMatchMessageIds.isEmpty,
@@ -374,8 +412,18 @@ struct ChannelChatView: View {
         append("me")
         append(myHandle)
         for member in channel.members { append(member.handle) }
-        for message in messages { append(message.from.handle) }
+        for message in displayedMessages { append(message.from.handle) }
         return out
+    }
+
+    private var activelyWorkingMembers: [ChannelMember] {
+        channel.members.filter { member in
+            activityByHandle[member.handle] == .activelyWorking
+        }
+    }
+
+    private var activelyWorkingMemberIds: [String] {
+        activelyWorkingMembers.map(\.id)
     }
 
     var body: some View {
@@ -593,7 +641,11 @@ struct ChannelChatView: View {
         return HStack(spacing: 5) {
             Circle().fill(online ? Color.green : Color.secondary.opacity(0.35))
                 .frame(width: 7, height: 7)
-            if let glyph = activityGlyph(activity) {
+            if activity == .activelyWorking {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("@\(m.handle) is actively working")
+            } else if let glyph = activityGlyph(activity) {
                 Image(systemName: glyph.name)
                     .font(.app(.caption))
                     .foregroundStyle(glyph.color)
@@ -644,7 +696,47 @@ struct ChannelChatView: View {
     }
 
     private var hasRealMessages: Bool {
-        messages.contains(where: { $0.type == .message })
+        displayedMessages.contains(where: { $0.type == .message })
+    }
+
+    @ViewBuilder
+    private var workingParticipantsList: some View {
+        if !activelyWorkingMembers.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(activelyWorkingMembers) { member in
+                    workingParticipantRow(member)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .accessibilityElement(children: .combine)
+            .help(activelyWorkingMembers.map { "@\($0.handle) is actively working" }.joined(separator: "\n"))
+        }
+    }
+
+    private func workingParticipantRow(_ member: ChannelMember) -> some View {
+        Button {
+            if let cardId = member.cardId {
+                onOpenCard(cardId)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("@\(member.handle) is working")
+                    .font(.app(.callout))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(member.cardId == nil)
+        .help(member.cardId == nil
+              ? "@\(member.handle) is actively working"
+              : "Open card details for @\(member.handle)")
     }
 
     private var messageList: some View {
@@ -653,8 +745,8 @@ struct ChannelChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         if !hasRealMessages { emptyState }
-                        let lastId = messages.last?.id
-                        ForEach(messages) { m in
+                        let lastId = displayedMessages.last?.id
+                        ForEach(displayedMessages) { m in
                             messageRow(m, mine: isMine(m))
                                 .id(m.id)
                                 .overlay {
@@ -676,13 +768,19 @@ struct ChannelChatView: View {
                                     }
                                 }
                         }
+                        workingParticipantsList
                         Color.clear.frame(height: 4).id("__bottom__")
                     }
                     .padding(.vertical, 12)
-                    .textSelection(.enabled)
                 }
                 .onPreferenceChange(LastMessageHeightKey.self) { h in
                     lastMessageHeight = h
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
+                    return max(0, maxScroll - geo.contentOffset.y)
+                } action: { _, distance in
+                    distanceFromBottom = distance
                 }
                 // Track whether the user is reading near the bottom. Threshold
                 // = max(80, last-message-height + 40): if the last message is
@@ -696,16 +794,39 @@ struct ChannelChatView: View {
                     isNearBottom = nearBottom
                     if nearBottom { unseenNewCount = 0 }
                 }
-                .onChange(of: messages.count) { old, new in
+                .onChange(of: messages) { old, new in
+                    let latestChanged = old.last?.id != new.last?.id
+                    syncDisplayedMessages(preserveExisting: !isNearBottom)
                     if isNearBottom {
                         withAnimation(.easeOut(duration: 0.15)) {
                             proxy.scrollTo("__bottom__", anchor: .bottom)
                         }
-                    } else if new > old {
-                        unseenNewCount += (new - old)
+                    } else if latestChanged {
+                        unseenNewCount += max(1, new.count - old.count)
                     }
                     if showSearch, !activeQuery.isEmpty {
                         runSearch(scrollToMostRecent: false)
+                    }
+                }
+                .onChange(of: activelyWorkingMemberIds) { old, new in
+                    let newlyWorking = Set(new).subtracting(Set(old))
+                    let insertedRows = max(1, new.count - old.count)
+                    let expectedInsertedHeight = CGFloat(insertedRows) * 34 + 36
+                    let shouldFollow = !newlyWorking.isEmpty
+                        && (isNearBottom || distanceFromBottom <= expectedInsertedHeight + 48)
+                    if shouldFollow {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo("__bottom__", anchor: .bottom)
+                        }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(50))
+                            proxy.scrollTo("__bottom__", anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: isNearBottom) { _, nearBottom in
+                    if nearBottom {
+                        syncDisplayedMessages(preserveExisting: false)
                     }
                 }
                 .onChange(of: currentMatchPosition) {
@@ -722,6 +843,7 @@ struct ChannelChatView: View {
                 .task(id: channel.name) {
                     unseenNewCount = 0
                     isNearBottom = true
+                    syncDisplayedMessages(preserveExisting: false)
                     proxy.scrollTo("__bottom__", anchor: .bottom)
                     try? await Task.sleep(for: .milliseconds(16))
                     proxy.scrollTo("__bottom__", anchor: .bottom)
@@ -862,7 +984,7 @@ struct ChannelChatView: View {
             return
         }
 
-        let matches = messages.filter { message in
+        let matches = displayedMessages.filter { message in
             messageMatchesSearch(message, parsed: parsed)
         }.map(\.id)
 
@@ -874,6 +996,31 @@ struct ChannelChatView: View {
         } else {
             currentMatchPosition = min(currentMatchPosition, matches.count - 1)
         }
+    }
+
+    private func syncDisplayedMessages(preserveExisting: Bool) {
+        guard preserveExisting else {
+            retainedMessages = messages
+            return
+        }
+        var merged = retainedMessages.isEmpty ? messages : retainedMessages
+        var indexById: [String: Int] = [:]
+        indexById.reserveCapacity(merged.count + messages.count)
+        for (index, message) in merged.enumerated() {
+            indexById[message.id] = index
+        }
+        for message in messages {
+            if let index = indexById[message.id] {
+                merged[index] = message
+            } else {
+                indexById[message.id] = merged.count
+                merged.append(message)
+            }
+        }
+        if merged.count > Self.retainedScrollbackLimit {
+            merged = Array(merged.suffix(Self.retainedScrollbackLimit))
+        }
+        retainedMessages = merged
     }
 
     private func messageSearchText(_ message: ChannelMessage) -> String {
@@ -1077,6 +1224,13 @@ struct ChannelChatView: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(mine ? Color.primary.opacity(0.045) : Color.clear)
+        .contextMenu {
+            Button {
+                Self.copyToPasteboard(m.body)
+            } label: {
+                Label("Copy Message", systemImage: "doc.on.doc")
+            }
+        }
     }
 
     private func urlForPullRequest(number: Int, from message: ChannelMessage) -> URL? {
@@ -1115,9 +1269,12 @@ struct ChannelChatView: View {
     }
 
     private func shortTime(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f.string(from: d)
+        DateFormatter.hm.string(from: d)
+    }
+
+    private static func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private var composer: some View {
@@ -1185,7 +1342,14 @@ struct DMChatView: View {
     @State private var isCmdHeld: Bool = false
     @State private var cmdMonitor: Any?
     @State private var lastMessageHeight: CGFloat = 80
+    @State private var retainedMessages: [ChannelMessage] = []
     @FocusState private var inputFocused: Bool
+
+    private static let retainedScrollbackLimit = 2_000
+
+    private var displayedMessages: [ChannelMessage] {
+        retainedMessages.isEmpty ? messages : retainedMessages
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1249,15 +1413,15 @@ struct DMChatView: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        if messages.isEmpty {
+                        if displayedMessages.isEmpty {
                             Text("No messages yet. Say hello.")
                                 .font(.app(.caption))
                                 .foregroundStyle(.tertiary)
                                 .padding(.vertical, 24)
                                 .frame(maxWidth: .infinity, alignment: .center)
                         }
-                        let lastId = messages.last?.id
-                        ForEach(messages) { m in
+                        let lastId = displayedMessages.last?.id
+                        ForEach(displayedMessages) { m in
                             let mine = !myHandle.isEmpty
                                 && m.from.cardId == nil
                                 && m.from.handle == myHandle
@@ -1291,6 +1455,13 @@ struct DMChatView: View {
                             .padding(.vertical, 4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(mine ? Color.primary.opacity(0.045) : Color.clear)
+                            .contextMenu {
+                                Button {
+                                    Self.copyToPasteboard(m.body)
+                                } label: {
+                                    Label("Copy Message", systemImage: "doc.on.doc")
+                                }
+                            }
                             .id(m.id)
                             .background {
                                 if m.id == lastId {
@@ -1306,7 +1477,6 @@ struct DMChatView: View {
                         Color.clear.frame(height: 4).id("__dm_bottom__")
                     }
                     .padding(.vertical, 12)
-                    .textSelection(.enabled)
                 }
                 .onPreferenceChange(LastMessageHeightKey.self) { h in
                     lastMessageHeight = h
@@ -1319,18 +1489,26 @@ struct DMChatView: View {
                     isNearBottom = nearBottom
                     if nearBottom { unseenNewCount = 0 }
                 }
-                .onChange(of: messages.count) { old, new in
+                .onChange(of: messages) { old, new in
+                    let latestChanged = old.last?.id != new.last?.id
+                    syncDisplayedMessages(preserveExisting: !isNearBottom)
                     if isNearBottom {
                         withAnimation(.easeOut(duration: 0.15)) {
                             proxy.scrollTo("__dm_bottom__", anchor: .bottom)
                         }
-                    } else if new > old {
-                        unseenNewCount += (new - old)
+                    } else if latestChanged {
+                        unseenNewCount += max(1, new.count - old.count)
+                    }
+                }
+                .onChange(of: isNearBottom) { _, nearBottom in
+                    if nearBottom {
+                        syncDisplayedMessages(preserveExisting: false)
                     }
                 }
                 .task(id: other.handle) {
                     unseenNewCount = 0
                     isNearBottom = true
+                    syncDisplayedMessages(preserveExisting: false)
                     proxy.scrollTo("__dm_bottom__", anchor: .bottom)
                     try? await Task.sleep(for: .milliseconds(16))
                     proxy.scrollTo("__dm_bottom__", anchor: .bottom)
@@ -1377,6 +1555,36 @@ struct DMChatView: View {
             text: $draft,
             pastedImages: $pastedImages
         )
+    }
+
+    private func syncDisplayedMessages(preserveExisting: Bool) {
+        guard preserveExisting else {
+            retainedMessages = messages
+            return
+        }
+        var merged = retainedMessages.isEmpty ? messages : retainedMessages
+        var indexById: [String: Int] = [:]
+        indexById.reserveCapacity(merged.count + messages.count)
+        for (index, message) in merged.enumerated() {
+            indexById[message.id] = index
+        }
+        for message in messages {
+            if let index = indexById[message.id] {
+                merged[index] = message
+            } else {
+                indexById[message.id] = merged.count
+                merged.append(message)
+            }
+        }
+        if merged.count > Self.retainedScrollbackLimit {
+            merged = Array(merged.suffix(Self.retainedScrollbackLimit))
+        }
+        retainedMessages = merged
+    }
+
+    private static func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 

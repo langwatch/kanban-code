@@ -236,4 +236,31 @@ struct ChannelUITests {
         hostAndLayout(chat)
     }
 
+    @MainActor
+    @Test func channelChatViewRendersActivelyWorkingParticipants() {
+        let ch = Channel(
+            id: "ch_1",
+            name: "ops",
+            createdAt: .now,
+            createdBy: ChannelParticipant(cardId: nil, handle: "user"),
+            members: [
+                ChannelMember(cardId: "card_A", handle: "alice", joinedAt: .now),
+                ChannelMember(cardId: "card_B", handle: "bob", joinedAt: .now),
+            ]
+        )
+        let chat = ChannelChatView(
+            channel: ch,
+            messages: [],
+            onlineByHandle: ["alice": true, "bob": true],
+            onSend: { _, _ in },
+            onClose: {},
+            activityByHandle: [
+                "alice": .activelyWorking,
+                "bob": .needsAttention,
+            ],
+            draft: .constant("")
+        )
+        hostAndLayout(chat)
+    }
+
 }
