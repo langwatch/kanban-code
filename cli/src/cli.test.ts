@@ -7,7 +7,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -35,6 +35,26 @@ function seedLinks(links: unknown[]): void {
   const kanbanDir = join(home, ".kanban-code");
   mkdirSync(kanbanDir, { recursive: true });
   writeFileSync(join(kanbanDir, "links.json"), JSON.stringify({ links }, null, 2));
+}
+
+function seedFakeTmux(sessionName: string): { binDir: string; logPath: string } {
+  const binDir = join(home, "bin");
+  const logPath = join(home, "tmux.log");
+  mkdirSync(binDir, { recursive: true });
+  const tmuxPath = join(binDir, "tmux");
+  writeFileSync(
+    tmuxPath,
+    `#!/bin/sh
+printf '%s\\n' "$*" >> "$TMUX_LOG"
+if [ "$1" = "display-message" ]; then
+  printf '%s\\n' "$TMUX_SESSION_NAME"
+  exit 0
+fi
+exit 0
+`
+  );
+  chmodSync(tmuxPath, 0o755);
+  return { binDir, logPath };
 }
 
 describe("kanban channel (CLI e2e)", () => {
@@ -173,5 +193,62 @@ describe("kanban channel (CLI e2e)", () => {
     const r = runCli(["dm", "send", "nobody", "hi", "--as-user"], env);
     assert.notEqual(r.code, 0);
     assert.match(r.stderr + r.stdout, /Unknown handle/);
+  });
+
+  test("self-compact targets current card tmux and sends follow-up prompt", () => {
+    const sessionName = "sess-self";
+    const { binDir, logPath } = seedFakeTmux(sessionName);
+    const env = {
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      TMUX: "/tmp/tmux-123/default,1,0",
+      TMUX_SESSION_NAME: sessionName,
+      TMUX_LOG: logPath,
+    };
+    seedLinks([
+      {
+        id: "card_self",
+        name: "self card",
+        column: "in_progress",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tmuxLink: { sessionName },
+        isRemote: false,
+        prLinks: [],
+        manualOverrides: {},
+        source: "manual",
+        manuallyArchived: false,
+      },
+    ]);
+
+    const r = runCli(["self-compact", "Continue", "after", "compact."], env);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /Sent \/compact to sess-self with post-compact follow-up/);
+
+    const log = readFileSync(logPath, "utf-8");
+    assert.match(log, /display-message -p #S/);
+    assert.match(log, /send-keys -t sess-self Enter/);
+    assert.match(log, /send-keys -t sess-self Escape/);
+    assert.match(log, /send-keys -t sess-self \/compact Enter/);
+    assert.match(log, /set-buffer Continue after compact\./);
+    assert.match(log, /paste-buffer -p -t sess-self/);
+  });
+
+  test("self-compact explains when current tmux is not linked to a card", () => {
+    const sessionName = "unlinked";
+    const { binDir, logPath } = seedFakeTmux(sessionName);
+    const env = {
+      HOME: home,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      TMUX: "/tmp/tmux-123/default,1,0",
+      TMUX_SESSION_NAME: sessionName,
+      TMUX_LOG: logPath,
+    };
+    seedLinks([]);
+
+    const r = runCli(["self-compact"], env);
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr + r.stdout, /not linked to any Kanban Code card/);
+    assert.match(r.stderr + r.stdout, /executed from an agent inside a tmux session/);
   });
 });

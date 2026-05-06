@@ -168,6 +168,21 @@ export function sendTmuxKeys(
   }
 }
 
+export function sendTmuxEnter(
+  sessionName: string
+): { ok: boolean; error?: string } {
+  const tmux = findTmux();
+  try {
+    execSync(
+      `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
+      { encoding: "utf-8" }
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 export function pasteTmuxPrompt(
   sessionName: string,
   text: string

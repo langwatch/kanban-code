@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   listTmuxSessions,
   captureTmuxPane,
   peekTmuxPane,
+  sendTmuxEnter,
   sendTmuxKeys,
   pasteTmuxPrompt,
   sendTmuxEscape,
@@ -316,6 +317,112 @@ program
         console.error(`Failed: ${result.error}`);
         process.exit(1);
       }
+    }
+  });
+
+// ── kanban self-compact [follow-up] ─────────────────────────────────
+
+function readFollowUpFromArgsOrStdin(args: string[]): string {
+  if (args.length > 0) return args.join(" ");
+  if (process.stdin.isTTY) return "";
+  try {
+    return readFileSync(0, "utf-8").trimEnd();
+  } catch {
+    return "";
+  }
+}
+
+function selfCompactTarget(): { card: Link; tmuxSession: string } {
+  const tmuxSession = currentTmuxSessionName();
+  if (!tmuxSession) {
+    throw new Error(
+      "Could not detect the current tmux session. `kanban self-compact` must be executed by an agent running inside a tmux session on a Kanban Code card."
+    );
+  }
+
+  const links = readLinks();
+  const card = links.find((l) => l.tmuxLink?.sessionName === tmuxSession);
+  if (card) {
+    if (card.tmuxLink?.isShellOnly) {
+      throw new Error(
+        `Tmux session "${tmuxSession}" belongs to a shell-only Kanban Code card terminal. Run this from the card's assistant tmux session.`
+      );
+    }
+    return { card, tmuxSession };
+  }
+
+  const extraCard = links.find((l) => l.tmuxLink?.extraSessions?.includes(tmuxSession));
+  if (extraCard) {
+    throw new Error(
+      `Tmux session "${tmuxSession}" is an extra terminal for card ${extraCard.id}, not the card's assistant session. Run this from the agent's primary tmux session.`
+    );
+  }
+
+  throw new Error(
+    `Tmux session "${tmuxSession}" is not linked to any Kanban Code card. ` +
+      "`kanban self-compact` should be executed from an agent inside a tmux session on a Kanban Code card."
+  );
+}
+
+function assertTmuxResult(step: string, result: { ok: boolean; error?: string }): void {
+  if (!result.ok) {
+    throw new Error(`${step} failed: ${result.error ?? "unknown tmux error"}`);
+  }
+}
+
+program
+  .command("self-compact")
+  .description("Send /compact to this agent's own Kanban Code tmux session")
+  .argument("[followUp...]", "Optional post-compact prompt. Quote it, or pipe/heredoc multi-line text on stdin.")
+  .option("-j, --json", "Output as JSON")
+  .addHelpText(
+    "after",
+    `
+
+Examples:
+  kanban self-compact "After compacting, continue with the test run."
+  kanban self-compact <<'EOL'
+  After compacting:
+  1. Re-read the failing test output.
+  2. Continue from the current plan.
+  EOL
+`
+  )
+  .action((followUpArgs: string[], opts) => {
+    try {
+      const { card, tmuxSession } = selfCompactTarget();
+      const followUp = readFollowUpFromArgsOrStdin(followUpArgs);
+
+      // Flush any pending text, leave transient UI states, request compaction,
+      // then provide the optional post-compact continuation prompt.
+      assertTmuxResult("send Enter", sendTmuxEnter(tmuxSession));
+      assertTmuxResult("send Escape", sendTmuxEscape(tmuxSession));
+      assertTmuxResult("send /compact", sendTmuxKeys(tmuxSession, "/compact"));
+      if (followUp.trim().length > 0) {
+        assertTmuxResult("send post-compact prompt", pasteTmuxPrompt(tmuxSession, followUp));
+      }
+
+      const result = {
+        ok: true,
+        cardId: card.id,
+        tmuxSession,
+        sentFollowUp: followUp.trim().length > 0,
+      };
+      if (opts.json) {
+        output(result, { json: true });
+      } else {
+        console.log(
+          `Sent /compact to ${tmuxSession}` +
+            (result.sentFollowUp ? " with post-compact follow-up." : ".")
+        );
+      }
+    } catch (e) {
+      if (opts.json) {
+        output({ ok: false, error: String(e instanceof Error ? e.message : e) }, { json: true });
+      } else {
+        console.error(String(e instanceof Error ? e.message : e));
+      }
+      process.exit(1);
     }
   });
 
