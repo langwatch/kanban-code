@@ -56,6 +56,10 @@ struct DroppableColumnView: View {
     @State private var renamingCardId: String?
     @State private var cardFrames: [String: CGRect] = [:]
 
+    private var isCollectingCardFrames: Bool {
+        dragState.draggingCard != nil
+    }
+
     private var isCurrentDropAllowed: Bool {
         guard let draggingCard = dragState.draggingCard else { return true }
         if dragState.sourceColumn == column || dragState.mergeTargetId != nil {
@@ -100,14 +104,7 @@ struct DroppableColumnView: View {
                         }
                     }
                     // Report frame in column coordinate space
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: CardFramePreference.self,
-                                value: [card.id: geo.frame(in: .named("column_\(column.rawValue)"))]
-                            )
-                        }
-                    )
+                    .background { cardFrameReporter(for: card) }
                     .onDrag {
                         dragState.draggingCard = card
                         dragState.sourceColumn = column
@@ -141,7 +138,12 @@ struct DroppableColumnView: View {
             .padding(.bottom, 8)
         }
         .coordinateSpace(name: "column_\(column.rawValue)")
-        .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
+        .onPreferenceChange(CardFramePreference.self) { frames in
+            cardFrames = isCollectingCardFrames ? frames : [:]
+        }
+        .onChange(of: dragState.draggingCard?.id) { _, draggingId in
+            if draggingId == nil { cardFrames = [:] }
+        }
         .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
         .glassColumn()
         .overlay(
@@ -229,6 +231,20 @@ struct DroppableColumnView: View {
                     onRename: { name in onRenameCard(cardId, name) }
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cardFrameReporter(for card: KanbanCodeCard) -> some View {
+        if isCollectingCardFrames {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: CardFramePreference.self,
+                    value: [card.id: geo.frame(in: .named("column_\(column.rawValue)"))]
+                )
+            }
+        } else {
+            Color.clear
         }
     }
 

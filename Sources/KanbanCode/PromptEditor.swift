@@ -83,6 +83,13 @@ struct PromptEditor: NSViewRepresentable {
         return scrollView
     }
 
+    static func dismantleNSView(_ scrollView: PromptEditorScrollView, coordinator: Coordinator) {
+        if let textView = scrollView.documentView as? SubmitTextView {
+            textView.prepareForDismantle()
+        }
+        scrollView.documentView = nil
+    }
+
     func updateNSView(_ scrollView: PromptEditorScrollView, context: Context) {
         guard let textView = scrollView.documentView as? SubmitTextView else { return }
         // CRITICAL: Update the coordinator's parent reference so textDidChange
@@ -99,6 +106,9 @@ struct PromptEditor: NSViewRepresentable {
         if textView.string != text && (!isEditing || text.isEmpty || identityChanged) {
             textView.string = text
             textView.needsDisplay = true // redraw placeholder if cleared
+        }
+        if identityChanged {
+            textView.clearUndoStack()
         }
         textView.onSubmit = onSubmit
         textView.onCmdSubmit = onCmdSubmit
@@ -189,6 +199,7 @@ final class PromptEditorScrollView: NSScrollView {
 
 /// NSTextView subclass that intercepts Return key for submit behavior.
 final class SubmitTextView: NSTextView {
+    private let localUndoManager = UndoManager()
     var onSubmit: () -> Void = {}
     var onCmdSubmit: (() -> Void)?
     var onUpArrowAtStart: (() -> String?)?
@@ -200,6 +211,34 @@ final class SubmitTextView: NSTextView {
     var onImagePaste: ((Data) -> Void)?
     var onEscape: (() -> Void)?
     var placeholderString: String = ""
+
+    override var undoManager: UndoManager? { localUndoManager }
+
+    func clearUndoStack() {
+        localUndoManager.removeAllActions()
+    }
+
+    func prepareForDismantle() {
+        clearUndoStack()
+        delegate = nil
+        onSubmit = {}
+        onCmdSubmit = nil
+        onUpArrowAtStart = nil
+        onDownArrowAtStart = nil
+        onArrowUp = nil
+        onArrowDown = nil
+        onEnterIntercept = nil
+        onTabIntercept = nil
+        onImagePaste = nil
+        onEscape = nil
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            prepareForDismantle()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)

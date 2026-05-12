@@ -340,7 +340,8 @@ struct ContentView: View {
     }
 
     private var boardView: some View {
-        BoardView(
+        let cleanupBranchCounts = activeWorktreeBranchCounts
+        return BoardView(
             store: store,
             onOpenChannel: { name in store.dispatch(.selectChannel(name: name)) },
             onNewChannel: { showCreateChannel = true },
@@ -375,8 +376,12 @@ struct ContentView: View {
             },
             onCleanupWorktree: { cardId in Task { await cleanupWorktree(cardId: cardId) } },
             canCleanupWorktree: { cardId in
-                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return false }
-                return canCleanupWorktree(for: card)
+                guard let link = store.state.links[cardId] else { return false }
+                return canCleanupWorktree(
+                    branch: link.worktreeLink?.branch,
+                    manuallyArchived: link.manuallyArchived,
+                    activeBranchCounts: cleanupBranchCounts
+                )
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
             onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
@@ -412,7 +417,8 @@ struct ContentView: View {
 
     /// List view for sidebar — no top padding, marked as sidebar context.
     private var sidebarListView: some View {
-        ListBoardView(
+        let cleanupBranchCounts = activeWorktreeBranchCounts
+        return ListBoardView(
             store: store,
             onOpenChannel: { name in store.dispatch(.selectChannel(name: name)) },
             onNewChannel: { showCreateChannel = true },
@@ -447,8 +453,12 @@ struct ContentView: View {
             },
             onCleanupWorktree: { cardId in Task { await cleanupWorktree(cardId: cardId) } },
             canCleanupWorktree: { cardId in
-                guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return false }
-                return canCleanupWorktree(for: card)
+                guard let link = store.state.links[cardId] else { return false }
+                return canCleanupWorktree(
+                    branch: link.worktreeLink?.branch,
+                    manuallyArchived: link.manuallyArchived,
+                    activeBranchCounts: cleanupBranchCounts
+                )
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
             onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
@@ -1685,17 +1695,21 @@ struct ContentView: View {
     // MARK: - Project Selector
 
     private var projectSelectorMenu: some View {
-        Menu {
+        let projectCounts = projectCardCounts
+        let totalCount = store.state.links.count
+        let selectedProjectPath = store.state.selectedProjectPath
+
+        return Menu {
             Button {
                 setSelectedProject(nil)
             } label: {
                 HStack {
                     Text("All Projects")
                     Spacer()
-                    Text("\(store.state.cards.count)")
+                    Text("\(totalCount)")
                         .foregroundStyle(.secondary)
                         .font(.app(.caption))
-                    if store.state.selectedProjectPath == nil {
+                    if selectedProjectPath == nil {
                         Image(systemName: "checkmark")
                     }
                 }
@@ -1711,13 +1725,13 @@ struct ContentView: View {
                         HStack {
                             Text(project.name)
                             Spacer()
-                            let count = store.state.cards.filter { $0.link.projectPath == project.path }.count
+                            let count = projectCounts[project.path] ?? 0
                             if count > 0 {
                                 Text("\(count)")
                                     .foregroundStyle(.secondary)
                                     .font(.app(.caption))
                             }
-                            if store.state.selectedProjectPath == project.path {
+                            if selectedProjectPath == project.path {
                                 Image(systemName: "checkmark")
                             }
                         }
@@ -1978,6 +1992,16 @@ struct ContentView: View {
             result.append((name: project.name, path: project.path))
         }
         return result
+    }
+
+    private var projectCardCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        counts.reserveCapacity(store.state.configuredProjects.count)
+        for link in store.state.links.values {
+            guard let path = link.projectPath else { continue }
+            counts[path, default: 0] += 1
+        }
+        return counts
     }
 
     var currentProjectHasRemote: Bool {

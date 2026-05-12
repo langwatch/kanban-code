@@ -13,15 +13,34 @@ struct WorktreeCleanupInfo: Identifiable {
 
 extension ContentView {
 
+    var activeWorktreeBranchCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for link in store.state.links.values {
+            guard !link.manuallyArchived,
+                  let branch = link.worktreeLink?.branch else { continue }
+            counts[branch, default: 0] += 1
+        }
+        return counts
+    }
+
     /// Whether this card's worktree can be cleaned up — false if another active card depends on it.
     func canCleanupWorktree(for card: KanbanCodeCard) -> Bool {
-        guard let branch = card.link.worktreeLink?.branch else { return false }
-        let otherCards = store.state.cards.filter {
-            $0.id != card.id
-            && !$0.link.manuallyArchived
-            && $0.link.worktreeLink?.branch == branch
-        }
-        return otherCards.isEmpty
+        canCleanupWorktree(
+            branch: card.link.worktreeLink?.branch,
+            manuallyArchived: card.link.manuallyArchived
+        )
+    }
+
+    /// Whether this link's worktree can be cleaned up — false if another active card depends on it.
+    func canCleanupWorktree(
+        branch: String?,
+        manuallyArchived: Bool,
+        activeBranchCounts: [String: Int]? = nil
+    ) -> Bool {
+        guard let branch else { return false }
+        let activeCount = (activeBranchCounts ?? activeWorktreeBranchCounts)[branch] ?? 0
+        if manuallyArchived { return activeCount == 0 }
+        return activeCount <= 1
     }
 
     func selectFolderForMove(cardId: String) {

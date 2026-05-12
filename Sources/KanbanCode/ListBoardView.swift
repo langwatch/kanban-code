@@ -260,6 +260,10 @@ private struct ListBoardSectionView: View {
     @State private var isTargeted = false
     @State private var cardFrames: [String: CGRect] = [:]
 
+    private var isCollectingCardFrames: Bool {
+        dragState.draggingCard != nil
+    }
+
     private var isCurrentDropAllowed: Bool {
         guard let draggingCard = dragState.draggingCard else { return true }
         if dragState.sourceColumn == section.column {
@@ -331,7 +335,9 @@ private struct ListBoardSectionView: View {
                     )
             )
             .coordinateSpace(name: "list_section_\(section.column.rawValue)")
-            .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
+            .onPreferenceChange(CardFramePreference.self) { frames in
+                cardFrames = isCollectingCardFrames ? frames : [:]
+            }
             .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
                 column: section.column,
                 cards: section.cards,
@@ -388,14 +394,7 @@ private struct ListBoardSectionView: View {
                                 .offset(y: -10)
                         }
                     }
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: CardFramePreference.self,
-                                value: [card.id: geo.frame(in: .named("list_section_\(section.column.rawValue)"))]
-                            )
-                        }
-                    )
+                    .background { cardFrameReporter(for: card) }
                     .onDrag {
                         dragState.draggingCard = card
                         dragState.sourceColumn = section.column
@@ -410,7 +409,12 @@ private struct ListBoardSectionView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
             .coordinateSpace(name: "list_section_\(section.column.rawValue)")
-            .onPreferenceChange(CardFramePreference.self) { cardFrames = $0 }
+            .onPreferenceChange(CardFramePreference.self) { frames in
+                cardFrames = isCollectingCardFrames ? frames : [:]
+            }
+            .onChange(of: dragState.draggingCard?.id) { _, draggingId in
+                if draggingId == nil { cardFrames = [:] }
+            }
             .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
                 column: section.column,
                 cards: section.cards,
@@ -434,6 +438,20 @@ private struct ListBoardSectionView: View {
                     )
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cardFrameReporter(for card: KanbanCodeCard) -> some View {
+        if isCollectingCardFrames {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: CardFramePreference.self,
+                    value: [card.id: geo.frame(in: .named("list_section_\(section.column.rawValue)"))]
+                )
+            }
+        } else {
+            Color.clear
         }
     }
 }

@@ -26,6 +26,18 @@ struct KanbanCodeApp: App {
                 .keyboardShortcut("n", modifiers: .command)
             }
 
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    Self.performTextUndo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+
+                Button("Redo") {
+                    Self.performTextRedo()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+
             CommandGroup(after: .toolbar) {
                 Button("Search Sessions") {
                     NotificationCenter.default.post(name: .kanbanCodeToggleSearch, object: nil)
@@ -72,6 +84,25 @@ struct KanbanCodeApp: App {
         let termSize = UserDefaults.standard.double(forKey: TerminalCache.fontSizeKey)
         let currentTerm = termSize > 0 ? termSize : Double(TerminalCache.defaultFontSize)
         UserDefaults.standard.set(min(max(currentTerm + Double(delta), 8), 24), forKey: TerminalCache.fontSizeKey)
+    }
+
+    /// Keep Cmd+Z scoped to the focused text editor.
+    ///
+    /// AppKit's default Undo menu uses the window undo manager. SwiftUI can tear
+    /// down custom NSTextViews while old text undo operations remain registered
+    /// there, so an accidental Cmd+Z in the terminal can replay a stale
+    /// `_undoRedoTextOperation:` target and crash. Text inputs still get normal
+    /// undo/redo through their own active NSTextView undo manager.
+    private static func performTextUndo() {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+              textView.undoManager?.canUndo == true else { return }
+        textView.undoManager?.undo()
+    }
+
+    private static func performTextRedo() {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+              textView.undoManager?.canRedo == true else { return }
+        textView.undoManager?.redo()
     }
 }
 
