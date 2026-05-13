@@ -139,7 +139,7 @@ struct LaunchConfirmationDialog: View {
 
                     // Checkboxes
                     VStack(alignment: .leading, spacing: 6) {
-                        if !isResume && !hasExistingWorktree && assistant.supportsWorktree {
+                        if !isResume && !hasExistingWorktree {
                             Toggle("Create worktree", isOn: isGitRepo ? $createWorktree : .constant(false))
                                 .font(.app(.callout))
                                 .disabled(!isGitRepo)
@@ -272,7 +272,7 @@ struct LaunchConfirmationDialog: View {
     // MARK: - Computed
 
     private var effectiveCreateWorktree: Bool {
-        !isResume && !hasExistingWorktree && createWorktree && isGitRepo && assistant.supportsWorktree
+        !isResume && !hasExistingWorktree && createWorktree && isGitRepo
     }
 
     private var effectiveRunRemotely: Bool {

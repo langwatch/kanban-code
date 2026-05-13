@@ -113,7 +113,7 @@ public enum CardReconciler {
                 // Handles both initial launch (worktreeLink == nil) and worktree switches
                 // (Claude called EnterWorktree → session moved to a different worktree).
                 if let pp = session.projectPath,
-                   pp.contains("/.claude/worktrees/") {
+                   pp.contains("/.claude/worktrees/") || pp.contains("/.worktrees/") {
                     let needsUpdate = link.worktreeLink == nil
                         || (link.worktreeLink?.path != pp && link.sessionLink?.sessionId == session.id)
                     let shouldUpdate = needsUpdate && (link.isLaunching == true || link.worktreeLink != nil)
@@ -128,7 +128,7 @@ public enum CardReconciler {
                             }
                         }
                         // Fallback: extract from path if worktree not in snapshot yet
-                        if branchName == nil, let range = pp.range(of: "/.claude/worktrees/") {
+                        if branchName == nil, let range = pp.range(of: "/.claude/worktrees/") ?? pp.range(of: "/.worktrees/") {
                             let afterPrefix = String(pp[range.upperBound...])
                             branchName = afterPrefix.components(separatedBy: "/").first
                         }
@@ -585,5 +585,6 @@ public enum CardReconciler {
     private static func isWorktreeUnder(sessionPath: String, projectRoot: String?) -> Bool {
         guard let projectRoot else { return false }
         return sessionPath.hasPrefix(projectRoot + "/.claude/worktrees/")
+            || sessionPath.hasPrefix(projectRoot + "/.worktrees/")
     }
 }

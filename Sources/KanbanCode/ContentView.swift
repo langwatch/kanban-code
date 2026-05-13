@@ -1048,7 +1048,7 @@ struct ContentView: View {
     /// Offer worktree cleanup after archive/delete if applicable.
     private func offerWorktreeCleanupIfNeeded(card: KanbanCodeCard?) {
         guard let card, let wt = card.link.worktreeLink,
-              !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/"),
+              !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/") || wt.path.contains("/.worktrees/"),
               canCleanupWorktree(for: card) else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))

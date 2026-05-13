@@ -169,7 +169,7 @@ public final class BoardState: @unchecked Sendable {
 
         // Worktree match: card's worktree is at the git root (e.g. repo/.claude/worktrees/name)
         // but the selected project is a subfolder of that repo (monorepo layout).
-        if let range = normalizedCard.range(of: "/.claude/worktrees/") {
+        if let range = normalizedCard.range(of: "/.claude/worktrees/") ?? normalizedCard.range(of: "/.worktrees/") {
             let repoRoot = String(normalizedCard[..<range.lowerBound])
             if normalizedSelected == repoRoot || normalizedSelected.hasPrefix(repoRoot + "/") {
                 return true

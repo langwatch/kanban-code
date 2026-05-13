@@ -153,9 +153,20 @@ extension ContentView {
                     )
                 }
 
+                // For agents without native --worktree support, create the worktree manually
+                var launchPath = projectPath
+                var manualWorktreeLink: WorktreeLink?
+                if let wtName = worktreeName, !wtName.isEmpty, !assistant.supportsWorktree {
+                    let adapter = GitWorktreeAdapter()
+                    let wt = try await adapter.createWorktree(repoRoot: projectPath, name: wtName)
+                    launchPath = wt.path
+                    manualWorktreeLink = WorktreeLink(path: wt.path, branch: wt.branch ?? wtName, isManual: true)
+                    KanbanCodeLog.info("launch", "Created manual worktree for \(assistant.displayName): \(wt.path)")
+                }
+
                 let tmuxName = try await launcher.launch(
                     sessionName: predictedTmuxName,
-                    projectPath: projectPath,
+                    projectPath: launchPath,
                     prompt: prompt,
                     worktreeName: assistant.supportsWorktree ? worktreeName : nil,
                     shellOverride: shellOverride,
@@ -263,9 +274,12 @@ extension ContentView {
                     if sessionLink != nil { break }
                 }
 
-                // If worktree launch, try to extract branch from the session file immediately
+                // Resolve worktreeLink: manual worktrees are known immediately,
+                // native worktrees need extraction from the session file metadata
                 var worktreeLink: WorktreeLink?
-                if worktreeName != nil, let sl = sessionLink, let sp = sl.sessionPath {
+                if let mwl = manualWorktreeLink {
+                    worktreeLink = mwl
+                } else if worktreeName != nil, let sl = sessionLink, let sp = sl.sessionPath {
                     worktreeLink = Self.extractWorktreeLink(sessionPath: sp, projectPath: projectPath)
                 }
 
@@ -463,7 +477,7 @@ extension ContentView {
                 if !keepWorktree {
                     // Extract parent project if projectPath is a worktree path
                     if let pp = forkProjectPath,
-                       let range = pp.range(of: "/.claude/worktrees/") {
+                       let range = pp.range(of: "/.claude/worktrees/") ?? pp.range(of: "/.worktrees/") {
                         forkProjectPath = String(pp[..<range.lowerBound])
                     }
                     // Always place the forked session in the correct project dir
