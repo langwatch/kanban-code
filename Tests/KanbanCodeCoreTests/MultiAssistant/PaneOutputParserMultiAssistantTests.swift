@@ -71,6 +71,36 @@ struct PaneOutputParserMultiAssistantTests {
         #expect(PaneOutputParser.isReady(output, assistant: .codex) == true)
     }
 
+    @Test("isWorking detects Codex while prompt is absent")
+    func isWorkingCodexWhenPromptAbsent() {
+        let output = """
+        model: gpt-5.4
+        cwd: /tmp/project
+        running command: git push origin branch
+        """
+        #expect(PaneOutputParser.isWorking(output, assistant: .codex) == true)
+    }
+
+    @Test("isWorking detects Codex idle when prompt is visible")
+    func isWorkingCodexIdleAtPrompt() {
+        let output = """
+        model: gpt-5.4
+        cwd: /tmp/project
+        ›
+        """
+        #expect(PaneOutputParser.isWorking(output, assistant: .codex) == false)
+    }
+
+    @Test("isReady ignores Codex historical user marker")
+    func codexReadyIgnoresHistoricalUserMarker() {
+        let output = """
+        › previous user message
+        running command: git push origin branch
+        """
+        #expect(PaneOutputParser.isReady(output, assistant: .codex) == false)
+        #expect(PaneOutputParser.isWorking(output, assistant: .codex) == true)
+    }
+
     @Test("isReady does not detect Claude prompt as Codex ready")
     func codexNotReadyWithClaudePrompt() {
         #expect(PaneOutputParser.isReady("❯", assistant: .codex) == false)

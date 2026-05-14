@@ -1619,12 +1619,16 @@ struct CardDetailView: View {
         do {
             // File I/O + JSON parsing runs OFF the main actor to avoid freezing
             let parsed = try await Task.detached { () -> TranscriptReader.ReadResult in
-                if assistant != .claude {
-                    let allTurns = try await store.readTranscript(sessionPath: path)
-                    return TranscriptReader.ReadResult(turns: allTurns, totalLineCount: -1, hasMore: false)
-                } else {
+                if assistant == .claude {
                     return try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
                 }
+                let allTurns = try await store.readTranscript(sessionPath: path)
+                let page = Array(allTurns.suffix(loadCount))
+                return TranscriptReader.ReadResult(
+                    turns: page,
+                    totalLineCount: allTurns.count,
+                    hasMore: allTurns.count > page.count
+                )
             }.value
 
             // Stale-check: discard if the user switched cards while we read.
@@ -1650,15 +1654,25 @@ struct CardDetailView: View {
 
     private func loadMoreHistory() async {
         guard hasMoreTurns, !isLoadingMore else { return }
-        guard card.link.effectiveAssistant == .claude else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
         let myCardId = card.id
+        let assistant = card.link.effectiveAssistant
+        let store = sessionStore
 
         isLoadingMore = true
         let newCount = turns.count + (preferChatView ? Self.chatPageSize : Self.pageSize)
         do {
-            let result = try await Task.detached {
-                try await TranscriptReader.readTail(from: path, maxTurns: newCount)
+            let result = try await Task.detached { () -> TranscriptReader.ReadResult in
+                if assistant == .claude {
+                    return try await TranscriptReader.readTail(from: path, maxTurns: newCount)
+                }
+                let allTurns = try await store.readTranscript(sessionPath: path)
+                let page = Array(allTurns.suffix(newCount))
+                return TranscriptReader.ReadResult(
+                    turns: page,
+                    totalLineCount: allTurns.count,
+                    hasMore: allTurns.count > page.count
+                )
             }.value
             // Stale-check — see loadHistory().
             guard card.id == myCardId else { return }

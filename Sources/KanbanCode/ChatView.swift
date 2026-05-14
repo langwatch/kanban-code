@@ -412,7 +412,7 @@ private struct ChatMessageList: View {
             let newBusy: Bool
             do {
                 let output = try await tmux.capturePane(sessionName: session)
-                newBusy = PaneOutputParser.isWorking(output)
+                newBusy = PaneOutputParser.isWorking(output, assistant: assistant)
             } catch {
                 newBusy = false
             }

@@ -19,7 +19,17 @@ public enum PaneOutputParser {
 
     /// Check if the assistant's input prompt is visible (ready for input).
     public static func isReady(_ paneOutput: String, assistant: CodingAssistant) -> Bool {
-        paneOutput.contains(assistant.promptCharacter)
+        switch assistant {
+        case .claude, .gemini:
+            return paneOutput.contains(assistant.promptCharacter)
+        case .codex:
+            // Codex also prefixes historical user turns with `› text`; only a
+            // standalone prompt near the bottom means it is idle/ready.
+            return paneOutput
+                .components(separatedBy: .newlines)
+                .suffix(8)
+                .contains { stripAnsi($0).trimmingCharacters(in: .whitespacesAndNewlines) == assistant.promptCharacter }
+        }
     }
 
     /// Backward-compatible: check if Claude Code's input prompt is visible.
@@ -27,15 +37,27 @@ public enum PaneOutputParser {
         isReady(paneOutput, assistant: .claude)
     }
 
-    /// Check if Claude Code is actively working by looking for the status line
-    /// (e.g. "✶ Brewing… (56s · ↓ 539 tokens)") in the bottom of pane output.
-    /// tmux capture-pane includes Unicode control/color codes between the ellipsis
-    /// and the parenthesis, so we just search for `…` (U+2026) in the tail.
+    /// Check if the assistant is actively working.
+    ///
+    /// Claude exposes a status line while working, so we look for its ellipsis
+    /// marker near the bottom of the pane. Gemini and Codex do not expose the
+    /// same stable status line; for them, the most reliable cheap signal is
+    /// whether the bottom of the pane is missing the ready prompt.
     public static func isWorking(_ paneOutput: String) -> Bool {
-        // Check last ~1000 chars — the status line can be 600+ chars from
-        // the end due to the ──── border lines and footer in Claude's TUI.
-        let tail = paneOutput.suffix(1000)
-        return tail.contains("\u{2026}")
+        isWorking(paneOutput, assistant: .claude)
+    }
+
+    public static func isWorking(_ paneOutput: String, assistant: CodingAssistant) -> Bool {
+        // Check last ~1000 chars — the status line / prompt can be 600+ chars
+        // from the end due to border lines and footer text in TUIs.
+        let tail = String(paneOutput.suffix(1000))
+        switch assistant {
+        case .claude:
+            return tail.contains("\u{2026}")
+        case .gemini, .codex:
+            guard !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            return !isReady(tail, assistant: assistant)
+        }
     }
 
     /// Parse numbered options from Claude Code's plan approval prompt.
