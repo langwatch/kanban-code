@@ -517,6 +517,21 @@ struct GeneralSettingsView: View {
                 statusRow("GitHub CLI (gh)", available: ghAvailable)
             }
 
+            Section("Permissions") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Agents launched by Kanban Code inherit Kanban Code's macOS privacy permissions. Grant Full Disk Access once to stop repeated prompts when agents read protected app data or new project folders.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Open Full Disk Access") {
+                            openFullDiskAccessSettings()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+
             Section("PR Merge") {
                 TextField("Merge command", text: $mergeCommand)
                     .textFieldStyle(.roundedBorder)
@@ -587,6 +602,17 @@ struct GeneralSettingsView: View {
                 try await settingsStore.write(settings)
                 NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
             } catch {}
+        }
+    }
+
+    private func openFullDiskAccessSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy",
+        ]
+        for raw in urls {
+            guard let url = URL(string: raw) else { continue }
+            if NSWorkspace.shared.open(url) { return }
         }
     }
 
