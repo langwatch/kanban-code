@@ -538,6 +538,10 @@ public enum Reducer {
     }
 
     public static func reduce(state: inout AppState, action: Action) -> [Effect] {
+        reduce(state: state, action: action)
+    }
+
+    public static func reduce(state: AppState, action: Action) -> [Effect] {
         switch action {
 
         // MARK: UI Actions
@@ -1928,7 +1932,7 @@ public final class BoardStore: @unchecked Sendable {
         #if DEBUG
         let t = CACurrentMediaTime()
         #endif
-        let effects = Reducer.reduce(state: &state, action: action)
+        let effects = Reducer.reduce(state: state, action: action)
         if Self.needsRebuild(action) { state.rebuildCards() }
         #if DEBUG
         let totalMs = (CACurrentMediaTime() - t) * 1000
@@ -1972,7 +1976,7 @@ public final class BoardStore: @unchecked Sendable {
 
     /// Dispatch an action and wait for all its effects to complete.
     public func dispatchAndWait(_ action: Action) async {
-        let effects = Reducer.reduce(state: &state, action: action)
+        let effects = Reducer.reduce(state: state, action: action)
         state.rebuildCards()
         await withTaskGroup(of: Void.self) { group in
             for effect in effects {
