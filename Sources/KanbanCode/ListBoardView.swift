@@ -61,7 +61,7 @@ struct ListBoardView: View {
 
     private func scrollView(proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 channelsSection
                 ForEach(sections, id: \.column) { section in
                     sectionView(for: section)
@@ -350,7 +350,7 @@ private struct ListBoardSectionView: View {
                 onReorderCard: onReorderCard
             ))
         } else {
-            LazyVStack(spacing: 4) {
+            VStack(spacing: 4) {
                 ForEach(section.cards) { card in
                     if dragState.reorderTargetId == card.id && dragState.reorderAbove {
                         ReorderIndicator()
