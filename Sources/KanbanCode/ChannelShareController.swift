@@ -230,12 +230,11 @@ final class ChannelShareController {
     }
 
     private static func drainStderr(_ handle: FileHandle, tag: String) {
-        Task.detached {
+        DispatchQueue.global(qos: .utility).async {
             while true {
                 let data = handle.availableData
                 if data.isEmpty { return }
                 if let s = String(data: data, encoding: .utf8) {
-                    // Keep share-related diagnostics quiet unless debugging.
                     FileHandle.standardError.write(Data("\(tag) \(s)".utf8))
                 }
             }
@@ -243,7 +242,7 @@ final class ChannelShareController {
     }
 
     private static func drainStdout(_ handle: FileHandle, tag: String) {
-        Task.detached {
+        DispatchQueue.global(qos: .utility).async {
             while true {
                 let data = handle.availableData
                 if data.isEmpty { return }
