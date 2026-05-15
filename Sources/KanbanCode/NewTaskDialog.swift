@@ -160,10 +160,9 @@ struct NewTaskDialog: View {
                     Text("Command")
                         .font(.app(.caption))
                         .foregroundStyle(.secondary)
-                    TextEditor(text: $command)
+                    CommandTextEditor(text: $command, onSubmit: submitForm)
                         .font(.app(.caption).monospaced())
                         .frame(minHeight: 36, maxHeight: 80)
-                        .fixedSize(horizontal: false, vertical: true)
                         .padding(4)
                         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
                         .onChange(of: command) {

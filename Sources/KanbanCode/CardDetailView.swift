@@ -1035,7 +1035,12 @@ struct CardDetailView: View {
                 .font(.app(.callout))
                 .foregroundStyle(.secondary)
             Button(action: onResume) {
-                Label("Resume", systemImage: "play.fill")
+                HStack(spacing: 8) {
+                    Label("Resume", systemImage: "play.fill")
+                    Text(AppShortcut.resumeAssistant.displayString)
+                        .font(.app(.caption).monospaced())
+                        .foregroundStyle(.white.opacity(0.8))
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -1073,7 +1078,12 @@ struct CardDetailView: View {
                     .font(.app(.body))
                     .foregroundStyle(.secondary)
                 Button(action: onResume) {
-                    Label("Resume \(assistant.displayName)", systemImage: "play.fill")
+                    HStack(spacing: 8) {
+                        Label("Resume \(assistant.displayName)", systemImage: "play.fill")
+                        Text(AppShortcut.resumeAssistant.displayString)
+                            .font(.app(.caption).monospaced())
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
                 }
                 .buttonStyle(.borderedProminent)
             }

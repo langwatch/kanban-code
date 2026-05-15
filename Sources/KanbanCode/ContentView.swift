@@ -1803,7 +1803,7 @@ struct ContentView: View {
             .keyboardShortcut(AppShortcut.openCommandMode.key, modifiers: AppShortcut.openCommandMode.modifiers)
             .hidden()
 
-        // Cmd+Enter — expand detail OR deep search depending on context.
+        // Cmd+Enter — primary action: prompt queue, deep search, or resume ended session.
         // When the prompt editor is focused, forward to it for queue prompt.
         Button("") {
             if let textView = NSApp.keyWindow?.firstResponder as? SubmitTextView {
@@ -1813,7 +1813,17 @@ struct ContentView: View {
             let ctx = shortcutContext
             if AppShortcut.deepSearch.isActive(in: ctx) {
                 deepSearchTrigger.toggle()
-            } else if AppShortcut.toggleExpanded.isActive(in: ctx) {
+            } else if AppShortcut.resumeAssistant.isActive(in: ctx),
+                      let cardId = store.state.selectedCardId {
+                resumeCard(cardId: cardId)
+            }
+        }
+        .keyboardShortcut(AppShortcut.resumeAssistant.key, modifiers: AppShortcut.resumeAssistant.modifiers)
+        .hidden()
+
+        // Cmd+Shift+Enter — toggle between kanban and expanded detail mode.
+        Button("") {
+            if AppShortcut.toggleExpanded.isActive(in: shortcutContext) {
                 if isExpandedDetail {
                     isExpandedDetail = false
                     boardViewModeRaw = BoardViewMode.kanban.rawValue

@@ -10,6 +10,23 @@ struct AppShortcutContext {
     var expandedDetail: Bool
     var terminalTabActive: Bool
     var promptEditorFocused: Bool
+    var canResumeAssistant: Bool
+
+    init(
+        paletteOpen: Bool,
+        detailOpen: Bool,
+        expandedDetail: Bool,
+        terminalTabActive: Bool = false,
+        promptEditorFocused: Bool,
+        canResumeAssistant: Bool = false
+    ) {
+        self.paletteOpen = paletteOpen
+        self.detailOpen = detailOpen
+        self.expandedDetail = expandedDetail
+        self.terminalTabActive = terminalTabActive
+        self.promptEditorFocused = promptEditorFocused
+        self.canResumeAssistant = canResumeAssistant
+    }
 
     init(from state: AppState, terminalTabActive: Bool = false) {
         self.paletteOpen = state.paletteOpen
@@ -17,6 +34,10 @@ struct AppShortcutContext {
         self.expandedDetail = state.detailExpanded
         self.terminalTabActive = terminalTabActive
         self.promptEditorFocused = state.promptEditorFocused
+        let selectedLink = state.selectedCard?.link
+        self.canResumeAssistant = selectedLink?.sessionLink != nil
+            && selectedLink?.tmuxLink == nil
+            && selectedLink?.isLaunching != true
     }
 }
 
@@ -35,7 +56,8 @@ enum AppShortcut: CaseIterable {
     case openSettings           // Cmd+,
 
     // Detail panel
-    case toggleExpanded         // Cmd+Enter (only when palette closed)
+    case resumeAssistant        // Cmd+Enter (when selected assistant session ended)
+    case toggleExpanded         // Cmd+Shift+Enter (only when palette closed)
     case toggleSidebar          // Cmd+B (only in expanded mode, palette closed)
     case newTerminal            // Cmd+T (only when detail open on terminal tab, palette closed)
     case navigateBack           // Cmd+[ (only in expanded mode, palette closed)
@@ -64,7 +86,7 @@ enum AppShortcut: CaseIterable {
     static var allCases: [AppShortcut] {
         [.openPaletteK, .openPaletteP, .openCommandMode,
          .newTask, .openSettings,
-         .toggleExpanded, .toggleSidebar, .newTerminal, .navigateBack, .navigateForward, .deepSearch,
+         .resumeAssistant, .toggleExpanded, .toggleSidebar, .newTerminal, .navigateBack, .navigateForward, .deepSearch,
          .stopAssistant, .browserReload, .browserFocusAddress, .reopenClosedTab,
          .deselect, .deleteCard, .deleteCardForward,
          .project1, .project2, .project3, .project4, .project5,
@@ -78,7 +100,7 @@ enum AppShortcut: CaseIterable {
         case .openCommandMode: return "p"
         case .newTask: return "n"
         case .openSettings: return ","
-        case .toggleExpanded, .deepSearch: return .return
+        case .resumeAssistant, .toggleExpanded, .deepSearch: return .return
         case .toggleSidebar: return "b"
         case .newTerminal: return "t"
         case .navigateBack: return "["
@@ -107,7 +129,8 @@ enum AppShortcut: CaseIterable {
         case .openPaletteK, .openPaletteP: return .command
         case .openCommandMode: return [.command, .shift]
         case .newTask, .openSettings: return .command
-        case .toggleExpanded, .deepSearch: return .command
+        case .resumeAssistant, .deepSearch: return .command
+        case .toggleExpanded: return [.command, .shift]
         case .toggleSidebar: return .command
         case .newTerminal: return .command
         case .navigateBack, .navigateForward: return .command
@@ -151,6 +174,10 @@ enum AppShortcut: CaseIterable {
         // Toggle between kanban and expanded+sidebar mode
         case .toggleExpanded:
             return !ctx.paletteOpen && !ctx.promptEditorFocused
+
+        // Resume is the primary action on an ended assistant session.
+        case .resumeAssistant:
+            return ctx.canResumeAssistant && !ctx.paletteOpen && !ctx.promptEditorFocused
 
         // Toggle sidebar in expanded (list) mode
         case .toggleSidebar:
