@@ -603,6 +603,7 @@ struct ChatInputBar: View {
     /// Currently-selected mention in the picker (0 = top match). Resets to 0
     /// whenever the query changes or the picker opens.
     @State private var mentionSelectedIndex: Int = 0
+    @State private var usesInlineImageMarkers = false
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -669,7 +670,7 @@ struct ChatInputBar: View {
                         HStack(spacing: 6) {
                             ForEach(Array(pastedImages.enumerated()), id: \.element) { index, data in
                                 ChatImageThumbnail(imageData: data) {
-                                    pastedImages.remove(at: index)
+                                    removePastedImage(displayIndex: index + 1)
                                 }
                             }
                         }
@@ -687,7 +688,7 @@ struct ChatInputBar: View {
                     onArrowDown: { moveMentionSelection(by: 1) },
                     onEnterIntercept: { computeMentionReplacement() },
                     onTabIntercept: { computeMentionReplacement() },
-                    onImagePaste: { data in pastedImages.append(data) },
+                    onImagePaste: insertPastedImage,
                     onEscape: { handleEscape() }
                 )
                 .focused($isFocused)
@@ -704,13 +705,17 @@ struct ChatInputBar: View {
         }
         .padding(10)
         .onChange(of: text) { _, newValue in
+            normalizeInlineImages(for: newValue)
             let newQuery = Self.activeMentionQuery(in: newValue)
             if newQuery != mentionQuery {
                 mentionSelectedIndex = 0
             }
             mentionQuery = newQuery
         }
-        .onAppear { focusInput() }
+        .onAppear {
+            usesInlineImageMarkers = text.contains(PromptImageLayout.markerPrefix)
+            focusInput()
+        }
         // Re-focus the composer when switching between channels / DMs. The
         // ChatInputBar view is recycled across drawer changes, so .onAppear
         // doesn't re-fire; watching cardId (which encodes "channel:<name>"
@@ -760,7 +765,7 @@ struct ChatInputBar: View {
                             HStack(spacing: 6) {
                                 ForEach(Array(pastedImages.enumerated()), id: \.element) { index, data in
                                     ChatImageThumbnail(imageData: data) {
-                                        pastedImages.remove(at: index)
+                                        removePastedImage(displayIndex: index + 1)
                                     }
                                 }
                             }
@@ -780,7 +785,7 @@ struct ChatInputBar: View {
                     onCmdSubmit: onQueuePrompt != nil ? { showQueueDialog = true } : nil,
                     onUpArrowAtStart: { recallHistoryUp() },
                     onDownArrowAtStart: { recallHistoryDown() },
-                    onImagePaste: { data in pastedImages.append(data) },
+                    onImagePaste: insertPastedImage,
                     onEscape: onEscape
                 )
                 .focused($isFocused)
@@ -830,6 +835,9 @@ struct ChatInputBar: View {
         .padding(.horizontal, 16)
         .padding(.top, 1)
         .padding(.bottom, 12)
+        .onChange(of: text) { _, newValue in
+            normalizeInlineImages(for: newValue)
+        }
         .sheet(isPresented: $showQueueDialog) {
             let existingImages: [ImageAttachment] = pastedImages.compactMap { ImageAttachment(data: $0) }
             let prefill = QueuedPrompt(body: text, sendAutomatically: true, imagePaths: nil)
@@ -846,16 +854,52 @@ struct ChatInputBar: View {
                     onQueuePrompt?(body, sendAuto, imagePaths)
                     text = ""
                     pastedImages = []
+                    usesInlineImageMarkers = false
                 }
             )
         }
-        .onAppear { focusInput() }
+        .onAppear {
+            usesInlineImageMarkers = text.contains(PromptImageLayout.markerPrefix)
+            focusInput()
+        }
     }
 
     private func focusInput() {
         isFocused = true
         DispatchQueue.main.async {
             isFocused = true
+        }
+    }
+
+    private func insertPastedImage(_ data: Data) -> String {
+        usesInlineImageMarkers = true
+        let marker = PromptImagePlaceholders.insertMarker(for: pastedImages)
+        pastedImages.append(data)
+        return marker
+    }
+
+    private func removePastedImage(displayIndex: Int) {
+        let normalized = PromptImagePlaceholders.removeMarker(
+            displayIndex: displayIndex,
+            text: text,
+            images: pastedImages
+        )
+        text = normalized.text
+        pastedImages = normalized.images
+    }
+
+    private func normalizeInlineImages(for newValue: String) {
+        guard usesInlineImageMarkers else { return }
+        if !newValue.contains(PromptImageLayout.markerPrefix) {
+            pastedImages = []
+            return
+        }
+        let normalized = PromptImagePlaceholders.normalize(text: newValue, images: pastedImages)
+        if normalized.text != newValue {
+            text = normalized.text
+        }
+        if normalized.images.count != pastedImages.count {
+            pastedImages = normalized.images
         }
     }
 
@@ -947,11 +991,12 @@ struct ChatInputBar: View {
     }
 
     private func send() {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = PromptImagePlaceholders.normalize(text: text, images: pastedImages)
+        let trimmed = normalized.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         // Save images to temp files for the prompt queue
         var imagePaths: [String] = []
-        for data in pastedImages {
+        for data in normalized.images {
             let path = NSTemporaryDirectory() + "kanban-chat-\(UUID().uuidString).png"
             try? data.write(to: URL(fileURLWithPath: path))
             imagePaths.append(path)
@@ -959,6 +1004,7 @@ struct ChatInputBar: View {
         onSend(trimmed, imagePaths)
         text = ""
         pastedImages = []
+        usesInlineImageMarkers = false
         historyIndex = -1
         savedDraft = ""
     }

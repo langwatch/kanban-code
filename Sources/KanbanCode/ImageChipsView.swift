@@ -9,6 +9,7 @@ struct PromptSection: View {
     var minHeight: CGFloat = 80
     var maxHeight: CGFloat = 400
     var onSubmit: () -> Void = {}
+    @State private var usesInlineImageMarkers = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -16,7 +17,15 @@ struct PromptSection: View {
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
 
-            ImageChipsView(images: $images)
+            ImageChipsView(images: $images) { displayIndex in
+                let normalized = PromptImagePlaceholders.removeMarker(
+                    displayIndex: displayIndex,
+                    text: text,
+                    images: images
+                )
+                text = normalized.text
+                images = normalized.images
+            }
 
             PromptEditor(
                 text: $text,
@@ -24,7 +33,10 @@ struct PromptSection: View {
                 maxHeight: maxHeight,
                 onSubmit: onSubmit,
                 onImagePaste: { data in
+                    usesInlineImageMarkers = true
+                    let marker = PromptImagePlaceholders.insertMarker(for: images)
                     images.append(ImageAttachment(data: data))
+                    return marker
                 }
             )
             .fixedSize(horizontal: false, vertical: true)
@@ -32,12 +44,30 @@ struct PromptSection: View {
             .padding(4)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
         }
+        .onAppear {
+            usesInlineImageMarkers = text.contains(PromptImageLayout.markerPrefix)
+        }
+        .onChange(of: text) { _, newValue in
+            guard usesInlineImageMarkers else { return }
+            if !newValue.contains(PromptImageLayout.markerPrefix) {
+                images = []
+                return
+            }
+            let normalized = PromptImagePlaceholders.normalize(text: newValue, images: images)
+            if normalized.text != newValue {
+                text = normalized.text
+            }
+            if normalized.images.count != images.count {
+                images = normalized.images
+            }
+        }
     }
 }
 
 /// Horizontal strip of image attachment chips with remove buttons and hover previews.
 struct ImageChipsView: View {
     @Binding var images: [ImageAttachment]
+    var onRemove: ((Int) -> Void)?
 
     var body: some View {
         if !images.isEmpty {
@@ -45,7 +75,11 @@ struct ImageChipsView: View {
                 HStack(spacing: 6) {
                     ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
                         ImageChip(index: index + 1, imageData: image.data) {
-                            images.removeAll { $0.id == image.id }
+                            if let onRemove {
+                                onRemove(index + 1)
+                            } else {
+                                images.removeAll { $0.id == image.id }
+                            }
                         }
                     }
                 }

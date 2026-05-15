@@ -189,10 +189,16 @@ extension ContentView {
                             }
                         )
                     } else if !prompt.isEmpty {
+                        let imagePaths = images.compactMap { image -> String? in
+                            if let tempPath = image.tempPath { return tempPath }
+                            var copy = image
+                            return try? copy.saveToTemp()
+                        }
+                        let promptToSend = PromptImageLayout.replacingMarkersWithMarkdown(in: prompt, imagePaths: imagePaths)
                         if assistant.submitsPromptWithPaste {
-                            try await self.tmuxAdapter.pastePrompt(to: tmuxName, text: prompt)
+                            try await self.tmuxAdapter.pastePrompt(to: tmuxName, text: promptToSend)
                         } else {
-                            try await self.tmuxAdapter.sendPrompt(to: tmuxName, text: prompt)
+                            try await self.tmuxAdapter.sendPrompt(to: tmuxName, text: promptToSend)
                         }
                     }
                 }

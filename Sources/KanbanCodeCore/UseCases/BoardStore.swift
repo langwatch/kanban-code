@@ -1250,7 +1250,7 @@ public enum Reducer {
             link.updatedAt = .now
             state.links[cardId] = link
             let sendEffect: Effect
-            if let imagePaths = prompt.imagePaths, !imagePaths.isEmpty, link.effectiveAssistant.supportsImageUpload {
+            if let imagePaths = prompt.imagePaths, !imagePaths.isEmpty {
                 sendEffect = .sendPromptWithImagesToTmux(sessionName: sessionName, promptBody: prompt.body, imagePaths: imagePaths, assistant: link.effectiveAssistant)
             } else {
                 sendEffect = .sendPromptToTmux(sessionName: sessionName, promptBody: prompt.body, assistant: link.effectiveAssistant)

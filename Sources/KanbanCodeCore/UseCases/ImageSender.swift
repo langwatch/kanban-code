@@ -87,10 +87,10 @@ public actor ImageSender {
 
     /// Send a text prompt with image attachments as one user turn.
     ///
-    /// Claude's image paste path can create an image-only submitted turn if
-    /// the image is inserted before the text reaches the composer. Stage text
-    /// first, then add images, then submit once so the transcript keeps the
-    /// prompt and screenshots together.
+    /// Image placeholders in `prompt` (`[Image #1]`, `[Image #2]`, ...) are
+    /// replaced by image paste events at the same position. If no placeholders
+    /// are present, images are appended after the text for backwards
+    /// compatibility with older stored prompts.
     public func sendPromptWithImages(
         sessionName: String,
         prompt: String,
@@ -100,19 +100,40 @@ public actor ImageSender {
         pollInterval: Duration = .milliseconds(500),
         timeout: Duration = .seconds(30)
     ) async throws {
-        if !prompt.isEmpty {
-            try await tmux.pasteText(to: sessionName, text: prompt)
+        let parts = PromptImageLayout.parts(in: prompt, imageCount: images.count)
+        let hasInlineImages = parts.contains { $0.imageIndex != nil }
+
+        if hasInlineImages {
+            for part in parts {
+                if let imageIndex = part.imageIndex {
+                    try await sendImages(
+                        sessionName: sessionName,
+                        images: [images[imageIndex]],
+                        assistant: assistant,
+                        setClipboard: setClipboard,
+                        pollInterval: pollInterval,
+                        timeout: timeout
+                    )
+                } else if !part.text.isEmpty {
+                    try await tmux.pasteText(to: sessionName, text: part.text)
+                }
+            }
+        } else {
+            if !prompt.isEmpty {
+                try await tmux.pasteText(to: sessionName, text: prompt)
+            }
+            if !images.isEmpty {
+                try await sendImages(
+                    sessionName: sessionName,
+                    images: images,
+                    assistant: assistant,
+                    setClipboard: setClipboard,
+                    pollInterval: pollInterval,
+                    timeout: timeout
+                )
+            }
         }
-        if !images.isEmpty {
-            try await sendImages(
-                sessionName: sessionName,
-                images: images,
-                assistant: assistant,
-                setClipboard: setClipboard,
-                pollInterval: pollInterval,
-                timeout: timeout
-            )
-        }
+
         if !prompt.isEmpty || !images.isEmpty {
             try await tmux.submitPrompt(to: sessionName)
         }

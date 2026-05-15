@@ -28,7 +28,7 @@ struct PromptEditor: NSViewRepresentable {
     /// Tab-key intercept. Used by @-mention autocomplete so Tab accepts the
     /// selected suggestion instead of moving focus away from the composer.
     var onTabIntercept: (() -> String?)?
-    var onImagePaste: ((Data) -> Void)?
+    var onImagePaste: ((Data) -> String?)?
     var onEscape: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -208,7 +208,7 @@ final class SubmitTextView: NSTextView {
     var onArrowDown: (() -> Bool)?
     var onEnterIntercept: (() -> String?)?
     var onTabIntercept: (() -> String?)?
-    var onImagePaste: ((Data) -> Void)?
+    var onImagePaste: ((Data) -> String?)?
     var onEscape: (() -> Void)?
     var placeholderString: String = ""
 
@@ -397,7 +397,7 @@ final class SubmitTextView: NSTextView {
 
         // Direct PNG data
         if let pngData = pb.data(forType: .png) {
-            onImagePaste(pngData)
+            insertImagePlaceholder(onImagePaste(pngData))
             return true
         }
 
@@ -405,7 +405,7 @@ final class SubmitTextView: NSTextView {
         if let tiffData = pb.data(forType: .tiff),
            let bitmap = NSBitmapImageRep(data: tiffData),
            let pngData = bitmap.representation(using: .png, properties: [:]) {
-            onImagePaste(pngData)
+            insertImagePlaceholder(onImagePaste(pngData))
             return true
         }
 
@@ -416,10 +416,20 @@ final class SubmitTextView: NSTextView {
            let tiffData = image.tiffRepresentation,
            let bitmap = NSBitmapImageRep(data: tiffData),
            let pngData = bitmap.representation(using: .png, properties: [:]) {
-            onImagePaste(pngData)
+            insertImagePlaceholder(onImagePaste(pngData))
             return true
         }
 
         return false
+    }
+
+    private func insertImagePlaceholder(_ placeholder: String?) {
+        guard let placeholder, !placeholder.isEmpty else { return }
+        insertText(placeholder, replacementRange: selectedRange())
+        if let delegate = self.delegate as? PromptEditor.Coordinator {
+            delegate.parent.text = string
+        }
+        (enclosingScrollView as? PromptEditorScrollView)?.recalcIntrinsicHeight()
+        needsDisplay = true
     }
 }

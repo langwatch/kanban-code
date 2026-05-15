@@ -165,6 +165,7 @@ struct ImageSenderTests {
         var sentPrompts: [(session: String, text: String)] = []
         var pastedTexts: [(session: String, text: String)] = []
         var submittedPrompts: [String] = []
+        var events: [String] = []
         var createdSessions: [(name: String, path: String, command: String?)] = []
         var killedSessions: [String] = []
 
@@ -176,6 +177,7 @@ struct ImageSenderTests {
 
         func sendBracketedPaste(to sessionName: String) async throws {
             sentBracketedPastes.append(sessionName)
+            events.append("image")
         }
 
         func sendPrompt(to sessionName: String, text: String) async throws {
@@ -188,10 +190,12 @@ struct ImageSenderTests {
 
         func pasteText(to sessionName: String, text: String) async throws {
             pastedTexts.append((session: sessionName, text: text))
+            events.append("text:\(text)")
         }
 
         func submitPrompt(to sessionName: String) async throws {
             submittedPrompts.append(sessionName)
+            events.append("submit")
         }
 
         func listSessions() async throws -> [TmuxSession] { [] }
@@ -280,6 +284,41 @@ struct ImageSenderTests {
         #expect(mock.sentBracketedPastes == ["test-session"])
         #expect(mock.submittedPrompts == ["test-session"])
         #expect(mock.sentPrompts.isEmpty)
+    }
+
+    @Test("prompt with inline image markers sends text and images in marker order")
+    func sendPromptWithInlineImageMarkers() async throws {
+        let mock = MockTmux()
+        mock.capturedPaneOutputs = [
+            "❯ before ",
+            "❯ before \n [Image #1] (↑ to select)",
+            "❯ before \n [Image #1] (↑ to select) after ",
+            "❯ before \n [Image #1] (↑ to select) after \n [Image #2] (↑ to select)",
+        ]
+
+        let sender = ImageSender(tmux: mock)
+        let images = [
+            ImageAttachment(data: Data([0x01])),
+            ImageAttachment(data: Data([0x02])),
+        ]
+
+        try await sender.sendPromptWithImages(
+            sessionName: "test-session",
+            prompt: "before [Image #1] after [Image #2] done",
+            images: images,
+            setClipboard: { _ in },
+            pollInterval: .milliseconds(10),
+            timeout: .seconds(5)
+        )
+
+        #expect(mock.events == [
+            "text:before ",
+            "image",
+            "text: after ",
+            "image",
+            "text: done",
+            "submit",
+        ])
     }
 
     @Test("times out when image not confirmed")

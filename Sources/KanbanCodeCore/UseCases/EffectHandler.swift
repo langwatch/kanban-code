@@ -150,9 +150,11 @@ public actor EffectHandler {
                         setClipboard: setClipboard
                     )
                 } else if assistant.submitsPromptWithPaste {
-                    try await tmux.pastePrompt(to: sessionName, text: promptBody)
+                    let body = PromptImageLayout.replacingMarkersWithMarkdown(in: promptBody, imagePaths: imagePaths)
+                    try await tmux.pastePrompt(to: sessionName, text: body)
                 } else {
-                    try await tmux.sendPrompt(to: sessionName, text: promptBody)
+                    let body = PromptImageLayout.replacingMarkersWithMarkdown(in: promptBody, imagePaths: imagePaths)
+                    try await tmux.sendPrompt(to: sessionName, text: body)
                 }
                 if assistant.supportsImageUpload {
                     for path in imagePaths {
@@ -297,17 +299,12 @@ public actor EffectHandler {
 
     /// Fan out a single chat message to one target tmux session. When images
     /// are attached AND the assistant supports image upload, stage the body
-    /// text first, paste images, then submit once. Assistants that don't support
-    /// image upload get the body text plus a "[N image(s) attached]" hint so
-    /// they know something was sent, even if they can't see it.
+    /// text first, paste images at `[Image #N]` marker positions, then submit
+    /// once. Assistants that don't support image upload receive markdown image
+    /// refs at those same marker positions.
     private func fanOutOneMessage(target: ChannelMemberTarget, body: String, imagePaths: [String]) async {
         let canSendImages = target.assistant.supportsImageUpload && !imagePaths.isEmpty
-        // Text suffix: markdown image refs so the recipient can also Read() the
-        // persisted file (kept in sync with CLI's formatChannelBroadcast). This
-        // is redundant with the clipboard paste for Claude, but the markdown
-        // path is the ONLY way Gemini (and any other assistant that can't
-        // receive binary pastes) can see what was attached.
-        let imageRefs = imagePaths.isEmpty ? "" : "\n" + imagePaths.map { "![](\($0))" }.joined(separator: "\n")
+        let bodyWithMarkdownImages = PromptImageLayout.replacingMarkersWithMarkdown(in: body, imagePaths: imagePaths)
         do {
             if canSendImages, let tmux = tmuxAdapter, let setClipboard = setClipboardImage {
                 let images = imagePaths.compactMap { ImageAttachment.fromPath($0) }
@@ -316,16 +313,16 @@ public actor EffectHandler {
                     try await sender.waitForReady(sessionName: target.sessionName, assistant: target.assistant)
                     try await sender.sendPromptWithImages(
                         sessionName: target.sessionName,
-                        prompt: body + imageRefs,
+                        prompt: body,
                         images: images,
                         assistant: target.assistant,
                         setClipboard: setClipboard
                     )
                 } else {
-                    try await tmux.pastePrompt(to: target.sessionName, text: body + imageRefs)
+                    try await tmux.pastePrompt(to: target.sessionName, text: bodyWithMarkdownImages)
                 }
             } else {
-                try await tmuxAdapter?.pastePrompt(to: target.sessionName, text: body + imageRefs)
+                try await tmuxAdapter?.pastePrompt(to: target.sessionName, text: bodyWithMarkdownImages)
             }
         } catch {
             KanbanCodeLog.warn("effect", "fanout to \(target.sessionName) failed: \(error)")
