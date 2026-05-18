@@ -40,8 +40,7 @@ struct PromptSection: View {
                 }
             )
             .fixedSize(horizontal: false, vertical: true)
-            .frame(minHeight: minHeight, maxHeight: maxHeight, alignment: .top)
-            .clipped()
+            .frame(minHeight: minHeight, alignment: .top)
             .padding(4)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
         }

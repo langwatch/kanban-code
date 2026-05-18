@@ -1398,7 +1398,7 @@ struct ChannelChatView: View {
 }
 
 /// Thumbnails for attached images rendered below a chat message.
-/// Tapping a thumbnail opens a `Quick Look` preview via NSWorkspace.
+/// Tapping a thumbnail opens the file; hovering shows a larger preview.
 struct ChatMessageImages: View {
     let paths: [String]
 
@@ -1406,24 +1406,44 @@ struct ChatMessageImages: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Array(paths.enumerated()), id: \.offset) { _, path in
-                    if let img = NSImage(contentsOfFile: path) {
-                        Button {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                        } label: {
-                            Image(nsImage: img)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 140, height: 96)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help((path as NSString).lastPathComponent)
-                    }
+                    ChatMessageImageThumbnail(path: path)
                 }
+            }
+        }
+    }
+}
+
+private struct ChatMessageImageThumbnail: View {
+    let path: String
+
+    @State private var isHovering = false
+
+    var body: some View {
+        if let image = NSImage(contentsOfFile: path) {
+            Button {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            } label: {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 140, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help((path as NSString).lastPathComponent)
+            .onHover { isHovering = $0 }
+            .popover(isPresented: $isHovering) {
+                let size = image.size
+                let scale = min(1.0, min(600.0 / max(size.width, 1), 400.0 / max(size.height, 1)))
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size.width * scale, height: size.height * scale)
+                    .padding(4)
             }
         }
     }

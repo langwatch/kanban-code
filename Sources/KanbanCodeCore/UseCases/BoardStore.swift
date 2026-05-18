@@ -537,6 +537,47 @@ public enum Reducer {
         messages.last(where: { $0.type == .message })?.id
     }
 
+    private static func tmuxLinkScore(_ link: Link, sessionName: String, liveTmuxNames: Set<String>) -> Int {
+        var score = 0
+        if sessionName.contains(link.id) { score += 1000 }
+        if link.isLaunching == true { score += 200 }
+        if link.manuallyArchived == false { score += 100 }
+        if link.column != .allSessions { score += 50 }
+        if liveTmuxNames.contains(sessionName) { score += 25 }
+        if link.worktreeLink != nil { score += 20 }
+        if link.sessionLink != nil { score += 10 }
+        return score
+    }
+
+    private static func deduplicatePrimaryTmuxLinks(_ links: inout [String: Link], liveTmuxNames: Set<String>) {
+        var idsBySession: [String: [String]] = [:]
+        for (id, link) in links {
+            guard let sessionName = link.tmuxLink?.sessionName else { continue }
+            idsBySession[sessionName, default: []].append(id)
+        }
+
+        for (sessionName, ids) in idsBySession where ids.count > 1 {
+            guard let keeperId = ids.max(by: { lhs, rhs in
+                guard let left = links[lhs], let right = links[rhs] else { return false }
+                let leftScore = tmuxLinkScore(left, sessionName: sessionName, liveTmuxNames: liveTmuxNames)
+                let rightScore = tmuxLinkScore(right, sessionName: sessionName, liveTmuxNames: liveTmuxNames)
+                if leftScore != rightScore { return leftScore < rightScore }
+                return left.updatedAt < right.updatedAt
+            }) else { continue }
+
+            for id in ids where id != keeperId {
+                guard var link = links[id], link.isLaunching != true else { continue }
+                link.tmuxLink = nil
+                link.updatedAt = .now
+                links[id] = link
+                KanbanCodeLog.warn(
+                    "store",
+                    "Cleared duplicate tmux link \(sessionName) from \(id.prefix(12)); kept \(keeperId.prefix(12))"
+                )
+            }
+        }
+    }
+
     public static func reduce(state: inout AppState, action: Action) -> [Effect] {
         reduce(state: state, action: action)
     }
@@ -1711,6 +1752,8 @@ public enum Reducer {
             // Preserved cards have stale tmux/activity data — skip them until
             // the next reconciliation cycle picks up their current state.
             let liveTmuxNames = result.tmuxSessions
+            deduplicatePrimaryTmuxLinks(&mergedLinks, liveTmuxNames: liveTmuxNames)
+
             for (id, var link) in mergedLinks where link.isLaunching != true && !preservedIds.contains(id) {
                 let activity = result.activityMap[link.sessionLink?.sessionId ?? ""]
                 let hasTmux = link.tmuxLink.map { tmux in

@@ -285,6 +285,16 @@ export function joinChannel(
   const ch = file.channels.find((c) => c.name === clean);
   if (!ch) throw new Error(`Channel "#${clean}" does not exist`);
 
+  const existingHandle = ch.members.find((m) => m.handle === member.handle);
+  if (existingHandle) {
+    if (existingHandle.cardId !== member.cardId) {
+      existingHandle.cardId = member.cardId;
+      existingHandle.joinedAt = nowIso();
+      saveChannelsFile(file, baseDir);
+    }
+    return { channel: ch, alreadyMember: true };
+  }
+
   const existing = ch.members.find((m) => sameMember(m, member));
   if (existing) {
     return { channel: ch, alreadyMember: true };

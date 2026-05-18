@@ -386,6 +386,35 @@ struct ReducerTests {
         #expect(state.links["card_t1"]?.tmuxLink?.sessionName == tmuxName)
     }
 
+    @Test("reconciliation clears duplicate tmux link from stale archived card")
+    func reconciliationClearsDuplicateTmuxLinkFromStaleArchivedCard() {
+        let sessionName = "langwatch-card_current"
+        var stale = makeLink(
+            id: "card_stale",
+            column: .allSessions,
+            tmuxLink: TmuxLink(sessionName: sessionName),
+            updatedAt: Date.now.addingTimeInterval(-60)
+        )
+        stale.manuallyArchived = true
+        let current = makeLink(
+            id: "card_current",
+            column: .inProgress,
+            tmuxLink: TmuxLink(sessionName: sessionName)
+        )
+        var state = stateWith([stale, current])
+
+        let result = ReconciliationResult(
+            links: [stale, current],
+            sessions: [],
+            activityMap: [:],
+            tmuxSessions: [sessionName]
+        )
+        let _ = Reducer.reduce(state: &state, action: .reconciled(result))
+
+        #expect(state.links["card_current"]?.tmuxLink?.sessionName == sessionName)
+        #expect(state.links["card_stale"]?.tmuxLink == nil)
+    }
+
     @Test("launchCompleted survives subsequent reconciliation with stale snapshot")
     func launchCompletedNotOverwritten() {
         let snapshotTime = Date.now.addingTimeInterval(-3)

@@ -149,6 +149,7 @@ struct PromptEditor: NSViewRepresentable {
             updatePlaceholder(textView)
             // Recalculate height when user types
             (textView.enclosingScrollView as? PromptEditorScrollView)?.recalcIntrinsicHeight()
+            textView.scrollRangeToVisible(textView.selectedRange())
         }
 
         func updatePlaceholder(_ textView: NSTextView) {

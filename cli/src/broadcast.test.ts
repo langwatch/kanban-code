@@ -105,6 +105,17 @@ describe("cardForTmuxSession", () => {
     assert.equal(cardForTmuxSession(links, "session-b")?.id, "card_B");
     assert.equal(cardForTmuxSession(links, "session-x"), undefined);
   });
+
+  test("prefers card id embedded in duplicate primary tmux session name", () => {
+    const sessionName = "langwatch-card_current";
+    const stale = mkLink("card_stale", sessionName);
+    stale.column = "all_sessions";
+    stale.manuallyArchived = true;
+    const current = mkLink("card_current", sessionName);
+    const links = [stale, current];
+
+    assert.equal(cardForTmuxSession(links, sessionName)?.id, "card_current");
+  });
 });
 
 describe("fanOutChannelMessage", () => {

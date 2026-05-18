@@ -221,9 +221,10 @@ describe("kanban channel (CLI e2e)", () => {
       },
     ]);
 
-    const r = runCli(["self-compact", "Continue", "after", "compact."], env);
+    const r = runCli(["self-compact", "--follow-up-delay", "0.1", "Continue", "after", "compact."], env);
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /Sent \/compact to sess-self with post-compact follow-up/);
+    execFileSync("sleep", ["0.4"]);
 
     const log = readFileSync(logPath, "utf-8");
     assert.match(log, /display-message -p #S/);

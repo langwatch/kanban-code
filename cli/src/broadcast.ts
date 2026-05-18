@@ -58,13 +58,32 @@ export function currentTmuxSessionName(): string | undefined {
   }
 }
 
-/** Find the card whose primary tmux session matches the given session name. */
+function tmuxLinkMatchScore(link: Link, sessionName: string, primary: boolean): number {
+  let score = primary ? 100 : 0;
+  if (sessionName.includes(link.id)) score += 1000;
+  if (!link.manuallyArchived) score += 100;
+  if (link.column !== "all_sessions") score += 50;
+  if (link.worktreeLink) score += 20;
+  if (link.sessionLink) score += 10;
+  return score;
+}
+
+/** Find the card whose tmux session matches the given session name. */
 export function cardForTmuxSession(links: Link[], sessionName: string): Link | undefined {
-  for (const l of links) {
-    if (l.tmuxLink?.sessionName === sessionName) return l;
-    if (l.tmuxLink?.extraSessions?.includes(sessionName)) return l;
-  }
-  return undefined;
+  const matches = links
+    .map((link) => {
+      if (link.tmuxLink?.sessionName === sessionName) {
+        return { link, score: tmuxLinkMatchScore(link, sessionName, true) };
+      }
+      if (link.tmuxLink?.extraSessions?.includes(sessionName)) {
+        return { link, score: tmuxLinkMatchScore(link, sessionName, false) };
+      }
+      return undefined;
+    })
+    .filter((m): m is { link: Link; score: number } => Boolean(m));
+
+  matches.sort((a, b) => b.score - a.score);
+  return matches[0]?.link;
 }
 
 // ── Formatting ────────────────────────────────────────────────────────

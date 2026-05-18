@@ -13,6 +13,7 @@ import {
   sendTmuxEnter,
   sendTmuxKeys,
   pasteTmuxPrompt,
+  scheduleTmuxPrompt,
   pasteTmuxText,
   sendTmuxEscape,
   readLastTranscriptTurns,
@@ -342,8 +343,13 @@ function selfCompactTarget(): { card: Link; tmuxSession: string } {
   }
 
   const links = readLinks();
-  const card = links.find((l) => l.tmuxLink?.sessionName === tmuxSession);
+  const card = cardForTmuxSession(links, tmuxSession);
   if (card) {
+    if (card.tmuxLink?.sessionName !== tmuxSession) {
+      throw new Error(
+        `Tmux session "${tmuxSession}" is an extra terminal for card ${card.id}, not the card's assistant session. Run this from the agent's primary tmux session.`
+      );
+    }
     if (card.tmuxLink?.isShellOnly) {
       throw new Error(
         `Tmux session "${tmuxSession}" belongs to a shell-only Kanban Code card terminal. Run this from the card's assistant tmux session.`
@@ -405,12 +411,14 @@ Examples:
       assertTmuxResult("send Enter", sendTmuxEnter(tmuxSession));
       assertTmuxResult("send Escape", sendTmuxEscape(tmuxSession));
       assertTmuxResult("paste /compact", pasteTmuxText(tmuxSession, "/compact"));
+      if (followUp.trim().length > 0) {
+        assertTmuxResult(
+          "schedule post-compact prompt",
+          scheduleTmuxPrompt(tmuxSession, followUp, Number.isFinite(followUpDelay) ? followUpDelay : 1)
+        );
+      }
       sleepSeconds(0.2);
       assertTmuxResult("submit /compact", sendTmuxEnter(tmuxSession));
-      if (followUp.trim().length > 0) {
-        sleepSeconds(Number.isFinite(followUpDelay) ? followUpDelay : 1);
-        assertTmuxResult("send post-compact prompt", pasteTmuxPrompt(tmuxSession, followUp));
-      }
 
       const result = {
         ok: true,

@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, basename, matchesGlob } from "node:path";
 import {
@@ -200,6 +200,34 @@ export function pasteTmuxPrompt(
       `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
       { encoding: "utf-8" }
     );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export function scheduleTmuxPrompt(
+  sessionName: string,
+  text: string,
+  delaySeconds: number
+): { ok: boolean; error?: string } {
+  const tmux = findTmux();
+  const delay = Math.max(0, Number.isFinite(delaySeconds) ? delaySeconds : 1);
+  const cmd = [
+    `sleep ${shellEscape(String(delay))}`,
+    `${tmux} set-buffer ${shellEscape(text)}`,
+    `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+    "sleep 0.1",
+    `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
+  ].join(" && ");
+
+  try {
+    const child = spawn("sh", ["-c", cmd], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };

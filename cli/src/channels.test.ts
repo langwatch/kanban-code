@@ -179,6 +179,21 @@ describe("membership", () => {
     assert.equal(listChannels(base)[0].members.length, 1);
   });
 
+  test("joinChannel refreshes stale card id for same handle", () => {
+    createChannel("general", {}, base);
+    joinChannel("general", { cardId: "card_old", handle: "alice" }, base);
+    const { alreadyMember } = joinChannel(
+      "general",
+      { cardId: "card_current", handle: "alice" },
+      base
+    );
+
+    const members = listChannels(base)[0].members;
+    assert.equal(alreadyMember, true);
+    assert.equal(members.length, 1);
+    assert.equal(members[0].cardId, "card_current");
+  });
+
   test("joinChannel errors on unknown channel", () => {
     assert.throws(
       () => joinChannel("unknown", { cardId: "c", handle: "h" }, base),
