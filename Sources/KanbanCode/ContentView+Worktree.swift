@@ -137,6 +137,8 @@ extension ContentView {
             let repoRoot: String
             if let range = info.remotePath.range(of: "/.claude/worktrees/") {
                 repoRoot = String(info.remotePath[..<range.lowerBound])
+            } else if let range = info.remotePath.range(of: "/.worktrees/") {
+                repoRoot = String(info.remotePath[..<range.lowerBound])
             } else {
                 repoRoot = (info.remotePath as NSString).deletingLastPathComponent
             }

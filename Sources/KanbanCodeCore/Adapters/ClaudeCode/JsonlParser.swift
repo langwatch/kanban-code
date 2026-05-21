@@ -286,8 +286,8 @@ public enum JsonlParser {
     /// Resolve a path to its likely git root.
     /// Strips `.claude/worktrees/<name>` suffix since worktrees are inside the repo.
     private static func resolveGitRoot(_ path: String) -> String {
-        // Pattern: /repo/.claude/worktrees/<name> → /repo
-        if let range = path.range(of: "/.claude/worktrees/") {
+        // Pattern: /repo/.claude/worktrees/<name> or /repo/.worktrees/<name> → /repo
+        if let range = path.range(of: "/.claude/worktrees/") ?? path.range(of: "/.worktrees/") {
             return String(path[path.startIndex..<range.lowerBound])
         }
         return path

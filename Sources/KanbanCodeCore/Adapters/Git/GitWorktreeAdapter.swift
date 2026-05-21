@@ -44,6 +44,8 @@ public final class GitWorktreeAdapter: WorktreeManagerPort, @unchecked Sendable 
             effectiveRoot = repoRoot
         } else if let range = path.range(of: "/.claude/worktrees/") {
             effectiveRoot = String(path[..<range.lowerBound])
+        } else if let range = path.range(of: "/.worktrees/") {
+            effectiveRoot = String(path[..<range.lowerBound])
         } else {
             effectiveRoot = (path as NSString).deletingLastPathComponent
         }

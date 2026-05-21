@@ -45,10 +45,13 @@ public struct TmuxLink: Codable, Sendable, Equatable {
 public struct WorktreeLink: Codable, Sendable, Equatable {
     public var path: String
     public var branch: String?
+    /// True when Kanban Code created this worktree manually (for agents without native --worktree support).
+    public var isManual: Bool?
 
-    public init(path: String, branch: String? = nil) {
+    public init(path: String, branch: String? = nil, isManual: Bool = false) {
         self.path = path
         self.branch = branch
+        self.isManual = isManual ? true : nil
     }
 }
 
