@@ -234,6 +234,48 @@ export function scheduleTmuxPrompt(
   }
 }
 
+export function scheduleTmuxSelfCompact(
+  sessionName: string,
+  followUp: string,
+  followUpDelaySeconds: number
+): { ok: boolean; error?: string } {
+  const tmux = findTmux();
+  const delay = Math.max(0, Number.isFinite(followUpDelaySeconds) ? followUpDelaySeconds : 1);
+  const compactSteps = [
+    // Let the CLI return control to Claude Code before we start sending keys
+    // to the same pane. Once this shell is detached, it survives Claude
+    // interrupting the Bash tool that launched `kanban self-compact`.
+    "sleep 0.1",
+    `${tmux} send-keys -t ${shellEscape(sessionName)} Escape`,
+    `${tmux} set-buffer ${shellEscape("/compact")}`,
+    `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+    "sleep 0.15",
+    `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
+  ];
+
+  const followUpSteps = followUp.trim().length === 0
+    ? []
+    : [
+        `sleep ${shellEscape(String(delay))}`,
+        `${tmux} set-buffer ${shellEscape(followUp)}`,
+        `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+        "sleep 0.1",
+        `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
+      ];
+
+  try {
+    const child = spawn("sh", ["-c", [...compactSteps, ...followUpSteps].join(" && ")], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 export function pasteTmuxText(
   sessionName: string,
   text: string

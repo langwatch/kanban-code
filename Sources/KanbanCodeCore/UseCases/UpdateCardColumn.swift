@@ -22,9 +22,10 @@ public enum UpdateCardColumn {
             hasWorktree: hasWorktree
         )
 
-        // If an archived card becomes actively working, clear the archive flag
-        // so it stays in waiting (not allSessions) once work stops.
-        if link.manuallyArchived && newColumn == .inProgress {
+        // If an archived card becomes live again, clear the archive flag so it
+        // stays in waiting (not allSessions) once work stops. Require a live
+        // tmux/worktree signal so stale activity does not unarchive old cards.
+        if link.manuallyArchived && newColumn == .inProgress && hasWorktree {
             link.manuallyArchived = false
         }
 

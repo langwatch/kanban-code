@@ -235,6 +235,77 @@ public enum CodexSessionParser {
         return sawResponseItem ? responseTurns : fallbackTurns
     }
 
+    /// Reads a bounded transcript tail for chat rendering.
+    ///
+    /// Codex rollout files can grow very large because tool output and migrated
+    /// history live in the same JSONL. The full reader above is still used by
+    /// operations that explicitly need the whole transcript, but chat mode only
+    /// needs the recent turns on initial load and watcher refreshes.
+    public static func readTail(
+        from filePath: String,
+        maxTurns: Int = 80
+    ) async throws -> TranscriptReader.ReadResult {
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            return TranscriptReader.ReadResult(turns: [], totalLineCount: 0, hasMore: false)
+        }
+
+        let url = URL(fileURLWithPath: filePath)
+        let attrs = try FileManager.default.attributesOfItem(atPath: filePath)
+        let fileSize = (attrs[.size] as? UInt64) ?? 0
+        guard fileSize > 0 else {
+            return TranscriptReader.ReadResult(turns: [], totalLineCount: 0, hasMore: false)
+        }
+
+        // Keep this in line with the Claude tail reader. Codex output lines can
+        // be large too, especially for function_call_output records.
+        let clampedTurns = UInt64(min(maxTurns, 10_000))
+        let tailSize = min(clampedTurns * 100 * 1024, fileSize)
+        let seekPos = fileSize - tailSize
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: seekPos)
+        let tailData = handle.readDataToEndOfFile()
+        guard let tailString = String(data: tailData, encoding: .utf8) else {
+            return TranscriptReader.ReadResult(turns: [], totalLineCount: 0, hasMore: seekPos > 0)
+        }
+
+        var responseTurns: [ConversationTurn] = []
+        var fallbackTurns: [ConversationTurn] = []
+        var callNames: [String: String] = [:]
+        var sawResponseItem = false
+        var byteOffset = Int(seekPos)
+        var lines = tailString.components(separatedBy: "\n")
+
+        // We may seek into the middle of a JSON line. Skip the fragment rather
+        // than failing every parse in that record.
+        if seekPos > 0, !lines.isEmpty {
+            byteOffset += lines[0].utf8.count + 1
+            lines.removeFirst()
+        }
+
+        for line in lines {
+            let lineByteOffset = byteOffset
+            byteOffset += line.utf8.count + 1
+            parseTurnLine(
+                line,
+                lineNumber: lineByteOffset,
+                responseTurns: &responseTurns,
+                fallbackTurns: &fallbackTurns,
+                callNames: &callNames,
+                sawResponseItem: &sawResponseItem
+            )
+        }
+
+        let parsed = sawResponseItem ? responseTurns : fallbackTurns
+        let kept = Array(parsed.suffix(maxTurns))
+        return TranscriptReader.ReadResult(
+            turns: kept,
+            totalLineCount: -1,
+            hasMore: seekPos > 0 || parsed.count > kept.count
+        )
+    }
+
     /// Scan Codex function calls for git branch activity.
     public static func extractPushedBranches(
         from filePath: String,
@@ -315,6 +386,112 @@ public enum CodexSessionParser {
             timestamp: timestamp,
             contentBlocks: blocks
         ))
+    }
+
+    private static func parseTurnLine(
+        _ line: String,
+        lineNumber: Int,
+        responseTurns: inout [ConversationTurn],
+        fallbackTurns: inout [ConversationTurn],
+        callNames: inout [String: String],
+        sawResponseItem: inout Bool
+    ) {
+        guard let obj = parseJSONLine(line),
+              let type = obj["type"] as? String else { return }
+        let timestamp = obj["timestamp"] as? String
+
+        if type == "response_item",
+           let payload = obj["payload"] as? [String: Any],
+           let itemType = payload["type"] as? String {
+            sawResponseItem = true
+            switch itemType {
+            case "message":
+                guard let role = payload["role"] as? String,
+                      role == "user" || role == "assistant" else { return }
+                let blocks = textParts(from: payload["content"])
+                    .map { ContentBlock(kind: .text, text: $0) }
+                guard !blocks.isEmpty else { return }
+                appendTurn(
+                    role: role,
+                    lineNumber: lineNumber,
+                    timestamp: timestamp,
+                    blocks: blocks,
+                    to: &responseTurns
+                )
+
+            case "reasoning":
+                let blocks = reasoningTextParts(from: payload)
+                    .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    .map { ContentBlock(kind: .thinking, text: String($0.prefix(500))) }
+                guard !blocks.isEmpty else { return }
+                appendTurn(
+                    role: "assistant",
+                    lineNumber: lineNumber,
+                    timestamp: timestamp,
+                    blocks: blocks,
+                    to: &responseTurns
+                )
+
+            case "function_call":
+                let callId = payload["call_id"] as? String
+                let name = payload["name"] as? String ?? "tool"
+                if let callId { callNames[callId] = name }
+                let (input, rawInputJSON) = parseArguments(payload["arguments"])
+                let description = input.isEmpty
+                    ? name
+                    : "\(name)(\(input.map { "\($0.key): \($0.value)" }.sorted().joined(separator: ", ")))"
+                appendTurn(
+                    role: "assistant",
+                    lineNumber: lineNumber,
+                    timestamp: timestamp,
+                    blocks: [
+                        ContentBlock(
+                            kind: .toolUse(name: name, input: input, id: callId),
+                            text: description,
+                            rawInputJSON: rawInputJSON
+                        )
+                    ],
+                    to: &responseTurns
+                )
+
+            case "function_call_output":
+                let callId = payload["call_id"] as? String
+                let output = payload["output"] as? String ?? ""
+                appendTurn(
+                    role: "assistant",
+                    lineNumber: lineNumber,
+                    timestamp: timestamp,
+                    blocks: [
+                        ContentBlock(
+                            kind: .toolResult(toolName: callId.flatMap { callNames[$0] }, toolUseId: callId),
+                            text: output
+                        )
+                    ],
+                    to: &responseTurns
+                )
+
+            default:
+                return
+            }
+        } else if type == "event_msg",
+                  let payload = obj["payload"] as? [String: Any],
+                  let eventType = payload["type"] as? String {
+            let role: String
+            switch eventType {
+            case "user_message": role = "user"
+            case "agent_message": role = "assistant"
+            default: return
+            }
+            let text = fallbackEventText(from: payload)
+            guard !text.isEmpty else { return }
+            appendTurn(
+                role: role,
+                lineNumber: lineNumber,
+                timestamp: timestamp,
+                blocks: [ContentBlock(kind: .text, text: text)],
+                to: &fallbackTurns
+            )
+        }
     }
 
     private static func parseJSONLine(_ line: String) -> [String: Any]? {

@@ -66,7 +66,11 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        RenderDiagnostics.measure(
+            "ChatView.body",
+            metadata: "turns=\(turns.count) assistant=\(assistant.rawValue) card=\(cardId.prefix(12))"
+        ) {
+            VStack(spacing: 0) {
             if turns.isEmpty && isLoading {
                 VStack {
                     Spacer()
@@ -155,6 +159,7 @@ struct ChatView: View {
                 text: $draftText,
                 pastedImages: $draftImages
             )
+            }
             }
         }
         .onAppear {
@@ -249,6 +254,19 @@ private struct ChatMessageList: View {
     @State private var pendingMatchScroll = false
     @FocusState private var isSearchFieldFocused: Bool
 
+    private static let mountedTurnLimit = 500
+
+    private var renderedTurns: [ConversationTurn] {
+        // Search and explicit history navigation need the loaded target to stay
+        // mounted. During normal chat rendering, cap the mounted window to
+        // avoid making SwiftUI lay out thousands of variable-height rows.
+        guard activeQuery.isEmpty, turns.count > Self.mountedTurnLimit else { return turns }
+        if isNearTop && hasMoreTurns {
+            return Array(turns.prefix(Self.mountedTurnLimit))
+        }
+        return Array(turns.suffix(Self.mountedTurnLimit))
+    }
+
     private var currentMatchTurnIndex: Int? {
         guard showSearch, !searchMatchIndices.isEmpty,
               currentMatchPosition < searchMatchIndices.count else { return nil }
@@ -256,20 +274,25 @@ private struct ChatMessageList: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            scrollableMessageList
-        // Search bar overlay
-        if showSearch {
-            chatSearchBar
-        }
-        }
-        .background {
-            Button("") {
-                showSearch = true
-                isSearchFieldFocused = true
+        RenderDiagnostics.measure(
+            "ChatMessageList.body",
+            metadata: "turns=\(turns.count) mounted=\(renderedTurns.count) search=\(!activeQuery.isEmpty)"
+        ) {
+            ZStack(alignment: .top) {
+                scrollableMessageList
+                // Search bar overlay
+                if showSearch {
+                    chatSearchBar
+                }
             }
-            .keyboardShortcut("f", modifiers: .command)
-            .hidden()
+            .background {
+                Button("") {
+                    showSearch = true
+                    isSearchFieldFocused = true
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden()
+            }
         }
     }
 
@@ -447,9 +470,10 @@ private struct ChatMessageList: View {
                             .padding(.vertical, 8)
                     }
 
-                    let groupInfo = Self.computeGroupInfo(turns: turns)
-                    let toolResults = Self.computeToolResults(turns: turns)
-                    let turnGroups = Self.groupConsecutiveToolTurns(turns: turns)
+                    let visibleTurns = renderedTurns
+                    let groupInfo = Self.computeGroupInfo(turns: visibleTurns)
+                    let toolResults = Self.computeToolResults(turns: visibleTurns)
+                    let turnGroups = Self.groupConsecutiveToolTurns(turns: visibleTurns)
                     // Find the turn containing the last tool call in the conversation.
                     // This turn's last tool call will be auto-expanded.
                     let lastToolCallLN: Int? = {
@@ -506,10 +530,10 @@ private struct ChatMessageList: View {
                                 guard groupInfo[turn.lineNumber] == true else { return "" }
                                 var texts: [String] = []
                                 // Walk backwards from this turn to find all consecutive same-role turns
-                                if let turnIdx = turns.firstIndex(where: { $0.lineNumber == turn.lineNumber }) {
+                                if let turnIdx = visibleTurns.firstIndex(where: { $0.lineNumber == turn.lineNumber }) {
                                     var i = turnIdx
-                                    while i >= 0 && turns[i].role == turn.role {
-                                        let t = turns[i].contentBlocks
+                                    while i >= 0 && visibleTurns[i].role == turn.role {
+                                        let t = visibleTurns[i].contentBlocks
                                             .filter { if case .text = $0.kind { return true }; return false }
                                             .map(\.text).joined(separator: "\n")
                                         if !t.isEmpty { texts.insert(t, at: 0) }
@@ -872,6 +896,7 @@ private struct ScrollBottomTracker: ViewModifier {
             .onScrollGeometryChange(for: Bool.self, of: { geo in
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 150
             }, action: { _, newAtBottom in
+                guard newAtBottom != isAtBottom else { return }
                 isAtBottom = newAtBottom
                 if newAtBottom {
                     hasNewMessages = false
@@ -899,6 +924,7 @@ private struct ScrollNearTopDetector: ViewModifier {
         content.onScrollGeometryChange(for: Bool.self, of: { geo in
             geo.contentOffset.y < 50
         }, action: { _, newNearTop in
+            guard newNearTop != isNearTop else { return }
             isNearTop = newNearTop
         })
     }

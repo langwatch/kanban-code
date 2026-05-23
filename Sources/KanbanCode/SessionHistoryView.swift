@@ -50,6 +50,16 @@ struct SessionHistoryView: View {
     @State private var pendingMatchScroll = false  // scroll to match after turns load from navigation
     @FocusState private var isSearchFieldFocused: Bool
 
+    private static let mountedTurnLimit = 500
+
+    private var renderedTurns: [ConversationTurn] {
+        guard activeQuery.isEmpty, turns.count > Self.mountedTurnLimit else { return turns }
+        if isNearTop && hasMoreTurns {
+            return Array(turns.prefix(Self.mountedTurnLimit))
+        }
+        return Array(turns.suffix(Self.mountedTurnLimit))
+    }
+
     private var currentMatchTurnIndex: Int? {
         guard showSearch, !searchMatchIndices.isEmpty, currentMatchPosition < searchMatchIndices.count else { return nil }
         return searchMatchIndices[currentMatchPosition]
@@ -105,7 +115,7 @@ struct SessionHistoryView: View {
                             }
 
                             VStack(alignment: .leading, spacing: 2) {
-                                ForEach(turns, id: \.lineNumber) { turn in
+                                ForEach(renderedTurns, id: \.lineNumber) { turn in
                                     TurnBlockView(
                                         turn: turn,
                                         checkpointMode: checkpointMode,

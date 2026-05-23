@@ -10,12 +10,10 @@ import {
   listTmuxSessions,
   captureTmuxPane,
   peekTmuxPane,
-  sendTmuxEnter,
   sendTmuxKeys,
   pasteTmuxPrompt,
-  scheduleTmuxPrompt,
-  pasteTmuxText,
   sendTmuxEscape,
+  scheduleTmuxSelfCompact,
   readLastTranscriptTurns,
   readSessionContext,
   filterActiveCards,
@@ -377,10 +375,6 @@ function assertTmuxResult(step: string, result: { ok: boolean; error?: string })
   }
 }
 
-function sleepSeconds(seconds: number): void {
-  execSync(`sleep ${Math.max(0, seconds)}`);
-}
-
 program
   .command("self-compact")
   .description("Send /compact to this agent's own Kanban Code tmux session")
@@ -406,19 +400,14 @@ Examples:
       const followUp = readFollowUpFromArgsOrStdin(followUpArgs);
       const followUpDelay = Number.parseFloat(opts.followUpDelay);
 
-      // Flush any pending text, leave transient UI states, request compaction,
-      // then provide the optional post-compact continuation prompt.
-      assertTmuxResult("send Enter", sendTmuxEnter(tmuxSession));
-      assertTmuxResult("send Escape", sendTmuxEscape(tmuxSession));
-      assertTmuxResult("paste /compact", pasteTmuxText(tmuxSession, "/compact"));
-      if (followUp.trim().length > 0) {
-        assertTmuxResult(
-          "schedule post-compact prompt",
-          scheduleTmuxPrompt(tmuxSession, followUp, Number.isFinite(followUpDelay) ? followUpDelay : 1)
-        );
-      }
-      sleepSeconds(0.2);
-      assertTmuxResult("submit /compact", sendTmuxEnter(tmuxSession));
+      // This command is normally launched from Claude Code's own Bash tool.
+      // Sending keys to that same pane interrupts the tool, so the entire
+      // sequence must be detached before touching the pane. Otherwise `/compact`
+      // can be pasted but the later Enter/follow-up steps never run.
+      assertTmuxResult(
+        "schedule self-compact",
+        scheduleTmuxSelfCompact(tmuxSession, followUp, Number.isFinite(followUpDelay) ? followUpDelay : 1)
+      );
 
       const result = {
         ok: true,

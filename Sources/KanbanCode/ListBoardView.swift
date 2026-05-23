@@ -54,12 +54,10 @@ struct ListBoardView: View {
     }
 
     private var listContent: some View {
-        ScrollViewReader { proxy in
-            scrollView(proxy: proxy)
-        }
+        scrollView
     }
 
-    private func scrollView(proxy: ScrollViewProxy) -> some View {
+    private var scrollView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 channelsSection
@@ -68,12 +66,6 @@ struct ListBoardView: View {
                 }
             }
             .padding(.top, inSidebar ? 0 : 52)
-        }
-        .onChange(of: store.state.selectedCardId) {
-            guard let selectedId = store.state.selectedCardId else { return }
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(selectedId, anchor: .center)
-            }
         }
     }
 

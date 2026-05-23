@@ -60,38 +60,44 @@ struct ChatMessageView: View {
     }
 
     var body: some View {
-        if isTaskNotification {
-            // Task notification — centered system-style
-            HStack {
-                Spacer(minLength: 0)
-                let text = turn.contentBlocks.first { if case .text = $0.kind { return true }; return false }?.text ?? ""
-                Text(text)
-                    .font(.app(.caption))
-                    .foregroundStyle(.tertiary)
-                    .italic()
-                Spacer(minLength: 0)
-            }
-        } else if suppressBackground {
-            // Inside a grouped tool box — no centering wrapper, no frame constraint
-            assistantMessage
-        } else {
-            HStack {
-                Spacer(minLength: 0)
-                VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
-                    if turn.role == "user" {
-                        userBubble
-                    } else {
-                        assistantMessage
-                    }
-
-                    if isLastInGroup {
-                        messageActions
-                    }
+        RenderDiagnostics.measureView(
+            "ChatMessageView.body",
+            thresholdMs: 8,
+            metadata: "role=\(turn.role) blocks=\(turn.contentBlocks.count) line=\(turn.lineNumber)"
+        ) {
+            if isTaskNotification {
+                // Task notification — centered system-style
+                HStack {
+                    Spacer(minLength: 0)
+                    let text = turn.contentBlocks.first { if case .text = $0.kind { return true }; return false }?.text ?? ""
+                    Text(text)
+                        .font(.app(.caption))
+                        .foregroundStyle(.tertiary)
+                        .italic()
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
-                .contentShape(Rectangle())
-                .onHover { isHovered = $0 }
-                Spacer(minLength: 0)
+            } else if suppressBackground {
+                // Inside a grouped tool box — no centering wrapper, no frame constraint
+                assistantMessage
+            } else {
+                HStack {
+                    Spacer(minLength: 0)
+                    VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
+                        if turn.role == "user" {
+                            userBubble
+                        } else {
+                            assistantMessage
+                        }
+
+                        if isLastInGroup {
+                            messageActions
+                        }
+                    }
+                    .frame(maxWidth: chatMaxWidth, alignment: turn.role == "user" ? .trailing : .leading)
+                    .contentShape(Rectangle())
+                    .onHover { isHovered = $0 }
+                    Spacer(minLength: 0)
+                }
             }
         }
     }

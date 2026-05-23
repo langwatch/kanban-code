@@ -113,6 +113,36 @@ struct ChannelUITests {
     }
 
     @MainActor
+    @Test func channelChatViewRendersLargeThreadWithoutLayoutCrash() {
+        let ch = Channel(
+            id: "ch_big",
+            name: "busy",
+            createdAt: .now,
+            createdBy: ChannelParticipant(cardId: nil, handle: "user"),
+            members: []
+        )
+        let sender = ChannelParticipant(cardId: "card_A", handle: "alice")
+        let messages = (0..<800).map { idx in
+            ChannelMessage(
+                id: "m\(idx)",
+                ts: Date(timeIntervalSince1970: TimeInterval(idx)),
+                from: sender,
+                body: "message \(idx)"
+            )
+        }
+        let chat = ChannelChatView(
+            channel: ch,
+            messages: messages,
+            onlineByHandle: [:],
+            onSend: { _, _ in },
+            onClose: {},
+            draft: .constant(""),
+            draftImages: .constant([])
+        )
+        hostAndLayout(chat)
+    }
+
+    @MainActor
     @Test func mentionQueryDetection() {
         #expect(ChatInputBar.activeMentionQuery(in: "") == nil)
         #expect(ChatInputBar.activeMentionQuery(in: "hello") == nil)
@@ -193,6 +223,29 @@ struct ChannelUITests {
                 ChannelMessage(id: "m1", ts: .now, from: ChannelParticipant(cardId: nil, handle: "rchaves"), body: "hey"),
                 ChannelMessage(id: "m2", ts: .now, from: other, body: "hi back"),
             ],
+            onlineForOther: true,
+            onSend: { _, _ in },
+            onClose: {},
+            draft: .constant(""),
+            draftImages: .constant([])
+        )
+        hostAndLayout(dm)
+    }
+
+    @MainActor
+    @Test func dmChatViewRendersLargeThreadWithoutLayoutCrash() {
+        let other = ChannelParticipant(cardId: "card_A", handle: "alice")
+        let messages = (0..<800).map { idx in
+            ChannelMessage(
+                id: "dm\(idx)",
+                ts: Date(timeIntervalSince1970: TimeInterval(idx)),
+                from: idx.isMultiple(of: 2) ? ChannelParticipant(cardId: nil, handle: "rchaves") : other,
+                body: "dm message \(idx)"
+            )
+        }
+        let dm = DMChatView(
+            other: other,
+            messages: messages,
             onlineForOther: true,
             onSend: { _, _ in },
             onClose: {},

@@ -117,6 +117,7 @@ struct ContentView: View {
     @State var channelGithubBaseURLByCardId: [String: String] = [:]
     @State var channelDraftImages: [String: [Data]] = [:]
     @State var dmDraftImages: [String: [Data]] = [:]
+    @State var activeDialog: DialogState = .none
     @State private var selfCompactTriggeredThresholds: [String: Set<Int>] = [:]
     @State private var navigationBackStack: [DrawerNavigationTarget] = []
     @State private var navigationForwardStack: [DrawerNavigationTarget] = []
@@ -341,18 +342,22 @@ struct ContentView: View {
     }
 
     private var boardView: some View {
-        let cleanupBranchCounts = activeWorktreeBranchCounts
-        return BoardView(
+        RenderDiagnostics.measure(
+            "ContentView.boardView",
+            metadata: "cards=\(store.state.cards.count) selected=\(store.state.selectedCardId?.prefix(12) ?? "none")"
+        ) {
+            let cleanupBranchCounts = activeWorktreeBranchCounts
+            return BoardView(
             store: store,
             onOpenChannel: { name in store.dispatch(.selectChannel(name: name)) },
             onNewChannel: { showCreateChannel = true },
-            onDeleteChannel: { name in store.dispatch(.showDialog(.confirmDeleteChannel(name: name))) },
+            onDeleteChannel: { name in presentDialog(.confirmDeleteChannel(name: name)) },
             onRenameChannel: { name in renameChannelName = name },
             unreadCountForChannel: { ch in unreadCount(for: ch) },
             onlineCountForChannel: { ch in onlineCount(for: ch) },
             onStartCard: { cardId in startCard(cardId: cardId) },
             onResumeCard: { cardId in resumeCard(cardId: cardId) },
-            onForkCard: { cardId, _ in store.dispatch(.showDialog(.confirmFork(cardId: cardId))) },
+            onForkCard: { cardId, _ in presentForkDialog(cardId: cardId) },
             onCopyResumeCmd: { cardId in
                 guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
                 var cmd = ""
@@ -385,16 +390,16 @@ struct ContentView: View {
                 )
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
-            onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
+            onDeleteCard: { cardId in presentDialog(.confirmDelete(cardId: cardId)) },
             availableProjects: projectList,
             onMoveToProject: { cardId, projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name)))
+                presentDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name))
             },
             onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { cardId, target in
-                store.dispatch(.showDialog(.confirmMigration(cardId: cardId, targetAssistant: target)))
+                presentDialog(.confirmMigration(cardId: cardId, targetAssistant: target))
             },
             onRefreshBacklog: { Task { await store.refreshBacklog() } },
             canDropCard: { card, column in
@@ -413,23 +418,28 @@ struct ContentView: View {
             onColumnBackgroundClick: { column in
                 handleColumnBackgroundClick(column)
             }
-        )
+            )
+        }
     }
 
     /// List view for sidebar — no top padding, marked as sidebar context.
     private var sidebarListView: some View {
-        let cleanupBranchCounts = activeWorktreeBranchCounts
-        return ListBoardView(
+        RenderDiagnostics.measure(
+            "ContentView.sidebarListView",
+            metadata: "cards=\(store.state.cards.count) channels=\(store.state.channels.count)"
+        ) {
+            let cleanupBranchCounts = activeWorktreeBranchCounts
+            return ListBoardView(
             store: store,
             onOpenChannel: { name in store.dispatch(.selectChannel(name: name)) },
             onNewChannel: { showCreateChannel = true },
-            onDeleteChannel: { name in store.dispatch(.showDialog(.confirmDeleteChannel(name: name))) },
+            onDeleteChannel: { name in presentDialog(.confirmDeleteChannel(name: name)) },
             onRenameChannel: { name in renameChannelName = name },
             unreadCountForChannel: { ch in unreadCount(for: ch) },
             onlineCountForChannel: { ch in onlineCount(for: ch) },
             onStartCard: { cardId in startCard(cardId: cardId) },
             onResumeCard: { cardId in resumeCard(cardId: cardId) },
-            onForkCard: { cardId, _ in store.dispatch(.showDialog(.confirmFork(cardId: cardId))) },
+            onForkCard: { cardId, _ in presentForkDialog(cardId: cardId) },
             onCopyResumeCmd: { cardId in
                 guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
                 var cmd = ""
@@ -462,16 +472,16 @@ struct ContentView: View {
                 )
             },
             onArchiveCard: { cardId in archiveCard(cardId: cardId) },
-            onDeleteCard: { cardId in store.dispatch(.showDialog(.confirmDelete(cardId: cardId))) },
+            onDeleteCard: { cardId in presentDialog(.confirmDelete(cardId: cardId)) },
             availableProjects: projectList,
             onMoveToProject: { cardId, projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name)))
+                presentDialog(.confirmMoveToProject(cardId: cardId, projectPath: projectPath, projectName: name))
             },
             onMoveToFolder: { cardId in selectFolderForMove(cardId: cardId) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { cardId, target in
-                store.dispatch(.showDialog(.confirmMigration(cardId: cardId, targetAssistant: target)))
+                presentDialog(.confirmMigration(cardId: cardId, targetAssistant: target))
             },
             onRefreshBacklog: { Task { await store.refreshBacklog() } },
             onDropCard: { cardId, column in handleDrop(cardId: cardId, to: column) },
@@ -491,7 +501,8 @@ struct ContentView: View {
                 store.dispatch(.renameCard(cardId: cardId, name: name))
             },
             inSidebar: true
-        )
+            )
+        }
     }
 
     /// Sidebar content for expanded mode — always list view.
@@ -565,7 +576,7 @@ struct ContentView: View {
             },
             canCleanupWorktree: canCleanupWorktree(for: card),
             onDeleteCard: {
-                store.dispatch(.showDialog(.confirmDelete(cardId: card.id)))
+                presentDialog(.confirmDelete(cardId: card.id))
             },
             onCreateTerminal: {
                 createExtraTerminal(cardId: card.id)
@@ -634,12 +645,12 @@ struct ContentView: View {
             availableProjects: projectList,
             onMoveToProject: { projectPath in
                 let name = projectList.first(where: { $0.path == projectPath })?.name ?? (projectPath as NSString).lastPathComponent
-                store.dispatch(.showDialog(.confirmMoveToProject(cardId: card.id, projectPath: projectPath, projectName: name)))
+                presentDialog(.confirmMoveToProject(cardId: card.id, projectPath: projectPath, projectName: name))
             },
             onMoveToFolder: { selectFolderForMove(cardId: card.id) },
             enabledAssistants: assistantRegistry.available,
             onMigrateAssistant: { target in
-                store.dispatch(.showDialog(.confirmMigration(cardId: card.id, targetAssistant: target)))
+                presentDialog(.confirmMigration(cardId: card.id, targetAssistant: target))
             },
             actionsMenuProvider: actionsMenuProvider,
             focusTerminal: $shouldFocusTerminal,
@@ -919,7 +930,7 @@ struct ContentView: View {
     // MARK: - Global Dialog
 
     private var dialogTitle: String {
-        switch store.state.activeDialog {
+        switch activeDialog {
         case .none: return ""
         case .confirmDelete: return "Delete Card"
         case .confirmArchive: return "Archive Card?"
@@ -936,86 +947,86 @@ struct ContentView: View {
 
     @ViewBuilder
     private var dialogButtons: some View {
-        switch store.state.activeDialog {
+        switch activeDialog {
         case .none: EmptyView()
         case .confirmDelete(let cardId):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Delete", role: .destructive) {
                 let card = store.state.cards.first(where: { $0.id == cardId })
                 let nextId = cardIdAfterDeletion(cardId)
                 store.dispatch(.deleteCard(cardId: cardId))
-                store.dispatch(.dismissDialog)
+                dismissDialog()
                 if let nextId { store.dispatch(.selectCard(cardId: nextId)) }
                 offerWorktreeCleanupIfNeeded(card: card)
             }
         case .confirmArchive(let cardId):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Archive & Kill Terminals", role: .destructive) {
                 let card = store.state.cards.first(where: { $0.id == cardId })
                 store.dispatch(.archiveCard(cardId: cardId))
-                store.dispatch(.dismissDialog)
+                dismissDialog()
                 offerWorktreeCleanupIfNeeded(card: card)
             }
         case .confirmFork(let cardId):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             if store.state.cards.first(where: { $0.id == cardId })?.link.worktreeLink != nil {
                 Button("Fork (same worktree)") {
                     forkCard(cardId: cardId, keepWorktree: true)
-                    store.dispatch(.dismissDialog)
+                    dismissDialog()
                 }
             }
             Button("Fork (project root)") {
                 forkCard(cardId: cardId)
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmCheckpoint(let cardId, _, let turnLineNumber):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Restore", role: .destructive) {
                 Task { await performCheckpoint(cardId: cardId, turnLineNumber: turnLineNumber) }
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmWorktreeCleanup(let cardId):
-            Button("Keep Worktree", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Keep Worktree", role: .cancel) { dismissDialog() }
             Button("Remove Worktree", role: .destructive) {
                 Task { await cleanupWorktree(cardId: cardId) }
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmMoveToProject(let cardId, let projectPath, _):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Move") {
                 store.dispatch(.moveCardToProject(cardId: cardId, projectPath: projectPath))
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmMoveToFolder(let cardId, let folderPath, let parentProjectPath, _):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Move") {
                 store.dispatch(.moveCardToFolder(cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath))
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmMigration(let cardId, let targetAssistant):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Migrate") {
                 Task { await executeMigration(cardId: cardId, targetAssistant: targetAssistant) }
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .remoteWorktreeCleanup(let cardId, _, let localPath, _):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Cleanup Local Copy", role: .destructive) {
                 Task { await executeLocalWorktreeCleanup(cardId: cardId, localPath: localPath) }
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         case .confirmDeleteChannel(let name):
-            Button("Cancel", role: .cancel) { store.dispatch(.dismissDialog) }
+            Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Delete #\(name)", role: .destructive) {
                 store.dispatch(.deleteChannel(name: name))
-                store.dispatch(.dismissDialog)
+                dismissDialog()
             }
         }
     }
 
     @ViewBuilder
     private var dialogMessage: some View {
-        switch store.state.activeDialog {
+        switch activeDialog {
         case .none: EmptyView()
         case .confirmDelete: Text("This will permanently delete this card and its data.")
         case .confirmArchive: Text("This card has running terminals. Archiving will kill them.")
@@ -1050,11 +1061,23 @@ struct ContentView: View {
     private func offerWorktreeCleanupIfNeeded(card: KanbanCodeCard?) {
         guard let card, let wt = card.link.worktreeLink,
               !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/"),
-              canCleanupWorktree(for: card) else { return }
+              canCleanupWorktree(branch: wt.branch, manuallyArchived: true) else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
-            store.dispatch(.showDialog(.confirmWorktreeCleanup(cardId: card.id)))
+            presentDialog(.confirmWorktreeCleanup(cardId: card.id))
         }
+    }
+
+    func presentDialog(_ dialog: DialogState) {
+        activeDialog = dialog
+    }
+
+    func dismissDialog() {
+        activeDialog = .none
+    }
+
+    private func presentForkDialog(cardId: String) {
+        presentDialog(.confirmFork(cardId: cardId))
     }
 
     private var boardWithAlerts: some View {
@@ -1080,12 +1103,12 @@ struct ContentView: View {
                     Text("The worktree path is on a remote machine:\n\n\(info.remotePath)\n\nThis will SSH to the remote to run git worktree remove, then delete the local synced copy at:\n\n\(info.localPath)")
                 }
             }
-            // Global dialog driven by store.state.activeDialog
+            // Local confirmation dialog state avoids invalidating the observed board store.
             .alert(
                 dialogTitle,
                 isPresented: Binding(
-                    get: { store.state.activeDialog != .none },
-                    set: { if !$0 { store.dispatch(.dismissDialog) } }
+                    get: { activeDialog != .none },
+                    set: { if !$0 { dismissDialog() } }
                 )
             ) {
                 dialogButtons
@@ -1462,7 +1485,7 @@ struct ContentView: View {
                         switchToProjectIfNeeded(for: card)
                         resumeCard(cardId: card.id)
                     },
-                    onForkCard: { card in store.dispatch(.showDialog(.confirmFork(cardId: card.id))) },
+                    onForkCard: { card in presentForkDialog(cardId: card.id) },
                     onCheckpointCard: { card in
                         switchToProjectIfNeeded(for: card)
                         store.dispatch(.selectCard(cardId: card.id))
@@ -2099,7 +2122,7 @@ struct ContentView: View {
 
     private func deleteSelectedCard() {
         if let cardId = store.state.selectedCardId {
-            store.dispatch(.showDialog(.confirmDelete(cardId: cardId)))
+            presentDialog(.confirmDelete(cardId: cardId))
         }
     }
 
@@ -2142,13 +2165,13 @@ struct ContentView: View {
                 },
                 onCleanupWorktree: { Task { await cleanupWorktree(cardId: card.id) } },
                 canCleanupWorktree: canCleanupWorktree(for: card),
-                onDelete: { store.dispatch(.showDialog(.confirmDelete(cardId: card.id))) },
+                onDelete: { presentDialog(.confirmDelete(cardId: card.id)) },
                 availableProjects: projectList,
                 onMoveToProject: { path in store.dispatch(.moveCardToProject(cardId: card.id, projectPath: path)) },
                 onMoveToFolder: { selectFolderForMove(cardId: card.id) },
                 enabledAssistants: assistantRegistry.available,
                 onMigrateAssistant: { target in
-                    store.dispatch(.showDialog(.confirmMigration(cardId: card.id, targetAssistant: target)))
+                    presentDialog(.confirmMigration(cardId: card.id, targetAssistant: target))
                 }
             )
         } label: {
@@ -2187,11 +2210,11 @@ struct ContentView: View {
                 navigateCard(.right); return nil
             case .carriageReturn, .newline, .enter:
                 // Confirm pending delete alert via Enter
-                if case .confirmDelete(let cardId) = store.state.activeDialog {
+                if case .confirmDelete(let cardId) = activeDialog {
                     let card = store.state.cards.first(where: { $0.id == cardId })
                     let nextId = cardIdAfterDeletion(cardId)
                     store.dispatch(.deleteCard(cardId: cardId))
-                    store.dispatch(.dismissDialog)
+                    dismissDialog()
                     if let nextId {
                         store.dispatch(.selectCard(cardId: nextId))
                     }
@@ -2546,7 +2569,7 @@ struct ContentView: View {
     private func archiveCard(cardId: String) {
         guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
         if card.link.tmuxLink != nil {
-            store.dispatch(.showDialog(.confirmArchive(cardId: cardId)))
+            presentDialog(.confirmArchive(cardId: cardId))
         } else {
             store.dispatch(.archiveCard(cardId: cardId))
             offerWorktreeCleanupIfNeeded(card: card)
@@ -2636,6 +2659,7 @@ struct ContentView: View {
             onlineByHandle: onlineMap,
             onSend: { body, imagePaths in
                 store.dispatch(.sendChannelMessage(channelName: channel.name, body: body, imagePaths: imagePaths))
+                channelDraftImages.removeValue(forKey: channel.name)
             },
             onClose: { store.dispatch(.selectChannel(name: nil)) },
             onCopyDMCommand: { m in
@@ -2679,6 +2703,7 @@ struct ContentView: View {
             ),
             shareController: shareController
         )
+        .id("channel:\(channel.name)")
         .task(id: channelGithubBaseURLResolutionKey(channel: channel, messages: msgs)) {
             await resolveChannelGithubBaseURLs(channel: channel, messages: msgs)
         }
@@ -2814,6 +2839,7 @@ struct ContentView: View {
             onlineForOther: online,
             onSend: { body, imagePaths in
                 store.dispatch(.sendDirectMessage(to: other, body: body, imagePaths: imagePaths))
+                dmDraftImages.removeValue(forKey: key)
             },
             onClose: { store.dispatch(.selectDM(other: nil)) },
             onOpenCard: { cardId in
@@ -2835,6 +2861,7 @@ struct ContentView: View {
                 }
             )
         )
+        .id("dm:\(key)")
     }
 
     private func openCardFromChat(_ cardId: String) {

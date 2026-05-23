@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeCore
 import QuartzCore
 import os
 
@@ -102,7 +103,10 @@ final class MainThreadWatchdog: @unchecked Sendable {
             last = now
             return true
         }
-        if shouldLog { log(message) }
+        if shouldLog {
+            log(message)
+            KanbanCodeLog.warn("main-thread", message)
+        }
     }
 
     private func captureSampleThrottled(reason: String) {

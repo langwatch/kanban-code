@@ -21,10 +21,17 @@ struct AssignColumnTests {
         #expect(col == .done)
     }
 
-    @Test("Manually archived + actively working → inProgress (activity overrides archive)")
-    func manuallyArchivedButActive() {
+    @Test("Manually archived + stale active signal without live work → allSessions")
+    func manuallyArchivedButStaleActive() {
         let link = Link(column: .allSessions, manuallyArchived: true, sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .activelyWorking)
+        #expect(col == .allSessions)
+    }
+
+    @Test("Manually archived + actively working with live work → inProgress")
+    func manuallyArchivedButLiveActive() {
+        let link = Link(column: .allSessions, manuallyArchived: true, sessionLink: SessionLink(sessionId: "s1"))
+        let col = AssignColumn.assign(link: link, activityState: .activelyWorking, hasWorktree: true)
         #expect(col == .inProgress)
     }
 

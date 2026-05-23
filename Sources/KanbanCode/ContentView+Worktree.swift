@@ -9,6 +9,19 @@ struct WorktreeCleanupInfo: Identifiable {
     let errorMessage: String
 }
 
+enum WorktreeCleanupEligibility {
+    /// True when cleanup will not remove a worktree another visible card still uses.
+    static func canCleanup(
+        branch: String?,
+        cardIsStillActive: Bool,
+        activeBranchCounts: [String: Int]
+    ) -> Bool {
+        guard let branch else { return false }
+        let activeCount = activeBranchCounts[branch] ?? 0
+        return cardIsStillActive ? activeCount <= 1 : activeCount == 0
+    }
+}
+
 // MARK: - Worktree Cleanup
 
 extension ContentView {
@@ -37,10 +50,11 @@ extension ContentView {
         manuallyArchived: Bool,
         activeBranchCounts: [String: Int]? = nil
     ) -> Bool {
-        guard let branch else { return false }
-        let activeCount = (activeBranchCounts ?? activeWorktreeBranchCounts)[branch] ?? 0
-        if manuallyArchived { return activeCount == 0 }
-        return activeCount <= 1
+        WorktreeCleanupEligibility.canCleanup(
+            branch: branch,
+            cardIsStillActive: !manuallyArchived,
+            activeBranchCounts: activeBranchCounts ?? activeWorktreeBranchCounts
+        )
     }
 
     func selectFolderForMove(cardId: String) {
@@ -70,10 +84,10 @@ extension ContentView {
 
         if folderPath == parentProjectPath {
             // Moving to a project root — use the regular move flow
-            store.dispatch(.showDialog(.confirmMoveToProject(cardId: cardId, projectPath: folderPath, projectName: displayName)))
+            presentDialog(.confirmMoveToProject(cardId: cardId, projectPath: folderPath, projectName: displayName))
         } else {
             // Moving to a subfolder — use the folder-specific flow
-            store.dispatch(.showDialog(.confirmMoveToFolder(cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath, displayName: displayName)))
+            presentDialog(.confirmMoveToFolder(cardId: cardId, folderPath: folderPath, parentProjectPath: parentProjectPath, displayName: displayName))
         }
     }
 

@@ -3,16 +3,6 @@ import AppKit
 import KanbanCodeCore
 import MarkdownUI
 
-/// Last message's rendered height — used as the "near bottom" threshold so
-/// images / tall messages don't prematurely turn off auto-scroll. Reported
-/// via GeometryReader on whichever row is currently last.
-private struct LastMessageHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 80
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 struct ChannelPullRequestReference: Identifiable, Equatable {
     let id: String
     let number: Int
@@ -221,14 +211,20 @@ private struct ChatMessageBody: View {
     /// and layer our own cmd+hover URL linkification on top. Falls back to plain
     /// text if the parser chokes.
     private var inlineAttributed: AttributedString {
-        let parsed = try? AttributedString(
-            markdown: displayText,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )
-        var attr = parsed ?? AttributedString(displayText)
-        applyChatPullRequestLinks(to: &attr, urlForNumber: urlForPullRequestNumber)
-        if linksActive { applyChatURLLinks(to: &attr) }
-        return attr
+        RenderDiagnostics.measure(
+            "ChannelChatView.inlineMarkdown",
+            thresholdMs: 8,
+            metadata: "chars=\(displayText.count) links=\(linksActive)"
+        ) {
+            let parsed = try? AttributedString(
+                markdown: displayText,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )
+            var attr = parsed ?? AttributedString(displayText)
+            applyChatPullRequestLinks(to: &attr, urlForNumber: urlForPullRequestNumber)
+            if linksActive { applyChatURLLinks(to: &attr) }
+            return attr
+        }
     }
 }
 
@@ -362,10 +358,8 @@ struct ChannelChatView: View {
     @State private var rosterExpanded = false
     @State private var isNearBottom: Bool = true
     @State private var unseenNewCount: Int = 0
-    @State private var distanceFromBottom: CGFloat = 0
     @State private var isCmdHeld: Bool = false
     @State private var cmdMonitor: Any?
-    @State private var lastMessageHeight: CGFloat = 80
     @State private var showingShareDialog: Bool = false
     @State private var showSearch = false
     @State private var searchText = ""
@@ -379,6 +373,9 @@ struct ChannelChatView: View {
     @State private var searchLoadedAll = false
     @State private var searchLoadedMessages: [ChannelMessage] = []
     @State private var retainedMessages: [ChannelMessage] = []
+    @State private var localDraft = ""
+    @State private var localDraftKey = ""
+    @State private var draftCommitTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
     @FocusState private var isSearchFieldFocused: Bool
 
@@ -386,7 +383,7 @@ struct ChannelChatView: View {
     private static let searchPageSize = 500
 
     private var displayedMessages: [ChannelMessage] {
-        retainedMessages.isEmpty ? messages : retainedMessages
+        retainedMessages.isEmpty ? Self.cappedMessages(messages) : retainedMessages
     }
 
     private var currentMatchMessageId: String? {
@@ -436,18 +433,23 @@ struct ChannelChatView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 0) {
-                header
-                shareBanner
-                if rosterExpanded { rosterRow }
-                Divider()
-                messageList
-                Divider()
-                composer
-            }
-            if showSearch {
-                channelSearchBar
+        RenderDiagnostics.measure(
+            "ChannelChatView.body",
+            metadata: "channel=\(channel.name) messages=\(messages.count) displayed=\(displayedMessages.count)"
+        ) {
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    header
+                    shareBanner
+                    if rosterExpanded { rosterRow }
+                    Divider()
+                    messageList
+                    Divider()
+                    composer
+                }
+                if showSearch {
+                    channelSearchBar
+                }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -460,6 +462,7 @@ struct ChannelChatView: View {
             .hidden()
         }
         .onAppear {
+            syncLocalDraftIfNeeded()
             cmdMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 let cmd = event.modifierFlags.contains(.command)
                 if cmd != isCmdHeld { isCmdHeld = cmd }
@@ -473,6 +476,10 @@ struct ChannelChatView: View {
                 cmdMonitor = nil
             }
             isCmdHeld = false
+            commitLocalDraftNow()
+        }
+        .onChange(of: localDraft) {
+            scheduleLocalDraftCommit()
         }
         .sheet(isPresented: $showingShareDialog) {
             ChannelShareDialog(
@@ -754,7 +761,6 @@ struct ChannelChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         if !hasRealMessages { emptyState }
-                        let lastId = displayedMessages.last?.id
                         ForEach(displayedMessages) { m in
                             messageRow(m, mine: isMine(m))
                                 .id(m.id)
@@ -766,42 +772,22 @@ struct ChannelChatView: View {
                                             .allowsHitTesting(false)
                                     }
                                 }
-                                .background {
-                                    if m.id == lastId {
-                                        GeometryReader { geo in
-                                            Color.clear.preference(
-                                                key: LastMessageHeightKey.self,
-                                                value: geo.size.height
-                                            )
-                                        }
-                                    }
-                                }
                         }
                         workingParticipantsList
                         Color.clear.frame(height: 4).id("__bottom__")
                     }
                     .padding(.vertical, 12)
                 }
-                .onPreferenceChange(LastMessageHeightKey.self) { h in
-                    lastMessageHeight = h
-                }
-                .onScrollGeometryChange(for: CGFloat.self) { geo in
-                    let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
-                    return max(0, maxScroll - geo.contentOffset.y)
-                } action: { _, distance in
-                    distanceFromBottom = distance
-                }
-                // Track whether the user is reading near the bottom. Threshold
-                // = max(80, last-message-height + 40): if the last message is
-                // a tall image, users scrolled anywhere within it still count
-                // as "near bottom" and get auto-scroll on new messages.
                 .onScrollGeometryChange(for: Bool.self) { geo in
                     let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
-                    let threshold = max(80, lastMessageHeight + 40)
-                    return (maxScroll - geo.contentOffset.y) < threshold
+                    return (maxScroll - geo.contentOffset.y) < 140
                 } action: { _, nearBottom in
+                    guard nearBottom != isNearBottom else { return }
                     isNearBottom = nearBottom
-                    if nearBottom { unseenNewCount = 0 }
+                    if nearBottom {
+                        unseenNewCount = 0
+                        syncDisplayedMessages(preserveExisting: false)
+                    }
                 }
                 .onChange(of: messages) { old, new in
                     let latestChanged = old.last?.id != new.last?.id
@@ -820,23 +806,10 @@ struct ChannelChatView: View {
                 }
                 .onChange(of: activelyWorkingMemberIds) { old, new in
                     let newlyWorking = Set(new).subtracting(Set(old))
-                    let insertedRows = max(1, new.count - old.count)
-                    let expectedInsertedHeight = CGFloat(insertedRows) * 34 + 36
-                    let shouldFollow = !newlyWorking.isEmpty
-                        && (isNearBottom || distanceFromBottom <= expectedInsertedHeight + 48)
-                    if shouldFollow {
+                    if !newlyWorking.isEmpty && isNearBottom {
                         withAnimation(.easeOut(duration: 0.15)) {
                             proxy.scrollTo("__bottom__", anchor: .bottom)
                         }
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(50))
-                            proxy.scrollTo("__bottom__", anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: isNearBottom) { _, nearBottom in
-                    if nearBottom {
-                        syncDisplayedMessages(preserveExisting: false)
                     }
                 }
                 .onChange(of: currentMatchPosition) {
@@ -845,19 +818,11 @@ struct ChannelChatView: View {
                 .onChange(of: searchMatchMessageIds) {
                     scrollToCurrentSearchMatch(proxy)
                 }
-                // `.onAppear` alone doesn't scroll to the real bottom — the
-                // LazyVStack hasn't realized rows yet, so the scrollable height
-                // is still 0 and `scrollTo` settles mid-content. Call it once
-                // synchronously, then again on the next two runloop ticks to
-                // catch post-layout heights.
                 .task(id: channel.name) {
                     unseenNewCount = 0
                     isNearBottom = true
                     syncDisplayedMessages(preserveExisting: false)
-                    proxy.scrollTo("__bottom__", anchor: .bottom)
-                    try? await Task.sleep(for: .milliseconds(16))
-                    proxy.scrollTo("__bottom__", anchor: .bottom)
-                    try? await Task.sleep(for: .milliseconds(100))
+                    await Task.yield()
                     proxy.scrollTo("__bottom__", anchor: .bottom)
                 }
 
@@ -1390,10 +1355,38 @@ struct ChannelChatView: View {
             placeholderOverride: "Message #\(channel.name)",
             mentionCandidates: channel.members.map { $0.handle },
             focusRequestToken: focusRequestToken,
-            onSend: { body, imagePaths in onSend(body, imagePaths) },
-            text: $draft,
+            onSend: { body, imagePaths in
+                onSend(body, imagePaths)
+                draft = ""
+            },
+            text: $localDraft,
             pastedImages: $draftImages
         )
+    }
+
+    private func syncLocalDraftIfNeeded(force: Bool = false) {
+        guard force || localDraftKey != channel.name else { return }
+        localDraftKey = channel.name
+        localDraft = draft
+    }
+
+    private func commitLocalDraft() {
+        guard localDraft != draft else { return }
+        draft = localDraft
+    }
+
+    private func scheduleLocalDraftCommit() {
+        draftCommitTask?.cancel()
+        draftCommitTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            commitLocalDraft()
+        }
+    }
+
+    private func commitLocalDraftNow() {
+        draftCommitTask?.cancel()
+        commitLocalDraft()
     }
 }
 
@@ -1417,9 +1410,30 @@ private struct ChatMessageImageThumbnail: View {
     let path: String
 
     @State private var isHovering = false
+    @State private var image: NSImage?
 
     var body: some View {
-        if let image = NSImage(contentsOfFile: path) {
+        Group {
+            if let image {
+                thumbnail(image)
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: 140, height: 96)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.app(.title3))
+                            .foregroundStyle(.tertiary)
+                    }
+            }
+        }
+        .task(id: path) {
+            image = await Self.loadImage(path: path)
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnail(_ image: NSImage) -> some View {
             Button {
                 NSWorkspace.shared.open(URL(fileURLWithPath: path))
             } label: {
@@ -1445,7 +1459,13 @@ private struct ChatMessageImageThumbnail: View {
                     .frame(width: size.width * scale, height: size.height * scale)
                     .padding(4)
             }
-        }
+    }
+
+    private static func loadImage(path: String) async -> NSImage? {
+        await Task.detached(priority: .utility) {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+            return NSImage(data: data)
+        }.value
     }
 }
 
@@ -1466,14 +1486,16 @@ struct DMChatView: View {
     @State private var unseenNewCount: Int = 0
     @State private var isCmdHeld: Bool = false
     @State private var cmdMonitor: Any?
-    @State private var lastMessageHeight: CGFloat = 80
     @State private var retainedMessages: [ChannelMessage] = []
+    @State private var localDraft = ""
+    @State private var localDraftKey = ""
+    @State private var draftCommitTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
 
     private static let retainedScrollbackLimit = 500
 
     private var displayedMessages: [ChannelMessage] {
-        retainedMessages.isEmpty ? messages : retainedMessages
+        retainedMessages.isEmpty ? Self.cappedMessages(messages) : retainedMessages
     }
 
     var body: some View {
@@ -1486,6 +1508,7 @@ struct DMChatView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
+            syncLocalDraftIfNeeded()
             cmdMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 let cmd = event.modifierFlags.contains(.command)
                 if cmd != isCmdHeld { isCmdHeld = cmd }
@@ -1498,6 +1521,10 @@ struct DMChatView: View {
                 cmdMonitor = nil
             }
             isCmdHeld = false
+            commitLocalDraftNow()
+        }
+        .onChange(of: localDraft) {
+            scheduleLocalDraftCommit()
         }
     }
 
@@ -1545,7 +1572,6 @@ struct DMChatView: View {
                                 .padding(.vertical, 24)
                                 .frame(maxWidth: .infinity, alignment: .center)
                         }
-                        let lastId = displayedMessages.last?.id
                         ForEach(displayedMessages) { m in
                             let mine = !myHandle.isEmpty
                                 && m.from.cardId == nil
@@ -1588,31 +1614,21 @@ struct DMChatView: View {
                                 }
                             }
                             .id(m.id)
-                            .background {
-                                if m.id == lastId {
-                                    GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: LastMessageHeightKey.self,
-                                            value: geo.size.height
-                                        )
-                                    }
-                                }
-                            }
                         }
                         Color.clear.frame(height: 4).id("__dm_bottom__")
                     }
                     .padding(.vertical, 12)
                 }
-                .onPreferenceChange(LastMessageHeightKey.self) { h in
-                    lastMessageHeight = h
-                }
                 .onScrollGeometryChange(for: Bool.self) { geo in
                     let maxScroll = max(0, geo.contentSize.height - geo.containerSize.height)
-                    let threshold = max(80, lastMessageHeight + 40)
-                    return (maxScroll - geo.contentOffset.y) < threshold
+                    return (maxScroll - geo.contentOffset.y) < 140
                 } action: { _, nearBottom in
+                    guard nearBottom != isNearBottom else { return }
                     isNearBottom = nearBottom
-                    if nearBottom { unseenNewCount = 0 }
+                    if nearBottom {
+                        unseenNewCount = 0
+                        syncDisplayedMessages(preserveExisting: false)
+                    }
                 }
                 .onChange(of: messages) { old, new in
                     let latestChanged = old.last?.id != new.last?.id
@@ -1625,19 +1641,11 @@ struct DMChatView: View {
                         unseenNewCount += max(1, new.count - old.count)
                     }
                 }
-                .onChange(of: isNearBottom) { _, nearBottom in
-                    if nearBottom {
-                        syncDisplayedMessages(preserveExisting: false)
-                    }
-                }
                 .task(id: other.handle) {
                     unseenNewCount = 0
                     isNearBottom = true
                     syncDisplayedMessages(preserveExisting: false)
-                    proxy.scrollTo("__dm_bottom__", anchor: .bottom)
-                    try? await Task.sleep(for: .milliseconds(16))
-                    proxy.scrollTo("__dm_bottom__", anchor: .bottom)
-                    try? await Task.sleep(for: .milliseconds(100))
+                    await Task.yield()
                     proxy.scrollTo("__dm_bottom__", anchor: .bottom)
                 }
 
@@ -1676,15 +1684,44 @@ struct DMChatView: View {
             cardId: "dm:\(other.handle)",
             placeholderOverride: "Message @\(other.handle)",
             mentionCandidates: [other.handle],
-            onSend: { body, imagePaths in onSend(body, imagePaths) },
-            text: $draft,
+            onSend: { body, imagePaths in
+                onSend(body, imagePaths)
+                draft = ""
+            },
+            text: $localDraft,
             pastedImages: $draftImages
         )
     }
 
+    private func syncLocalDraftIfNeeded(force: Bool = false) {
+        let key = "\(other.handle)|\(other.cardId ?? "")"
+        guard force || localDraftKey != key else { return }
+        localDraftKey = key
+        localDraft = draft
+    }
+
+    private func commitLocalDraft() {
+        guard localDraft != draft else { return }
+        draft = localDraft
+    }
+
+    private func scheduleLocalDraftCommit() {
+        draftCommitTask?.cancel()
+        draftCommitTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            commitLocalDraft()
+        }
+    }
+
+    private func commitLocalDraftNow() {
+        draftCommitTask?.cancel()
+        commitLocalDraft()
+    }
+
     private func syncDisplayedMessages(preserveExisting: Bool) {
         guard preserveExisting else {
-            retainedMessages = messages
+            retainedMessages = Self.cappedMessages(messages)
             return
         }
         var merged = retainedMessages.isEmpty ? messages : retainedMessages
@@ -1701,10 +1738,11 @@ struct DMChatView: View {
                 merged.append(message)
             }
         }
-        if merged.count > Self.retainedScrollbackLimit {
-            merged = Array(merged.suffix(Self.retainedScrollbackLimit))
-        }
-        retainedMessages = merged
+        retainedMessages = Self.cappedMessages(merged)
+    }
+
+    private static func cappedMessages(_ source: [ChannelMessage]) -> [ChannelMessage] {
+        source.count > retainedScrollbackLimit ? Array(source.suffix(retainedScrollbackLimit)) : source
     }
 
     private static func copyToPasteboard(_ text: String) {

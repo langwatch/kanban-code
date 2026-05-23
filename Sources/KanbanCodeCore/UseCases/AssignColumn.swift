@@ -20,13 +20,21 @@ public enum AssignColumn {
             return .backlog
         }
 
-        // Actively working always shows in progress — even if manually archived.
-        // If the user talks to an archived session, it should come back to life.
+        // Archive is sticky for cards without a live work signal. Historical
+        // hook/activity data can be stale; don't let it resurrect old sessions.
+        // A legitimately restarted archived card still comes back below because
+        // `hasWorktree` is true for live tmux/worktree-backed work.
+        if link.manuallyArchived && !hasWorktree {
+            return .allSessions
+        }
+
+        // Actively working always shows in progress unless the archive guard
+        // above proved there is no live work signal.
         if activityState == .activelyWorking {
             return .inProgress
         }
 
-        // Archive wins over everything else
+        // Archive wins over everything else.
         if link.manuallyArchived {
             return .allSessions
         }

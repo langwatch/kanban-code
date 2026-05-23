@@ -62,6 +62,26 @@ struct CodexSessionParserTests {
         })
     }
 
+    @Test("Reads bounded Codex transcript tail without full prefix")
+    func readsTranscriptTail() async throws {
+        let hugePrefix = String(repeating: "x", count: 260_000)
+        let session = """
+        {"timestamp":"2026-04-19T09:59:59Z","type":"ignored","payload":"\(hugePrefix)"}
+        {"timestamp":"2026-04-19T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Old prompt"}]}}
+        {"timestamp":"2026-04-19T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Old answer"}]}}
+        {"timestamp":"2026-04-19T10:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Recent prompt"}]}}
+        {"timestamp":"2026-04-19T10:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recent answer"}]}}
+        """
+        let path = try writeTempSession(session)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let result = try await CodexSessionParser.readTail(from: path, maxTurns: 2)
+
+        #expect(result.turns.map(\.textPreview) == ["Recent prompt", "Recent answer"])
+        #expect(result.hasMore)
+        #expect(result.turns[0].lineNumber < result.turns[1].lineNumber)
+    }
+
     @Test("Extracts session id from session_meta")
     func extractsSessionId() async throws {
         let path = try writeTempSession(sampleSession)

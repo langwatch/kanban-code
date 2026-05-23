@@ -77,6 +77,7 @@ struct CardDetailView: View {
     // loaded one card at a time so terminal-only card switches do not scan
     // the entire drafts directory during SwiftUI view initialization.
     @State private var chatDrafts: [String: ChatDraft] = [:]
+    @State private var chatDraftSaveTasks: [String: Task<Void, Never>] = [:]
     @State private var chatPendingMessage: String?
 
     private var chatDraftText: Binding<String> {
@@ -86,7 +87,7 @@ struct CardDetailView: View {
                 var draft = chatDrafts[card.id] ?? ChatDraft()
                 draft.text = newValue
                 chatDrafts[card.id] = draft
-                ChatDraft.save(cardId: card.id, draft: draft)
+                scheduleChatDraftSave(cardId: card.id, draft: draft)
             }
         )
     }
@@ -98,7 +99,7 @@ struct CardDetailView: View {
                 var draft = chatDrafts[card.id] ?? ChatDraft()
                 draft.images = newValue
                 chatDrafts[card.id] = draft
-                ChatDraft.save(cardId: card.id, draft: draft)
+                scheduleChatDraftSave(cardId: card.id, draft: draft)
             }
         )
     }
@@ -214,7 +215,11 @@ struct CardDetailView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        RenderDiagnostics.measure(
+            "CardDetailView.body",
+            metadata: "card=\(card.id.prefix(12)) tab=\(selectedTab) turns=\(turns.count) expanded=\(isExpanded)"
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
             if !isExpanded {
                 normalHeader
             }
@@ -249,6 +254,7 @@ struct CardDetailView: View {
             case .prompt:
                 PromptTabView(card: card, onCopyToast: showCopyToast, showEditPromptSheet: $showEditPromptSheet)
             }
+            }
         }
         .frame(maxWidth: .infinity)
         .sheet(isPresented: Binding(
@@ -262,6 +268,7 @@ struct CardDetailView: View {
             )
         }
         .onChange(of: card.id) { oldId, _ in
+            flushChatDraftSave(cardId: oldId)
             // Save current tab selection for the old card before switching
             if !oldId.isEmpty {
                 cardTabMemory[oldId] = (terminal: selectedTerminalSession, browser: selectedBrowserTabId)
@@ -412,6 +419,7 @@ struct CardDetailView: View {
             stopHistoryWatcher()
             pathPollTask?.cancel()
             pathPollTask = nil
+            flushChatDraftSave(cardId: card.id)
         }
         .sheet(isPresented: $showRenameSheet) {
             RenameSessionDialog(
@@ -1040,9 +1048,7 @@ struct CardDetailView: View {
             Button(action: onResume) {
                 HStack(spacing: 8) {
                     Label("Resume", systemImage: "play.fill")
-                    Text(AppShortcut.resumeAssistant.displayString)
-                        .font(.app(.caption).monospaced())
-                        .foregroundStyle(.white.opacity(0.8))
+                    resumeShortcutLabel
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -1083,9 +1089,7 @@ struct CardDetailView: View {
                 Button(action: onResume) {
                     HStack(spacing: 8) {
                         Label("Resume \(assistant.displayName)", systemImage: "play.fill")
-                        Text(AppShortcut.resumeAssistant.displayString)
-                            .font(.app(.caption).monospaced())
-                            .foregroundStyle(.white.opacity(0.8))
+                        resumeShortcutLabel
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1102,6 +1106,17 @@ struct CardDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var resumeShortcutLabel: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(AppShortcut.resumeAssistant.displayString.enumerated()), id: \.offset) { _, symbol in
+                Text(String(symbol))
+            }
+        }
+        .font(.app(.callout, weight: .semibold).monospaced())
+        .foregroundStyle(.white.opacity(0.82))
+        .accessibilityLabel(AppShortcut.resumeAssistant.displayString)
     }
 
     // MARK: - Shell Tab
@@ -1630,12 +1645,16 @@ struct CardDetailView: View {
         let assistant = card.link.effectiveAssistant
         let store = sessionStore
         let isEmpty = turns.isEmpty
+        let loadStart = RenderDiagnostics.mark()
 
         do {
             // File I/O + JSON parsing runs OFF the main actor to avoid freezing
             let parsed = try await Task.detached { () -> TranscriptReader.ReadResult in
                 if assistant == .claude {
                     return try await TranscriptReader.readTail(from: path, maxTurns: loadCount)
+                }
+                if assistant == .codex {
+                    return try await CodexSessionParser.readTail(from: path, maxTurns: loadCount)
                 }
                 let allTurns = try await store.readTranscript(sessionPath: path)
                 let page = Array(allTurns.suffix(loadCount))
@@ -1664,6 +1683,12 @@ struct CardDetailView: View {
         } catch {
             // Silently fail — empty history is fine
         }
+        RenderDiagnostics.logIfSlow(
+            "CardDetailView.loadHistory",
+            since: loadStart,
+            thresholdMs: 40,
+            metadata: "card=\(myCardId.prefix(12)) assistant=\(assistant.rawValue) turns=\(turns.count) path=\((path as NSString).lastPathComponent)"
+        )
         if card.id == myCardId { isLoadingHistory = false }
     }
 
@@ -1681,6 +1706,28 @@ struct CardDetailView: View {
         }
     }
 
+    private func scheduleChatDraftSave(cardId: String, draft: ChatDraft) {
+        chatDraftSaveTasks[cardId]?.cancel()
+        chatDraftSaveTasks[cardId] = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            let latest = chatDrafts[cardId] ?? draft
+            await Task.detached(priority: .utility) {
+                ChatDraft.save(cardId: cardId, draft: latest)
+            }.value
+            chatDraftSaveTasks[cardId] = nil
+        }
+    }
+
+    private func flushChatDraftSave(cardId: String) {
+        chatDraftSaveTasks[cardId]?.cancel()
+        chatDraftSaveTasks[cardId] = nil
+        guard let draft = chatDrafts[cardId] else { return }
+        Task.detached(priority: .utility) {
+            ChatDraft.save(cardId: cardId, draft: draft)
+        }
+    }
+
     private func loadMoreHistory() async {
         guard hasMoreTurns, !isLoadingMore else { return }
         guard let path = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else { return }
@@ -1690,10 +1737,14 @@ struct CardDetailView: View {
 
         isLoadingMore = true
         let newCount = turns.count + (preferChatView ? Self.chatPageSize : Self.pageSize)
+        let loadStart = RenderDiagnostics.mark()
         do {
             let result = try await Task.detached { () -> TranscriptReader.ReadResult in
                 if assistant == .claude {
                     return try await TranscriptReader.readTail(from: path, maxTurns: newCount)
+                }
+                if assistant == .codex {
+                    return try await CodexSessionParser.readTail(from: path, maxTurns: newCount)
                 }
                 let allTurns = try await store.readTranscript(sessionPath: path)
                 let page = Array(allTurns.suffix(newCount))
@@ -1710,6 +1761,12 @@ struct CardDetailView: View {
         } catch {
             // Silently fail
         }
+        RenderDiagnostics.logIfSlow(
+            "CardDetailView.loadMoreHistory",
+            since: loadStart,
+            thresholdMs: 40,
+            metadata: "card=\(myCardId.prefix(12)) assistant=\(assistant.rawValue) targetTurns=\(newCount) path=\((path as NSString).lastPathComponent)"
+        )
         if card.id == myCardId { isLoadingMore = false }
     }
 
