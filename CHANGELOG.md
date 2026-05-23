@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.28](https://github.com/langwatch/kanban-code/compare/v0.1.27...v0.1.28) (2026-05-23)
+
+
+### Features
+
+* **app:** improve prompts and self compact settings ([50915f2](https://github.com/langwatch/kanban-code/commit/50915f2cf218e2b87f53428867cfba00f16b34a2))
+* **channels:** add from filters to search ([7c8a4d1](https://github.com/langwatch/kanban-code/commit/7c8a4d1c1f8b7305315fdf6649aa199ccbb2bfe3))
+* **cli:** add self-compact command ([fdda9c2](https://github.com/langwatch/kanban-code/commit/fdda9c267604649daa97d43f03c1d636b885dd3c))
+* **prompts:** preserve inline image placement ([e577db4](https://github.com/langwatch/kanban-code/commit/e577db45d8a169a2372d1663543fdd147ec91bfc))
+* **settings:** link to full disk access permission ([971ab1f](https://github.com/langwatch/kanban-code/commit/971ab1fd1f2ef68a8519ff9b13f5e8072fa073ad))
+* **shortcuts:** resume ended sessions with command return ([c76f94e](https://github.com/langwatch/kanban-code/commit/c76f94e62231e8553dad7cdd741e7027bed7ed69))
+* **ui:** add channel activity and navigation cues ([bd9ab1e](https://github.com/langwatch/kanban-code/commit/bd9ab1eb8e676c3a4733d84e08a51cc7d37c0930))
+
+
+### Bug Fixes
+
+* **app:** avoid stale self compact prompts ([d66a6ce](https://github.com/langwatch/kanban-code/commit/d66a6ce31e3efb17db8d99f1b8f34b4368766f93))
+* **app:** include message participants in channel activity ([c04b20f](https://github.com/langwatch/kanban-code/commit/c04b20f18d5560e4d2f22189779ad5166685cf81))
+* **app:** reduce UI hangs and stale undo crashes ([796c5e1](https://github.com/langwatch/kanban-code/commit/796c5e1473a8856c615677fff673bda134a04283))
+* **app:** throttle active card branch discovery ([e37aaf4](https://github.com/langwatch/kanban-code/commit/e37aaf49b300725cbcda6aeb3a6d46f0732bc313))
+* **channels:** improve search and hang diagnostics ([4235f35](https://github.com/langwatch/kanban-code/commit/4235f35b0a9a04b2fd3d9d83d697e935dad7201f))
+* **channels:** repair tmux ownership and self-compact follow-up ([7370ab9](https://github.com/langwatch/kanban-code/commit/7370ab91d2a9d03109ac8d928a03fb9669e1b65d))
+* **chat:** page Codex history and restore working state ([25dbc86](https://github.com/langwatch/kanban-code/commit/25dbc864d64d4559bffc5ef6de0e8136e3a2100e))
+* **cli:** submit self compact command reliably ([f8c8528](https://github.com/langwatch/kanban-code/commit/f8c852875e96b4b4991d581d8758b277e7865366))
+* **cli:** use fixed self compact follow-up delay ([4057c0c](https://github.com/langwatch/kanban-code/commit/4057c0c34ca5db1d40b98c71caddecf2942e74fa))
+* **launch:** keep prompt text with image attachments ([36d305a](https://github.com/langwatch/kanban-code/commit/36d305ad8d00dee8c24e902c0b4ecdb34c18647a))
+* limit activity refresh to discovered sessions ([2eb52bb](https://github.com/langwatch/kanban-code/commit/2eb52bb9a1bfeea45e9c5a5696f7f518fca6ea1f))
+* stabilize chat rendering and add UI diagnostics ([825640b](https://github.com/langwatch/kanban-code/commit/825640b257f9a3cbdaf440945d41f151b8fce971))
+* **store:** avoid observable state exclusivity crash ([4a7c2d7](https://github.com/langwatch/kanban-code/commit/4a7c2d77f08ff0bee3054feb4a80182aff990e53))
+* **ui:** reduce channel render load and stabilize prompt height ([44213ca](https://github.com/langwatch/kanban-code/commit/44213ca012408a4987ea5ae7eff227b721249612))
+* **ui:** render all card toolbar PR pills ([6afd05c](https://github.com/langwatch/kanban-code/commit/6afd05cb8b81df757f3a3430a905596efa3b0399))
+* **ui:** render card drawer PRs as separate toolbar buttons ([4336516](https://github.com/langwatch/kanban-code/commit/4336516e2cfea687129ee536e08d4c3e044d92bc))
+* **ui:** show more PR buttons in card toolbar ([fa6e2b5](https://github.com/langwatch/kanban-code/commit/fa6e2b581fe66b39fa2dfefd36c2cb82da77db62))
+* **ui:** show sorted PR badges in card drawer ([9a47f99](https://github.com/langwatch/kanban-code/commit/9a47f9974df2e63585e8292a0358af3609d31a63))
+
 ## [0.1.27](https://github.com/langwatch/kanban-code/compare/v0.1.26...v0.1.27) (2026-04-29)
 
 
