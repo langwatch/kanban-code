@@ -118,30 +118,24 @@ export async function runShare(opts: RunShareOptions): Promise<ShareRunHandle> {
   // goes through getaddrinfo, the same path curl/browsers use) until it
   // succeeds primes the cache with a positive entry.
   const publicUrl = `${tunnel.url}/?token=${encodeURIComponent(token)}`;
+  try {
+    const host = new URL(tunnel.url).hostname;
+    await warmDnsImpl(host);
+  } catch (err) {
+    writeError(`dns warmup: ${err instanceof Error ? err.message : err}`);
+  }
+  // Then: wait for the edge → connector path to actually route to our
+  // Express server. DNS resolving alone leaves a 5-30s window where
+  // Cloudflare returns Error 1033.
+  try {
+    await warmTunnelImpl(tunnel.url);
+  } catch (err) {
+    writeError(`tunnel warmup: ${err instanceof Error ? err.message : err}`);
+  }
   writeLine(`url: ${publicUrl}`);
   writeLine(`token: ${token}`);
   writeLine(`port: ${port}`);
   writeLine(`expiresAt: ${new Date(expiresAt).toISOString()}`);
-
-  // Warmups are useful, but best-effort. Do not block the parent process
-  // from receiving the URL: DNS/edge warmups can time out even after
-  // cloudflared has allocated a valid quick-tunnel URL.
-  void (async () => {
-    try {
-      const host = new URL(tunnel.url).hostname;
-      await warmDnsImpl(host);
-    } catch (err) {
-      writeError(`dns warmup: ${err instanceof Error ? err.message : err}`);
-    }
-    // Then: wait for the edge → connector path to actually route to our
-    // Express server. DNS resolving alone leaves a 5-30s window where
-    // Cloudflare returns Error 1033.
-    try {
-      await warmTunnelImpl(tunnel.url);
-    } catch (err) {
-      writeError(`tunnel warmup: ${err instanceof Error ? err.message : err}`);
-    }
-  })();
 
   // Coordinated teardown. Idempotent.
   let torndown = false;
