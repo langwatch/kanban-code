@@ -60,6 +60,24 @@ struct TranscriptReaderTests {
         #expect(turns.isEmpty)
     }
 
+    @Test("Notification preview reads bounded transcript tail")
+    func notificationPreviewReadsBoundedTail() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let path = (dir as NSString).appendingPathComponent("large.jsonl")
+        let hugeText = String(repeating: "x", count: 3 * 1024 * 1024)
+        let oldLine = #"{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":""# + hugeText + #""}]}}"#
+        let recentLine = #"{"type":"assistant","sessionId":"s1","message":{"content":[{"type":"text","text":"Recent answer"}]}}"#
+        try [oldLine, recentLine].joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+
+        let preview = await TranscriptNotificationReader.lastAssistantText(
+            transcriptPath: path,
+            assistant: .claude
+        )
+        #expect(preview == "Recent answer")
+    }
+
     @Test("Handles tool-use-only assistant responses")
     func toolUseOnly() async throws {
         let dir = try makeTempDir()

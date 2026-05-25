@@ -9,6 +9,7 @@ struct KanbanCodeApp: App {
 
     init() {
         MainThreadWatchdog.shared.start()
+        MemoryDiagnostics.shared.start()
         ChatBootstrap.run()
     }
 

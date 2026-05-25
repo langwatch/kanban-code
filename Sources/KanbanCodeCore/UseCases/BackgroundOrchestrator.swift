@@ -305,12 +305,10 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
             // Use the correct session store for the assistant (Gemini=JSON, Claude=JSONL)
             let assistant = link?.assistant ?? .claude
             let lastText: String?
-            if let store = registry?.store(for: assistant),
-               let turns = try? await store.readTranscript(sessionPath: transcriptPath) {
-                lastText = TranscriptNotificationReader.lastAssistantText(from: turns)
-            } else {
-                lastText = await TranscriptNotificationReader.lastAssistantText(transcriptPath: transcriptPath)
-            }
+            lastText = await TranscriptNotificationReader.lastAssistantText(
+                transcriptPath: transcriptPath,
+                assistant: assistant
+            )
 
             if let lastText {
                 let lineCount = lastText.components(separatedBy: "\n").count

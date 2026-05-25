@@ -6,8 +6,32 @@ public enum TranscriptNotificationReader {
     /// Get the last assistant text from a transcript file (Claude JSONL format).
     /// Returns nil if the file doesn't exist or has no assistant turns.
     public static func lastAssistantText(transcriptPath: String) async -> String? {
-        guard let turns = try? await TranscriptReader.readTurns(from: transcriptPath) else {
-            return nil
+        await lastAssistantText(transcriptPath: transcriptPath, assistant: .claude)
+    }
+
+    /// Get the last assistant text without loading the full transcript into memory.
+    ///
+    /// Notification hooks often fire in bursts, and active Claude transcripts can
+    /// be hundreds of MB. Reading only a small tail avoids multiplying those files
+    /// into many GB of transient String/JSON allocations.
+    public static func lastAssistantText(transcriptPath: String, assistant: CodingAssistant) async -> String? {
+        let turns: [ConversationTurn]
+        switch assistant {
+        case .claude:
+            guard let result = try? await TranscriptReader.readTail(from: transcriptPath, maxTurns: 20) else {
+                return nil
+            }
+            turns = result.turns
+        case .codex:
+            guard let result = try? await CodexSessionParser.readTail(from: transcriptPath, maxTurns: 20) else {
+                return nil
+            }
+            turns = result.turns
+        case .gemini:
+            guard let parsed = try? await GeminiSessionStore().readTranscript(sessionPath: transcriptPath) else {
+                return nil
+            }
+            turns = parsed
         }
         return lastAssistantText(from: turns)
     }
@@ -15,9 +39,7 @@ public enum TranscriptNotificationReader {
     /// Get the last assistant text from pre-parsed conversation turns.
     /// Works with turns from any session store (Claude, Gemini, etc.).
     public static func lastAssistantText(from turns: [ConversationTurn]) -> String? {
-        // Find the last assistant turn with text content
-        let assistantTurns = turns.filter { $0.role == "assistant" }
-        guard let lastTurn = assistantTurns.last else { return nil }
+        guard let lastTurn = turns.last(where: { $0.role == "assistant" }) else { return nil }
 
         // Join text-only content blocks
         let textBlocks = lastTurn.contentBlocks.compactMap { block -> String? in
