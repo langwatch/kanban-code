@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import KanbanCodeCore
 
 /// Bundles all parameters for the launch confirmation dialog.
@@ -1222,29 +1223,29 @@ struct ContentView: View {
             .task(id: "self-compact-monitor") {
                 await selfCompactMonitorLoop()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeChannelsChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeChannelsChanged).receive(on: RunLoop.main)) { _ in
                 store.dispatch(.refreshChannels)
                 channelsWatcher.syncChannelLogs(store.state.channels.map(\.name))
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeChannelMessagesChanged)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeChannelMessagesChanged).receive(on: RunLoop.main)) { note in
                 if let name = note.userInfo?["channelName"] as? String {
                     store.dispatch(.refreshChannelMessages(channelName: name))
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeDMLogsChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeDMLogsChanged).receive(on: RunLoop.main)) { _ in
                 if let other = store.state.selectedDMParticipant {
                     store.dispatch(.refreshDMMessages(other: other))
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeReadStateChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeReadStateChanged).receive(on: RunLoop.main)) { _ in
                 store.dispatch(.refreshChannelReadState)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectChannel)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectChannel).receive(on: RunLoop.main)) { note in
                 if let name = note.userInfo?["channelName"] as? String {
                     store.dispatch(.selectChannel(name: name))
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectDM)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectDM).receive(on: RunLoop.main)) { note in
                 if let handle = note.userInfo?["dmHandle"] as? String {
                     // Look up the card for this handle in any channel's membership.
                     var cardId: String?
@@ -1264,35 +1265,35 @@ struct ContentView: View {
                 keyMonitor = nil
                 channelsWatcher.stop()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeToggleSearch)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeToggleSearch).receive(on: RunLoop.main)) { _ in
                 if showSearch { closePalette() } else { openPalette() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeNewTask)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeNewTask).receive(on: RunLoop.main)) { _ in
                 presentNewTask()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeHookEvent)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeHookEvent).receive(on: RunLoop.main)) { _ in
                 Task {
                     await orchestrator.processHookEvents()
                     await store.refreshActivity()
                     systemTray.update()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectCard)) { notification in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSelectCard).receive(on: RunLoop.main)) { notification in
                 if let cardId = notification.userInfo?["cardId"] as? String {
                     store.dispatch(.selectCard(cardId: cardId))
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeOpenProject)) { notification in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeOpenProject).receive(on: RunLoop.main)) { notification in
                 if let path = notification.userInfo?["path"] as? String {
                     openOrCreateProject(path: path)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeAddLink)) { notification in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeAddLink).receive(on: RunLoop.main)) { notification in
                 if let cardId = notification.userInfo?["cardId"] as? String {
                     showAddLinkCardId = cardId
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSettingsChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeSettingsChanged).receive(on: RunLoop.main)) { _ in
                 Task {
                     await store.loadSettingsAndCache()
                     await store.reconcile()
@@ -1307,7 +1308,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeQuitRequested)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeQuitRequested).receive(on: RunLoop.main)) { _ in
                 // Tear down any active channel shares first — they're the only
                 // child processes we own that survive an unclean exit.
                 Task { await shareController.stopAll() }
@@ -1333,7 +1334,7 @@ struct ContentView: View {
             .sheet(isPresented: $showQuitConfirmation) {
                 quitConfirmationSheet
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification).receive(on: RunLoop.main)) { _ in
                 store.appIsActive = true
                 store.dispatch(.setAppFrontmost(true))
                 Task {
@@ -1341,7 +1342,7 @@ struct ContentView: View {
                     systemTray.update()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification).receive(on: RunLoop.main)) { _ in
                 store.appIsActive = false
                 store.dispatch(.setAppFrontmost(false))
             }

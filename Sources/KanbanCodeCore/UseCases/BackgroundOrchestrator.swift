@@ -7,7 +7,6 @@ extension Notification.Name {
 
 /// Coordinates all background processes: session discovery, tmux polling,
 /// hook event processing, activity detection, PR tracking, and link management.
-@Observable
 public final class BackgroundOrchestrator: @unchecked Sendable {
     public var isRunning = false
 

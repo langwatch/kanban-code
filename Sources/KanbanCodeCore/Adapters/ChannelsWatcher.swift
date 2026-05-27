@@ -24,6 +24,30 @@ public final class ChannelsWatcher: @unchecked Sendable {
     private var perDMFds: [String: Int32] = [:]
     private let lock = NSLock()
 
+    private static func postOnMain(_ name: Notification.Name) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: name, object: nil)
+        }
+    }
+
+    private static func postChannelMessagesChanged(channelName: String) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .kanbanCodeChannelMessagesChanged,
+                object: nil,
+                userInfo: ["channelName": channelName]
+            )
+        }
+    }
+
+    private static func postDMLogsChanged(dmKey: String? = nil) {
+        DispatchQueue.main.async {
+            var userInfo: [AnyHashable: Any]?
+            if let dmKey { userInfo = ["dmKey": dmKey] }
+            NotificationCenter.default.post(name: .kanbanCodeDMLogsChanged, object: nil, userInfo: userInfo)
+        }
+    }
+
     public init(baseDir: String? = nil) {
         let root = baseDir ?? (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
         self.baseDir = (root as NSString).appendingPathComponent("channels")
@@ -112,7 +136,7 @@ public final class ChannelsWatcher: @unchecked Sendable {
             // Without this, the first message in a freshly-created channel is
             // invisible to the UI until the app is restarted.
             self.queue.async { self.refreshChannelLogs() }
-            NotificationCenter.default.post(name: .kanbanCodeChannelsChanged, object: nil)
+            Self.postOnMain(.kanbanCodeChannelsChanged)
             // The writer uses atomic rename, which orphans our fd. Re-attach
             // so the NEXT change also fires.
             self.queue.async { self.reattachChannelsFile() }
@@ -146,11 +170,7 @@ public final class ChannelsWatcher: @unchecked Sendable {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return }
         let source = Self.makeFileSource(fd: fd, queue: queue) {
-            NotificationCenter.default.post(
-                name: .kanbanCodeChannelMessagesChanged,
-                object: nil,
-                userInfo: ["channelName": name]
-            )
+            Self.postChannelMessagesChanged(channelName: name)
         } onCancel: {
             close(fd)
         }
@@ -184,7 +204,7 @@ public final class ChannelsWatcher: @unchecked Sendable {
         guard fd >= 0 else { return }
         let source = Self.makeFileSource(fd: fd, queue: queue) { [weak self] in
             guard let self else { return }
-            NotificationCenter.default.post(name: .kanbanCodeReadStateChanged, object: nil)
+            Self.postOnMain(.kanbanCodeReadStateChanged)
             // Atomic-rename writers orphan the fd — re-attach.
             self.queue.async { self.reattachReadState() }
         } onCancel: {
@@ -219,8 +239,9 @@ public final class ChannelsWatcher: @unchecked Sendable {
         guard fd >= 0 else { return }
         let source = Self.makeFileSource(fd: fd, queue: queue) { [weak self] in
             // Directory changed (likely new DM log file). Re-scan.
-            self?.queue.async { self?.refreshDMLogs() }
-            NotificationCenter.default.post(name: .kanbanCodeDMLogsChanged, object: nil)
+            guard let watcher = self else { return }
+            watcher.queue.async { [weak watcher] in watcher?.refreshDMLogs() }
+            Self.postDMLogsChanged()
         } onCancel: {
             close(fd)
         }
@@ -253,11 +274,7 @@ public final class ChannelsWatcher: @unchecked Sendable {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return }
         let source = Self.makeFileSource(fd: fd, queue: queue) {
-            NotificationCenter.default.post(
-                name: .kanbanCodeDMLogsChanged,
-                object: nil,
-                userInfo: ["dmKey": key]
-            )
+            Self.postDMLogsChanged(dmKey: key)
         } onCancel: {
             close(fd)
         }
