@@ -7,6 +7,18 @@ import { homedir } from "node:os";
 /// auto-sent queued prompts) to an agent's Slack channel. Human messages
 /// relayed *from* Slack must NOT go through here (they already appear in Slack).
 
+/// Marker prepended to every announced message. Because only automated,
+/// system-originated traffic flows through this module (never messages typed by
+/// a human in Slack), the marker lets anyone reading the channel tell a
+/// system-injected prompt (cron nudge, self-compact, auto-sent queued prompt)
+/// apart from the agent's own replies.
+export const SYSTEM_MESSAGE_PREFIX = "[SYSTEM MESSAGE]";
+
+/// Prepend the system marker to an automated announcement.
+export function formatSystemAnnouncement(text: string): string {
+  return `${SYSTEM_MESSAGE_PREFIX}\n${text}`;
+}
+
 function defaultConfigPath(): string {
   return process.env.KANBAN_AGENTS_CONFIG || join(homedir(), ".kanban-code", "agents.yaml");
 }
@@ -49,7 +61,7 @@ export async function announceToSlack(slug: string, text: string, opts: Announce
   const channel = await channelForSlug(slug, opts.configPath ?? defaultConfigPath(), c);
   if (!channel) return false;
   try {
-    await c.post(channel, text);
+    await c.post(channel, formatSystemAnnouncement(text));
     return true;
   } catch {
     return false;

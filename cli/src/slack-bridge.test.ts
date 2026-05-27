@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert";
 import { parse as parseYaml } from "yaml";
 import { routeSlackMessage, slackToPlain } from "./slack/inbound.js";
 import { slackAppManifest } from "./slack/manifest.js";
+import { formatSystemAnnouncement, SYSTEM_MESSAGE_PREFIX } from "./slack/announce.js";
 
 const MAPPING = { C123: "dependabot-scout", C999: "security-scout" };
 const reasonOf = (d: ReturnType<typeof routeSlackMessage>) => (d.action === "ignore" ? d.reason : undefined);
@@ -29,6 +30,19 @@ describe("routeSlackMessage", () => {
     assert.equal(slackToPlain("see <https://x.com|the docs> &amp; retry"), "see the docs (https://x.com) & retry");
     assert.match(slackToPlain("ping <@U123> now"), /ping\s+now/);
     assert.equal(slackToPlain("<https://ci.example/run>"), "https://ci.example/run");
+  });
+});
+
+describe("formatSystemAnnouncement", () => {
+  test("prepends the [SYSTEM MESSAGE] marker so automated traffic is distinguishable from agent replies", () => {
+    const out = formatSystemAnnouncement("Good morning, review the open Dependabot PRs.");
+    assert.equal(out, "[SYSTEM MESSAGE]\nGood morning, review the open Dependabot PRs.");
+    assert.ok(out.startsWith(SYSTEM_MESSAGE_PREFIX));
+  });
+
+  test("preserves multi-line bodies verbatim under the marker", () => {
+    const body = "line one\nline two";
+    assert.equal(formatSystemAnnouncement(body), `${SYSTEM_MESSAGE_PREFIX}\n${body}`);
   });
 });
 
