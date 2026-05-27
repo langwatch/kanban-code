@@ -104,6 +104,13 @@ struct CardDetailView: View {
         )
     }
     @State private var isLoadingMore = false
+    /// Raw JSONL turn window requested from the transcript reader.
+    ///
+    /// The reader applies `maxTurns` before merging consecutive assistant
+    /// entries. If pagination is based on the merged `turns.count`, sessions
+    /// with many assistant/tool fragments can plateau and keep requesting the
+    /// same raw tail forever.
+    @State private var historyRawLoadLimit = 0
     @Binding var selectedTab: DetailTab
     @Binding var pendingTerminalSession: String?
     @State private var showRenameSheet = false
@@ -286,6 +293,7 @@ struct CardDetailView: View {
             // Clear stale state synchronously so the new card never renders
             // with the previous card's turns or chat state.
             turns = []
+            historyRawLoadLimit = 0
             chatPendingMessage = nil
             checkpointMode = false
             // Set knownShellCount to current shells so onChange(of: tmuxLink)
@@ -297,6 +305,7 @@ struct CardDetailView: View {
             isLoadingHistory = false
             isLoadingMore = false
             hasMoreTurns = false
+            historyRawLoadLimit = 0
             await loadDraftForCurrentCard()
             browserTabs = hydrateBrowserTabs()
             terminalGrabFocus = false
@@ -345,6 +354,8 @@ struct CardDetailView: View {
             // restart the watcher so history starts updating live.
             guard selectedTab == .history || (selectedTab == .terminal && preferChatView) else { return }
             guard card.link.sessionLink?.sessionPath != nil else { return }
+            turns = []
+            historyRawLoadLimit = 0
             startHistoryWatcher()
             Task { await loadHistory() }
         }
@@ -1641,7 +1652,10 @@ struct CardDetailView: View {
 
         if turns.isEmpty { isLoadingHistory = true }
         let baseSize = preferChatView ? Self.chatPageSize : Self.pageSize
-        let loadCount = max(baseSize, turns.count)
+        if turns.isEmpty || historyRawLoadLimit < baseSize {
+            historyRawLoadLimit = baseSize
+        }
+        let loadCount = max(baseSize, historyRawLoadLimit)
         let assistant = card.link.effectiveAssistant
         let store = sessionStore
         let isEmpty = turns.isEmpty
@@ -1736,7 +1750,10 @@ struct CardDetailView: View {
         let store = sessionStore
 
         isLoadingMore = true
-        let newCount = turns.count + (preferChatView ? Self.chatPageSize : Self.pageSize)
+        let pageSize = preferChatView ? Self.chatPageSize : Self.pageSize
+        let currentRawLimit = max(historyRawLoadLimit, pageSize)
+        let newCount = currentRawLimit + pageSize
+        historyRawLoadLimit = newCount
         let loadStart = RenderDiagnostics.mark()
         do {
             let result = try await Task.detached { () -> TranscriptReader.ReadResult in
@@ -1925,6 +1942,7 @@ struct CardDetailView: View {
                 checkpointTurn = nil
                 // Force clear and reload turns so the view updates
                 turns = []
+                historyRawLoadLimit = 0
                 await loadHistory()
             } catch {
                 // Could show error toast
