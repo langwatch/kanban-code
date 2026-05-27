@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, readdirSync } from "node:fs";
 import { execSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, basename, matchesGlob } from "node:path";
@@ -12,17 +12,14 @@ import {
   TranscriptTurn,
   KanbanColumn,
 } from "./types.js";
-
-const KANBAN_DIR = join(homedir(), ".kanban-code");
-const CONTEXT_DIR = join(KANBAN_DIR, "context");
-const LINKS_PATH = join(KANBAN_DIR, "links.json");
-const SETTINGS_PATH = join(KANBAN_DIR, "settings.json");
+import { linksPath, settingsPath, contextDir, claudeProjectsDir } from "./paths.js";
 
 // ── Reading state files ──────────────────────────────────────────────
 
 export function readLinks(): Link[] {
-  if (!existsSync(LINKS_PATH)) return [];
-  const raw = JSON.parse(readFileSync(LINKS_PATH, "utf-8"));
+  const path = linksPath();
+  if (!existsSync(path)) return [];
+  const raw = JSON.parse(readFileSync(path, "utf-8"));
   // Container format: { links: [...] }
   if (raw && Array.isArray(raw.links)) return raw.links;
   if (Array.isArray(raw)) return raw;
@@ -30,15 +27,16 @@ export function readLinks(): Link[] {
 }
 
 export function readSettings(): Settings {
-  if (!existsSync(SETTINGS_PATH))
+  const path = settingsPath();
+  if (!existsSync(path))
     return { projects: [] };
-  return JSON.parse(readFileSync(SETTINGS_PATH, "utf-8"));
+  return JSON.parse(readFileSync(path, "utf-8"));
 }
 
 // ── Session context (tokens/cost) ────────────────────────────────────
 
 export function readSessionContext(sessionId: string): SessionContext | undefined {
-  const path = join(CONTEXT_DIR, `${sessionId}.json`);
+  const path = join(contextDir(), `${sessionId}.json`);
   if (!existsSync(path)) return undefined;
   try {
     return JSON.parse(readFileSync(path, "utf-8"));
@@ -305,6 +303,79 @@ export function sendTmuxEscape(
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+// ── Tmux session lifecycle (headless agent launch/resume) ────────────
+
+export function hasTmuxSession(name: string): boolean {
+  const tmux = findTmux();
+  try {
+    execSync(`${tmux} has-session -t ${shellEscape(name)} 2>/dev/null`, {
+      encoding: "utf-8",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/// Create a detached tmux session named `name` rooted at `cwd` and run
+/// `command` in it. `env` entries are set on the session (and inherited by the
+/// pane's shell) via tmux `-e`, avoiding fragile inline-shell quoting.
+export function createTmuxSession(
+  name: string,
+  cwd: string,
+  command: string,
+  env: Record<string, string> = {}
+): { ok: boolean; error?: string } {
+  const tmux = findTmux();
+  try {
+    const envFlags = Object.entries(env)
+      .map(([k, v]) => `-e ${shellEscape(`${k}=${v}`)}`)
+      .join(" ");
+    execSync(
+      `${tmux} new-session -d -s ${shellEscape(name)} -c ${shellEscape(cwd)} ${envFlags}`,
+      { encoding: "utf-8" }
+    );
+    // Let the pane's shell come up before sending the command.
+    execSync("sleep 0.2");
+    execSync(
+      `${tmux} send-keys -t ${shellEscape(name)} ${shellEscape(command)} Enter`,
+      { encoding: "utf-8" }
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export function killTmuxSession(name: string): { ok: boolean; error?: string } {
+  const tmux = findTmux();
+  try {
+    execSync(`${tmux} kill-session -t ${shellEscape(name)} 2>/dev/null`, {
+      encoding: "utf-8",
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/// Locate a Claude session transcript by scanning ~/.claude/projects/<dir>/.
+/// Encoding-independent: finds <sessionId>.jsonl wherever Claude placed it.
+export function findSessionJsonl(sessionId: string): string | undefined {
+  const root = claudeProjectsDir();
+  if (!existsSync(root)) return undefined;
+  const target = `${sessionId}.jsonl`;
+  try {
+    for (const dir of readdirSync(root)) {
+      const candidate = join(root, dir, target);
+      if (existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // ignore unreadable projects dir
+  }
+  return undefined;
 }
 
 // ── Transcript reading ───────────────────────────────────────────────

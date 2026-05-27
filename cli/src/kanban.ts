@@ -28,6 +28,17 @@ import {
   formatCardDetail,
   formatTmuxSessions,
 } from "./format.js";
+import { agentIdentity } from "./agents/identity.js";
+import { ensureAgentSession } from "./agents/launch.js";
+import { loadAgentsConfig } from "./agents/config.js";
+import { reconcileAll } from "./agents/reconcile.js";
+import { installHooks } from "./hooks.js";
+import { Daemon } from "./agents/daemon.js";
+import { slackAppManifest, MANIFEST_INSTRUCTIONS } from "./slack/manifest.js";
+import { runSlackBridge } from "./slack/bridge.js";
+import { announceToSlack } from "./slack/announce.js";
+import { SlackClient } from "./slack/client.js";
+import { postToSlack } from "./slack/post.js";
 import type { KanbanColumn, Link } from "./types.js";
 import {
   createChannel,
@@ -283,8 +294,9 @@ program
   .argument("<card>", "Card ID, ID prefix, or name search")
   .argument("<message>", "Message to send")
   .option("--keys", "Use send-keys instead of paste-buffer (for short single-line)")
+  .option("--announce", "(deprecated, no-op: prompts are mirrored to Slack on confirmed receipt by the daemon)")
   .option("-j, --json", "Output as JSON")
-  .action((cardQuery: string, message: string, opts) => {
+  .action(async (cardQuery: string, message: string, opts) => {
     const links = readLinks();
     const card = findCard(links, cardQuery);
     if (!card) {
@@ -299,6 +311,11 @@ program
     const result = opts.keys
       ? sendTmuxKeys(card.tmuxLink.sessionName, message)
       : pasteTmuxPrompt(card.tmuxLink.sessionName, message);
+
+    // No announce here: the prompt is mirrored to Slack only once the agent's
+    // UserPromptSubmit hook confirms it was actually received (the daemon does
+    // it), so a paste that never becomes a submitted prompt is never falsely
+    // announced as received.
 
     if (opts.json) {
       output(
@@ -317,6 +334,186 @@ program
         console.error(`Failed: ${result.error}`);
         process.exit(1);
       }
+    }
+  });
+
+// ── kanban launch <slug> ─────────────────────────────────────────────
+
+program
+  .command("launch")
+  .description("Launch or resume a long-lived agent session in tmux with a stable, readable identity")
+  .argument("<slug>", "Readable agent slug, e.g. dependabot-scout")
+  .requiredOption("--cwd <path>", "Working directory for the session (the agent's worktree/workspace)")
+  .option("--model <model>", "Model alias or full name")
+  .option("--no-skip-permissions", "Do NOT pass --dangerously-skip-permissions")
+  .option("-j, --json", "Output as JSON")
+  .action((slug: string, opts) => {
+    try {
+      const cwd = resolve(opts.cwd);
+      if (!existsSync(cwd)) throw new Error(`cwd does not exist: ${cwd}`);
+      const identity = agentIdentity(slug);
+      const result = ensureAgentSession(identity, {
+        cwd,
+        model: opts.model,
+        skipPermissions: opts.skipPermissions,
+      });
+      if (opts.json) {
+        output(result, opts);
+      } else {
+        const verb = {
+          "noop-running": "already running",
+          launched: "launched",
+          resumed: "resumed",
+        }[result.action];
+        output(
+          `Agent "${slug}" ${verb} (session ${result.sessionId}, tmux ${result.tmuxName}, card ${result.card.id})`,
+          opts
+        );
+      }
+    } catch (e) {
+      process.stderr.write(`Error: ${(e as Error).message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ── kanban reconcile ─────────────────────────────────────────────────
+
+program
+  .command("reconcile")
+  .description("Idempotently reconcile all configured agents: clean+pull repos, ensure worktrees, launch/resume sessions")
+  .option(
+    "--config <path>",
+    "Path to agents.yaml",
+    process.env.KANBAN_AGENTS_CONFIG || join(homedir(), ".kanban-code", "agents.yaml")
+  )
+  .option("--prune", "Tear down agent sessions/cards no longer in the config")
+  .option("-j, --json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const file = loadAgentsConfig(opts.config);
+      const result = reconcileAll(file, { prune: !!opts.prune });
+      if (opts.json) {
+        output(result, opts);
+        return;
+      }
+      const lines: string[] = [];
+      for (const a of result.agents) {
+        const repoNote = a.repos
+          .map((r) => `${r.name}${r.worktreeCreated ? " (worktree+)" : ""}`)
+          .join(", ");
+        lines.push(`${a.slug}: ${a.launch.action} [${repoNote}]`);
+      }
+      if (result.pruned.length) lines.push(`pruned: ${result.pruned.join(", ")}`);
+      output(lines.join("\n") || "no agents configured", opts);
+    } catch (e) {
+      process.stderr.write(`Error: ${(e as Error).message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ── kanban hooks install ─────────────────────────────────────────────
+
+const hooksCmd = program.command("hooks").description("Manage Claude Code hooks for headless operation");
+hooksCmd
+  .command("install")
+  .description("Install the Kanban hook + statusline scripts and register them in Claude settings")
+  .option("-j, --json", "Output as JSON")
+  .action((opts) => {
+    try {
+      const result = installHooks();
+      output(
+        opts.json
+          ? result
+          : `Installed hooks (${result.events.join(", ")})\n  hook:       ${result.hookScriptPath}\n  statusline: ${result.statuslinePath}\n  settings:   ${result.settingsPath}`,
+        opts
+      );
+    } catch (e) {
+      process.stderr.write(`Error: ${(e as Error).message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ── kanban daemon ────────────────────────────────────────────────────
+
+program
+  .command("daemon")
+  .description("Run the headless engine: auto-send queued prompts on Stop, auto-compact long sessions")
+  .option("--poll-interval <ms>", "Auto-compact poll interval in ms", "30000")
+  .option("--no-self-compact", "Disable auto-compaction")
+  .action((opts) => {
+    const daemon = new Daemon({
+      pollIntervalMs: parseInt(opts.pollInterval, 10),
+      selfCompact: { enabled: opts.selfCompact },
+      announce: process.env.SLACK_BOT_TOKEN
+        ? (slug, text) => {
+            void announceToSlack(slug, text);
+          }
+        : undefined,
+    });
+    daemon.start();
+    process.stdout.write(
+      `kanban daemon started (poll ${opts.pollInterval}ms, self-compact ${opts.selfCompact ? "on" : "off"})\n`
+    );
+    const shutdown = () => {
+      daemon.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  });
+
+// ── kanban slack ─────────────────────────────────────────────────────
+
+const slackCmd = program.command("slack").description("Slack bridge for observing and steering agents");
+slackCmd
+  .command("manifest")
+  .description("Print a Slack app manifest (Socket Mode) plus setup instructions")
+  .action(() => {
+    process.stdout.write(slackAppManifest() + "\n# ---\n" + MANIFEST_INSTRUCTIONS + "\n");
+  });
+slackCmd
+  .command("bridge")
+  .description("Run the bidirectional Slack <-> agent bridge (needs SLACK_BOT_TOKEN and SLACK_APP_TOKEN)")
+  .option(
+    "--config <path>",
+    "Path to agents.yaml",
+    process.env.KANBAN_AGENTS_CONFIG || join(homedir(), ".kanban-code", "agents.yaml")
+  )
+  .action(async (opts) => {
+    const botToken = process.env.SLACK_BOT_TOKEN;
+    const appToken = process.env.SLACK_APP_TOKEN;
+    if (!botToken || !appToken) {
+      process.stderr.write("Error: SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set\n");
+      process.exit(1);
+    }
+    await runSlackBridge({ botToken, appToken, configPath: opts.config });
+  });
+slackCmd
+  .command("post")
+  .description("Post a message to a Slack channel as the bot (needs SLACK_BOT_TOKEN)")
+  .argument("<channel>", "Channel name (e.g. #dev) or id")
+  .argument("<message>", "Message text (Slack mrkdwn)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (channel: string, message: string, opts) => {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) {
+      process.stderr.write("Error: SLACK_BOT_TOKEN must be set\n");
+      process.exit(1);
+    }
+    const result = await postToSlack(new SlackClient(token), channel, message);
+    if (opts.json) {
+      output(result, { json: true });
+      if (!result.ok) process.exit(1);
+      return;
+    }
+    if (result.ok) {
+      process.stdout.write(`Posted to ${channel} (${result.channelId})\n`);
+    } else {
+      process.stderr.write(`Failed to post to ${channel}: ${result.error}\n`);
+      if (String(result.error).includes("not_in_channel")) {
+        process.stderr.write("The bot is not a member of that channel — invite it there first.\n");
+      }
+      process.exit(1);
     }
   });
 

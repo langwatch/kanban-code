@@ -53,7 +53,16 @@ function tmuxNew(session: string, cwd: string): void {
   execSync(`tmux new-session -d -s ${session} -c ${cwd}`);
 }
 
-const skipIfNoTmux = { skip: !hasTmux() };
+// This suite drives a real bare shell and asserts on pasted text rendered in
+// the pane, so it needs an interactive tmux + shell. Reliable locally; skipped
+// in CI where the non-interactive runner does not render pasted keystrokes the
+// same way (the deterministic real-tmux coverage lives in launch/reconcile).
+const skipReason = !hasTmux()
+  ? "tmux unavailable"
+  : process.env.CI
+    ? "needs an interactive shell; not reliable in CI"
+    : false;
+const skipIfNoTmux = { skip: skipReason };
 
 describe("broadcast fan-out (real tmux)", skipIfNoTmux, () => {
   let home: string;
