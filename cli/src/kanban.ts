@@ -37,6 +37,8 @@ import { Daemon } from "./agents/daemon.js";
 import { slackAppManifest, MANIFEST_INSTRUCTIONS } from "./slack/manifest.js";
 import { runSlackBridge } from "./slack/bridge.js";
 import { announceToSlack } from "./slack/announce.js";
+import { SlackClient } from "./slack/client.js";
+import { postToSlack } from "./slack/post.js";
 import type { KanbanColumn, Link } from "./types.js";
 import {
   createChannel,
@@ -485,6 +487,34 @@ slackCmd
       process.exit(1);
     }
     await runSlackBridge({ botToken, appToken, configPath: opts.config });
+  });
+slackCmd
+  .command("post")
+  .description("Post a message to a Slack channel as the bot (needs SLACK_BOT_TOKEN)")
+  .argument("<channel>", "Channel name (e.g. #dev) or id")
+  .argument("<message>", "Message text (Slack mrkdwn)")
+  .option("-j, --json", "Output as JSON")
+  .action(async (channel: string, message: string, opts) => {
+    const token = process.env.SLACK_BOT_TOKEN;
+    if (!token) {
+      process.stderr.write("Error: SLACK_BOT_TOKEN must be set\n");
+      process.exit(1);
+    }
+    const result = await postToSlack(new SlackClient(token), channel, message);
+    if (opts.json) {
+      output(result, { json: true });
+      if (!result.ok) process.exit(1);
+      return;
+    }
+    if (result.ok) {
+      process.stdout.write(`Posted to ${channel} (${result.channelId})\n`);
+    } else {
+      process.stderr.write(`Failed to post to ${channel}: ${result.error}\n`);
+      if (String(result.error).includes("not_in_channel")) {
+        process.stderr.write("The bot is not a member of that channel — invite it there first.\n");
+      }
+      process.exit(1);
+    }
   });
 
 // ── kanban self-compact [follow-up] ─────────────────────────────────

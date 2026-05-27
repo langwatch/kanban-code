@@ -38,6 +38,12 @@ Feature: Bidirectional Slack bridge for agent observability and steering
     Then the message text is sent into the agent's tmux session as a user prompt
     And messages the bridge itself posted (bot messages) are ignored to avoid loops
 
+  Scenario: An agent can announce to a team channel on request
+    Given the agent is asked to announce something (e.g. a finished PR) in a shared channel like #dev
+    When it runs "kanban slack post #dev <message>"
+    Then the bot posts the message to that channel using its bot token
+    And if the bot is not a member of the channel, the command fails with a clear "invite the bot" error instead of silently dropping it
+
   Scenario: Multiple people observe and steer the same agent
     Given several team members are in the channel
     Then all of them see the same agent activity
