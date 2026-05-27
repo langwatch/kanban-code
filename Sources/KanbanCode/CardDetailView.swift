@@ -128,6 +128,7 @@ struct CardDetailView: View {
 
     // Copy toast
     @State private var copyToast: String?
+    @State private var isCopyingConversationMarkdown = false
 
     // Resolved GitHub base URL for constructing issue/PR links
     @State private var githubBaseURL: String?
@@ -1595,6 +1596,9 @@ struct CardDetailView: View {
                 onFork: onFork,
                 onRenameRequest: { showRenameSheet = true },
                 onCopyResumeCmd: { copyResumeCommand() },
+                onCopyConversationMarkdown: {
+                    Task { await copyConversationMarkdown() }
+                },
                 onCheckpoint: {
                     checkpointMode = true
                     selectedTab = .history
@@ -2021,6 +2025,55 @@ struct CardDetailView: View {
     private func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func copyConversationMarkdown() async {
+        guard !isCopyingConversationMarkdown else { return }
+        guard let sessionPath = card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath else {
+            showCopyToast("No conversation transcript found")
+            return
+        }
+
+        let myCardId = card.id
+        let title = card.displayTitle
+        let assistant = card.link.effectiveAssistant
+        let sessionId = card.link.sessionLink?.sessionId ?? card.session?.id
+        let store = sessionStore
+        let exportStart = RenderDiagnostics.mark()
+
+        isCopyingConversationMarkdown = true
+        defer {
+            if card.id == myCardId {
+                isCopyingConversationMarkdown = false
+            }
+        }
+
+        do {
+            let markdown = try await Task.detached(priority: .utility) {
+                try await ConversationMarkdownExporter.exportMarkdown(
+                    title: title,
+                    assistant: assistant,
+                    sessionId: sessionId,
+                    sessionPath: sessionPath,
+                    sessionStore: store
+                )
+            }.value
+
+            guard card.id == myCardId else { return }
+            copyToClipboard(markdown)
+            showCopyToast("Conversation markdown copied to clipboard")
+            RenderDiagnostics.logIfSlow(
+                "CardDetailView.copyConversationMarkdown",
+                since: exportStart,
+                thresholdMs: 100,
+                metadata: "card=\(myCardId.prefix(12)) assistant=\(assistant.rawValue) path=\((sessionPath as NSString).lastPathComponent)"
+            )
+        } catch {
+            KanbanCodeLog.error("conversation-export", "Failed to export markdown for card \(myCardId.prefix(12)): \(error)")
+            if card.id == myCardId {
+                showCopyToast("Failed to copy conversation markdown")
+            }
+        }
     }
 
     private func showCopyToast(_ message: String) {

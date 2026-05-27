@@ -176,18 +176,31 @@ public enum TranscriptReader {
                         guard let data = line.data(using: .utf8),
                               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = obj["type"] as? String,
-                              type == "user" || type == "assistant" else { continue }
+                              type == "user" || type == "assistant" || type == "queue-operation" else { continue }
 
                         // Skip caveat wrapper messages entirely
                         if type == "user" && JsonlParser.isCaveatMessage(obj) { continue }
 
                         // Stdout responses display as assistant-style turns
-                        let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : type
+                        let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : (type == "queue-operation" ? "user" : type)
 
                         let blocks: [ContentBlock]
                         let textPreview: String
 
-                        if type == "user" {
+                        if type == "queue-operation" {
+                            guard let op = obj["operation"] as? String,
+                                  op == "enqueue",
+                                  let content = obj["content"] as? String,
+                                  !content.isEmpty else { continue }
+                            if content.contains("<task-notification>") {
+                                guard let summary = Self.parseTaskNotification(content) else { continue }
+                                blocks = [ContentBlock(kind: .text, text: summary)]
+                                textPreview = summary
+                            } else {
+                                blocks = [ContentBlock(kind: .text, text: content)]
+                                textPreview = content
+                            }
+                        } else if type == "user" {
                             blocks = extractUserBlocks(from: obj)
                             textPreview = buildTextPreview(blocks: blocks, role: role)
                         } else {

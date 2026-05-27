@@ -22,6 +22,7 @@ struct CardActionsMenu: View {
     var onFork: (_ keepWorktree: Bool) -> Void = { _ in }
     var onRenameRequest: () -> Void = {}
     var onCopyResumeCmd: () -> Void = {}
+    var onCopyConversationMarkdown: (() -> Void)?
     var onCheckpoint: (() -> Void)?
     /// Opens the Add Link popover. When nil, posts a notification instead
     /// (used by kanban/list menus where the sheet lives on ContentView).
@@ -174,6 +175,12 @@ struct CardActionsMenu: View {
     private var copySection: some View {
         Button(action: onCopyResumeCmd) {
             Label("Copy Resume Command", systemImage: "doc.on.doc")
+        }
+        if let onCopyConversationMarkdown {
+            Button(action: onCopyConversationMarkdown) {
+                Label("Copy Whole Conversation as Markdown", systemImage: "text.page")
+            }
+            .disabled(card.link.sessionLink?.sessionPath == nil && card.session?.jsonlPath == nil)
         }
         Button { copyToClipboard(card.id) } label: {
             Label("Copy Card ID", systemImage: "number")
