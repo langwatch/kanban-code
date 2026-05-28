@@ -101,17 +101,20 @@ describe("daemon (sandboxed, injected paste)", () => {
     assert.equal(readLinks()[0].queuedPrompts?.length, 0, "stale warning dropped from queue");
   });
 
-  test("auto-compact queues the crossed warning once (no re-queue)", () => {
+  test("auto-compact sends the crossed warning straight away, once (no re-send)", () => {
     writeLinks([card()]);
     writeContextPct(55); // 550k -> crosses 500k queuePrompt rule
     const d = newDaemon();
     const acted = d.evaluateAutoCompact();
     assert.deepEqual(acted, [{ sessionId: SID, action: "queuePrompt", thresholdTokens: 500_000 }]);
-    assert.equal(readLinks()[0].queuedPrompts?.[0].body, DEFAULT_SELF_COMPACT_RULES[0].message);
+    // Pasted straight into the session, not parked in the queue (a resumed/idle
+    // session never hits Stop, so a queued nudge would never fire).
+    assert.deepEqual(pastes, [["daemon-agent", DEFAULT_SELF_COMPACT_RULES[0].message]]);
+    assert.equal(readLinks()[0].queuedPrompts?.length ?? 0, 0, "not queued");
 
     const again = d.evaluateAutoCompact();
     assert.equal(again.length, 0, "must not re-trigger the same threshold");
-    assert.equal(readLinks()[0].queuedPrompts?.length, 1, "no duplicate queued warning");
+    assert.equal(pastes.length, 1, "no duplicate nudge");
   });
 
   test("auto-compact sends /compact at the hard threshold", () => {

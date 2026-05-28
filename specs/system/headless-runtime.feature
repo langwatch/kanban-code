@@ -28,10 +28,11 @@ Feature: Headless runtime engine (no macOS app)
   Scenario: Auto-compaction protects long-running sessions
     Given an agent has been running for a long time
     When its current context usage crosses 500k tokens
-    Then a prompt instructing it to self-compact is queued
+    Then a prompt instructing it to self-compact is sent to it straight away (not parked in the queue waiting for a Stop)
+    And so a resumed or idle session, which never emits a Stop, still gets the nudge and self-compacts before context grows further
+    And the same threshold is not nudged twice
     When usage crosses the hard threshold (750k)
     Then "/compact" is sent to the agent automatically
-    And a stale self-compact warning is dropped if context already dropped back below its threshold
 
   Scenario: The session runs forever across compactions
     Given the agent has compacted multiple times
