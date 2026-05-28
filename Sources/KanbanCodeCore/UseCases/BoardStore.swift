@@ -819,9 +819,15 @@ public enum Reducer {
 
         case .channelsLoaded(let channels):
             state.channels = channels.sorted { $0.createdAt < $1.createdAt }
-            // Ensure every channel's messages are loaded so tiles can show their
-            // last-message timestamp even before the user opens the drawer.
-            return state.channels.map { .loadChannelMessages(channelName: $0.name) }
+            // Initial channel discovery needs message tails for sidebar
+            // timestamps. Later metadata refreshes must not reload every
+            // channel tail: that fans out into many channelMessagesLoaded
+            // mutations and can make SwiftUI relayout the whole channel UI.
+            return state.channels.compactMap { channel in
+                state.channelMessages[channel.name] == nil
+                    ? .loadChannelMessages(channelName: channel.name)
+                    : nil
+            }
 
         case .channelMessagesLoaded(let name, let messages):
             let isFirstLoad = state.channelMessages[name] == nil

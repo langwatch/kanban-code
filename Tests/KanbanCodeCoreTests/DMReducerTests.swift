@@ -247,14 +247,17 @@ struct DMReducerTests {
         #expect(state.appIsFrontmost == true)
     }
 
-    @Test func channelsLoadedEmitsLoadEffectForEveryChannel() {
+    @Test func channelsLoadedEmitsLoadEffectForChannelsWithoutCachedMessages() {
         var state = AppState()
         let chA = Channel(id: "ch_a", name: "alpha", createdAt: .now, createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
         let chB = Channel(id: "ch_b", name: "beta",  createdAt: .now, createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
+        state.channelMessages["alpha"] = [
+            ChannelMessage(id: "m1", ts: .now, from: ChannelParticipant(cardId: nil, handle: "u"), body: "cached")
+        ]
         let effects = Reducer.reduce(state: &state, action: .channelsLoaded(channels: [chA, chB]))
         let names: [String] = effects.compactMap {
             if case .loadChannelMessages(let n) = $0 { return n } else { return nil }
         }
-        #expect(Set(names) == Set(["alpha", "beta"]))
+        #expect(names == ["beta"])
     }
 }

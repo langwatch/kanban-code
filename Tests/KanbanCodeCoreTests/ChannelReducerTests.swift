@@ -30,11 +30,27 @@ struct ChannelReducerTests {
         let b = Channel(id: "ch_b", name: "beta", createdAt: Date(timeIntervalSince1970: 100), createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
         let effects = Reducer.reduce(state: &state, action: .channelsLoaded(channels: [a, b]))
         #expect(state.channels.map(\.name) == ["beta", "alpha"])
-        // New behaviour: loads messages for every channel so tiles show timestamps.
+        // First load fetches message tails so tiles show timestamps.
         let loaded = effects.compactMap { (e: Effect) -> String? in
             if case .loadChannelMessages(let n) = e { return n } else { return nil }
         }
         #expect(Set(loaded) == Set(["alpha", "beta"]))
+    }
+
+    @Test func channelsLoadedDoesNotReloadAlreadyLoadedMessageTails() {
+        var state = AppState()
+        let alpha = Channel(id: "ch_a", name: "alpha", createdAt: Date(timeIntervalSince1970: 100), createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
+        let beta = Channel(id: "ch_b", name: "beta", createdAt: Date(timeIntervalSince1970: 200), createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
+        state.channelMessages["alpha"] = [
+            ChannelMessage(id: "m1", ts: .now, from: ChannelParticipant(cardId: nil, handle: "u"), body: "loaded")
+        ]
+
+        let effects = Reducer.reduce(state: &state, action: .channelsLoaded(channels: [alpha, beta]))
+        let loaded = effects.compactMap { (e: Effect) -> String? in
+            if case .loadChannelMessages(let n) = e { return n } else { return nil }
+        }
+
+        #expect(loaded == ["beta"])
     }
 
     @Test func selectChannelEmitsLoadMessagesEffect() {
