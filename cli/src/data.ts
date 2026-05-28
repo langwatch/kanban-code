@@ -384,13 +384,17 @@ export function findCodexRollout(cwd: string): string | undefined {
         walk(full);
       } else if (e.name.startsWith("rollout-") && e.name.endsWith(".jsonl")) {
         try {
+          // The session_meta first line can be very large (Codex embeds its full
+          // base_instructions), so we don't JSON.parse it; cwd appears early, so
+          // a bounded read + regex is robust regardless of the line length.
           const fd = openSync(full, "r");
-          const buf = Buffer.alloc(8192);
+          const buf = Buffer.alloc(65536);
           const n = readSync(fd, buf, 0, buf.length, 0);
           closeSync(fd);
-          const firstLine = buf.toString("utf-8", 0, n).split("\n", 1)[0];
-          const meta = JSON.parse(firstLine);
-          if (meta?.payload?.cwd === cwd) {
+          const head = buf.toString("utf-8", 0, n);
+          const m = head.match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+          const foundCwd = m ? JSON.parse(`"${m[1]}"`) : undefined;
+          if (foundCwd === cwd) {
             const mtime = statSync(full).mtimeMs;
             if (!best || mtime > best.mtime) best = { path: full, mtime };
           }
