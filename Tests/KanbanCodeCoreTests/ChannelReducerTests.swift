@@ -53,6 +53,20 @@ struct ChannelReducerTests {
         #expect(loaded == ["beta"])
     }
 
+    @Test func channelsLoadedWithSameChannelsDoesNotReloadLoadedMessageTails() {
+        var state = AppState()
+        let alpha = Channel(id: "ch_a", name: "alpha", createdAt: Date(timeIntervalSince1970: 100), createdBy: ChannelParticipant(cardId: nil, handle: "u"), members: [])
+        state.channels = [alpha]
+        state.channelMessages["alpha"] = [
+            ChannelMessage(id: "m1", ts: .now, from: ChannelParticipant(cardId: nil, handle: "u"), body: "loaded")
+        ]
+
+        let effects = Reducer.reduce(state: &state, action: .channelsLoaded(channels: [alpha]))
+
+        #expect(effects.isEmpty)
+        #expect(state.channels == [alpha])
+    }
+
     @Test func selectChannelEmitsLoadMessagesEffect() {
         var state = AppState()
         let effects = Reducer.reduce(state: &state, action: .selectChannel(name: "general"))
@@ -148,6 +162,21 @@ struct ChannelReducerTests {
         let msgs = state.channelMessages["general"] ?? []
         #expect(msgs.count == 2)
         #expect(msgs.map(\.body) == ["first", "second"])
+    }
+
+    @Test func duplicateChannelMessageAppendedDoesNotPersistReadStateAgain() {
+        var state = AppState()
+        state.humanHandle = "rchaves"
+        let me = ChannelParticipant(cardId: nil, handle: "rchaves")
+        let msg = ChannelMessage(id: "m1", ts: Date(timeIntervalSince1970: 100), from: me, body: "sent")
+        state.channelMessages["general"] = [msg]
+        state.channelLastReadMessageId["general"] = "m1"
+
+        let effects = Reducer.reduce(state: &state, action: .channelMessageAppended(channelName: "general", message: msg))
+
+        #expect(effects.isEmpty)
+        #expect(state.channelMessages["general"] == [msg])
+        #expect(state.channelLastReadMessageId["general"] == "m1")
     }
 
     @Test func sendChannelMessageProducesDiskEffectWithMemberSessions() {
@@ -397,6 +426,26 @@ struct ChannelReducerTests {
         #expect(state.channelMessages["general"] == existing)
     }
 
+    @Test func identicalChannelMessagesLoadedIsNoOpWhenMarkersCurrent() {
+        var state = AppState()
+        let p = ChannelParticipant(cardId: "card_A", handle: "alice")
+        let existing = [
+            ChannelMessage(id: "m1", ts: Date(timeIntervalSince1970: 100), from: p, body: "one"),
+            ChannelMessage(id: "m2", ts: Date(timeIntervalSince1970: 200), from: p, body: "two"),
+        ]
+        state.channelMessages["general"] = existing
+        state.channelLastSeenMessageId["general"] = "m2"
+        state.channelLastReadMessageId["general"] = "m2"
+        state.selectedChannelName = "general"
+
+        let effects = Reducer.reduce(state: &state, action: .channelMessagesLoaded(channelName: "general", messages: existing))
+
+        #expect(effects.isEmpty)
+        #expect(state.channelMessages["general"] == existing)
+        #expect(state.channelLastSeenMessageId["general"] == "m2")
+        #expect(state.channelLastReadMessageId["general"] == "m2")
+    }
+
     @Test func draftActionsPersistToState() {
         var state = AppState()
         let effects = Reducer.reduce(state: &state, action: .setChannelDraft(channelName: "general", body: "hey"))
@@ -412,9 +461,32 @@ struct ChannelReducerTests {
         #expect(state.channelDrafts["general"] == nil)
     }
 
+    @Test func draftActionsSkipNoOpPersists() {
+        var state = AppState()
+        state.channelDrafts["general"] = "hey"
+
+        let same = Reducer.reduce(state: &state, action: .setChannelDraft(channelName: "general", body: "hey"))
+        let missingEmpty = Reducer.reduce(state: &state, action: .setDMDraft(other: ChannelParticipant(cardId: nil, handle: "alice"), body: ""))
+
+        #expect(same.isEmpty)
+        #expect(missingEmpty.isEmpty)
+    }
+
     @Test func channelReadStateLoadedPopulatesState() {
         var state = AppState()
         _ = Reducer.reduce(state: &state, action: .channelReadStateLoaded(channels: ["general": "m1"], dms: [:]))
         #expect(state.channelLastReadMessageId["general"] == "m1")
+    }
+
+    @Test func channelReadStateLoadedSkipsNoOpMutation() {
+        var state = AppState()
+        state.channelLastReadMessageId = ["general": "m1"]
+        state.dmLastReadMessageId = ["alice": "d1"]
+
+        let effects = Reducer.reduce(state: &state, action: .channelReadStateLoaded(channels: ["general": "m1"], dms: ["alice": "d1"]))
+
+        #expect(effects.isEmpty)
+        #expect(state.channelLastReadMessageId == ["general": "m1"])
+        #expect(state.dmLastReadMessageId == ["alice": "d1"])
     }
 }

@@ -818,24 +818,31 @@ public enum Reducer {
             return [.loadChannelMessages(channelName: name)]
 
         case .channelsLoaded(let channels):
-            state.channels = channels.sorted { $0.createdAt < $1.createdAt }
+            let sortedChannels = channels.sorted { $0.createdAt < $1.createdAt }
+            if state.channels != sortedChannels {
+                state.channels = sortedChannels
+            }
             // Initial channel discovery needs message tails for sidebar
             // timestamps. Later metadata refreshes must not reload every
             // channel tail: that fans out into many channelMessagesLoaded
             // mutations and can make SwiftUI relayout the whole channel UI.
-            return state.channels.compactMap { channel in
+            return sortedChannels.compactMap { channel in
                 state.channelMessages[channel.name] == nil
                     ? .loadChannelMessages(channelName: channel.name)
                     : nil
             }
 
         case .channelMessagesLoaded(let name, let messages):
-            let isFirstLoad = state.channelMessages[name] == nil
-            if !isFirstLoad, messages.isEmpty, state.channelMessages[name]?.isEmpty == false {
+            let existingMessages = state.channelMessages[name]
+            let isFirstLoad = existingMessages == nil
+            if !isFirstLoad, messages.isEmpty, existingMessages?.isEmpty == false {
                 KanbanCodeLog.warn("channels", "Ignoring empty reload for #\(name); preserving existing messages")
                 return []
             }
-            state.channelMessages[name] = messages
+            let messagesChanged = existingMessages != messages
+            if messagesChanged {
+                state.channelMessages[name] = messages
+            }
             var effects: [Effect] = []
 
             // First time ever loading this channel (and there's no persisted
@@ -849,7 +856,8 @@ public enum Reducer {
 
             // Notify only if: not first load, message is from someone else,
             // drawer isn't focused on this channel, AND app isn't frontmost.
-            if !isFirstLoad,
+            if messagesChanged,
+               !isFirstLoad,
                !state.appIsFrontmost,
                let latest = messages.last(where: { $0.type == .message }),
                latest.id != state.channelLastSeenMessageId[name],
@@ -857,7 +865,7 @@ public enum Reducer {
                state.selectedChannelName != name {
                 effects.append(.notifyChannelMessage(channel: name, fromHandle: latest.from.handle, body: latest.body))
             }
-            if let latest = messages.last {
+            if let latest = messages.last, state.channelLastSeenMessageId[name] != latest.id {
                 state.channelLastSeenMessageId[name] = latest.id
             }
 
@@ -900,6 +908,9 @@ public enum Reducer {
             return []
 
         case .channelReadStateLoaded(let channelIds, let dmIds):
+            guard state.channelLastReadMessageId != channelIds || state.dmLastReadMessageId != dmIds else {
+                return []
+            }
             state.channelLastReadMessageId = channelIds
             state.dmLastReadMessageId = dmIds
             return []
@@ -911,11 +922,16 @@ public enum Reducer {
             return [.loadDrafts]
 
         case .draftsLoaded(let channels, let dms):
+            guard state.channelDrafts != channels || state.dmDrafts != dms else {
+                return []
+            }
             state.channelDrafts = channels
             state.dmDrafts = dms
             return []
 
         case .setChannelDraft(let name, let body):
+            let current = state.channelDrafts[name] ?? ""
+            guard current != body else { return [] }
             if body.isEmpty {
                 state.channelDrafts.removeValue(forKey: name)
             } else {
@@ -925,6 +941,8 @@ public enum Reducer {
 
         case .setDMDraft(let other, let body):
             let key = Self.dmKey(other)
+            let current = state.dmDrafts[key] ?? ""
+            guard current != body else { return [] }
             if body.isEmpty {
                 state.dmDrafts.removeValue(forKey: key)
             } else {
@@ -1117,11 +1135,12 @@ public enum Reducer {
 
         case .channelMessageAppended(let channelName, let msg):
             var msgs = state.channelMessages[channelName] ?? []
-            if !msgs.contains(where: { $0.id == msg.id }) {
+            let didAppend = !msgs.contains(where: { $0.id == msg.id })
+            if didAppend {
                 msgs.append(msg)
                 msgs.sort { $0.ts < $1.ts }
+                state.channelMessages[channelName] = msgs
             }
-            state.channelMessages[channelName] = msgs
             // If I sent this message OR I'm currently looking at this channel,
             // bump the read marker — but ONLY for real chat messages. Joins /
             // leaves / system events don't count as "read content", and pinning
@@ -1130,8 +1149,10 @@ public enum Reducer {
             let mine = msg.from.cardId == nil && msg.from.handle == state.humanHandle
             let focused = state.selectedChannelName == channelName
             if (mine || focused), msg.type == .message {
-                state.channelLastReadMessageId[channelName] = msg.id
-                return [Self.persistReadState(state)]
+                if state.channelLastReadMessageId[channelName] != msg.id {
+                    state.channelLastReadMessageId[channelName] = msg.id
+                    return [Self.persistReadState(state)]
+                }
             }
             return []
 
