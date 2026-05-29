@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 // re-exported here so the Claude announce path and existing imports stay stable.
 export { RECEIVED_MESSAGE_HEADER, formatReceivedMessage } from "./format.js";
 import { formatReceivedMessage } from "./format.js";
+import { writeThreadRoot } from "./thread-root.js";
 
 function defaultConfigPath(): string {
   return process.env.KANBAN_AGENTS_CONFIG || join(homedir(), ".kanban-code", "agents.yaml");
@@ -55,7 +56,10 @@ export async function announceToSlack(slug: string, text: string, opts: Announce
   const channel = await channelForSlug(slug, opts.configPath ?? defaultConfigPath(), c);
   if (!channel) return false;
   try {
-    await c.post(channel, formatReceivedMessage(text));
+    // The received-prompt message opens the thread for this turn; record its
+    // ts so the bridge threads the agent's assistant turns under it.
+    const ts = await c.post(channel, formatReceivedMessage(text));
+    if (ts) writeThreadRoot(slug, ts);
     return true;
   } catch {
     return false;

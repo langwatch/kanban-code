@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { runtimeSpec, isRuntime } from "./agents/runtime.js";
 import { formatCodexRolloutLines } from "./slack/format.js";
+import { writeThreadRoot, readThreadRoot } from "./slack/thread-root.js";
 import { parseAgentsConfig } from "./agents/config.js";
 import { agentIdentity } from "./agents/identity.js";
 import { ensureAgentSession } from "./agents/launch.js";
@@ -65,6 +66,27 @@ describe("runtime descriptor", () => {
     // resume-subcommand options), and no model is re-passed on resume.
     assert.ok(args.indexOf("--dangerously-bypass-approvals-and-sandbox") < args.indexOf("resume"));
     assert.ok(!args.includes("-m"));
+  });
+
+  test("thread root round-trips per slug and shares across the announce/bridge split", () => {
+    const home = mkdtempSync(join(tmpdir(), "kanban-threads-"));
+    const prev = process.env.KANBAN_CODE_HOME;
+    process.env.KANBAN_CODE_HOME = home;
+    try {
+      assert.equal(readThreadRoot("dependabot-scout"), undefined);
+      // daemon announce records the root; bridge reads it for assistant turns
+      writeThreadRoot("dependabot-scout", "1700000000.000100");
+      assert.equal(readThreadRoot("dependabot-scout"), "1700000000.000100");
+      // a new prompt overwrites the root (start of a new thread)
+      writeThreadRoot("dependabot-scout", "1700000999.000200");
+      assert.equal(readThreadRoot("dependabot-scout"), "1700000999.000200");
+      // roots are per-agent
+      assert.equal(readThreadRoot("pr-reviewer"), undefined);
+    } finally {
+      if (prev === undefined) delete process.env.KANBAN_CODE_HOME;
+      else process.env.KANBAN_CODE_HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("isRuntime guards the union", () => {
