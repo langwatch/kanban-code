@@ -27,6 +27,10 @@ interface TailState {
   channelId: string;
   path?: string;
   offset: number;
+  /// ts of the current thread root (the last received-prompt message). Agent
+  /// activity for the turn is posted as replies under it so tool calls and
+  /// messages don't pile up in the channel root.
+  threadTs?: string;
 }
 
 function readAppendedLines(path: string, offset: number): { objs: any[]; newOffset: number } {
@@ -129,7 +133,14 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
         // in the channel as their message).
         if (t.runtime === "codex" && post.role === "user" && consumeRelayEcho(t.slug, post.text)) continue;
         try {
-          await client.post(t.channelId, post.text);
+          if (post.role === "user") {
+            // A received prompt opens a new thread; the agent's work for this
+            // turn replies under it instead of cluttering the channel root.
+            const ts = await client.post(t.channelId, post.text);
+            if (ts) t.threadTs = ts;
+          } else {
+            await client.post(t.channelId, post.text, t.threadTs);
+          }
         } catch (e) {
           console.error(`post to ${t.slug} failed:`, e);
         }

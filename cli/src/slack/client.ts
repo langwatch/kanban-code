@@ -14,13 +14,17 @@ export class SlackClient {
     return r.user_id as string | undefined;
   }
 
-  async post(channel: string, text: string): Promise<void> {
-    await this.web.chat.postMessage({
+  /// Post a message and return its ts (usable as a thread parent). Pass
+  /// threadTs to reply inside an existing thread.
+  async post(channel: string, text: string, threadTs?: string): Promise<string | undefined> {
+    const r = await this.web.chat.postMessage({
       channel,
       text,
+      thread_ts: threadTs,
       unfurl_links: false,
       unfurl_media: false,
     });
+    return r.ts as string | undefined;
   }
 
   /// Resolve "#name" / "name" to a channel id. Ids (C…/G…) are returned as-is.
