@@ -68,5 +68,9 @@ describe("slackAppManifest", () => {
     assert.ok(m.oauth_config.scopes.bot.includes("chat:write"));
     assert.ok(m.oauth_config.scopes.bot.includes("groups:history"));
     assert.equal(m.settings.interactivity.is_enabled, true, "interactivity for picker buttons");
+    assert.ok(m.oauth_config.scopes.bot.includes("commands"), "slash commands need the commands scope");
+    const slashes = m.features.slash_commands ?? [];
+    const stop = slashes.find((s: any) => s.command === "/stop");
+    assert.ok(stop, "/stop slash command is registered");
   });
 });

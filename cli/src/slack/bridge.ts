@@ -161,7 +161,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
   /// Single plain label shown for the entire "agent is working" state — no
   /// tool name, no emoji. Slack's setStatus already shows its own animated
   /// indicator next to the text.
-  const WORKING_LABEL = "working…";
+  const WORKING_LABEL = "is working…";
   interface ActivePill { channelId: string; threadTs: string; label: string; lastSetMs: number; }
   const active = new Map<string /* slug */, ActivePill>();
 
@@ -310,6 +310,42 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
 
   // slack -> agent
   const socket = new SocketModeClient({ appToken: opts.appToken });
+  // Slash commands (e.g. /stop) come over the same socket. The command body
+  // includes channel_id, so we can look up the agent slug from the same
+  // channel→agent mapping the inbound message router uses, then act on its
+  // tmux session and announce in-channel what we did.
+  socket.on("slash_commands", async ({ body, ack }: any) => {
+    const cmd: string = body?.command ?? "";
+    const channelId: string | undefined = body?.channel_id;
+    const userId: string | undefined = body?.user_id;
+    if (cmd !== "/stop") {
+      if (ack) await ack({ response_type: "ephemeral", text: `Unknown command: ${cmd}` });
+      return;
+    }
+    const slug = channelId ? mapping[channelId] : undefined;
+    if (!slug) {
+      if (ack) await ack({ response_type: "ephemeral", text: "This channel is not mapped to any agent." });
+      return;
+    }
+    if (ack) await ack();
+    const res = sendTmuxKey(slug, "Escape");
+    if (!res.ok) {
+      console.error(`/stop -> ${slug} send-keys Escape failed:`, res.error);
+      try {
+        await client.post(channelId!, `:warning: \`/stop\` failed to interrupt *${slug}* — ${res.error ?? "unknown error"}`);
+      } catch (e) {
+        console.error(`/stop announce (failure) for ${slug} failed:`, e);
+      }
+      return;
+    }
+    try {
+      const announce = `:octagonal_sign: Sent Esc to *${slug}* — ${userId ? `<@${userId}>` : "someone"} interrupted the current turn.`;
+      await client.post(channelId!, announce);
+    } catch (e) {
+      console.error(`/stop announce for ${slug} failed:`, e);
+    }
+  });
+
   // Block Kit button clicks land here over the same socket connection. The
   // action_id is `picker:<slug>:<hash>:<N>` — we look up the active picker
   // for that slug, send the digit to its tmux session, and update the Slack

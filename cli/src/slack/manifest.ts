@@ -20,6 +20,16 @@ export function slackAppManifest(opts: ManifestOptions = {}): string {
         display_name: opts.displayName ?? "langwatch-agents",
         always_online: true,
       },
+      // Slash commands run over socket mode (no public request_url). The
+      // bridge listens for slash_commands events on the same socket and acts
+      // on the channel where the command was issued.
+      slash_commands: [
+        {
+          command: "/stop",
+          description: "Send Esc to the agent in this channel (interrupt the current turn)",
+          should_escape: false,
+        },
+      ],
     },
     oauth_config: {
       scopes: {
@@ -41,6 +51,8 @@ export function slackAppManifest(opts: ManifestOptions = {}): string {
           "files:read",
           "users:read",
           "app_mentions:read",
+          // Required for /stop and any future slash commands the bridge handles.
+          "commands",
         ],
       },
     },
