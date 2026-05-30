@@ -223,9 +223,23 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             // text into its thread, then post this text as the new channel-
             // root anchor and move the "working…" pill onto it.
             await drainBuffer(t.slug, t.channelId);
+            // Explicitly clear the pill on the previous anchor. Draining the
+            // buffer above auto-clears it (Slack drops the pill when the bot
+            // posts in the same thread), but back-to-back narrative texts
+            // produce no thread reply between them — without this, the
+            // previous pill would sit visible for ~2 minutes until Slack's
+            // own idle TTL.
+            const prevPill = active.get(t.slug);
+            if (prevPill) {
+              try {
+                await client.setStatus(prevPill.channelId, prevPill.threadTs, "");
+              } catch (e) {
+                console.error(`clear previous pill for ${t.slug} failed:`, e);
+              }
+            }
             const ts = await client.post(t.channelId, post.text);
             if (ts) writeThreadRoot(t.slug, ts);
-            active.delete(t.slug); // drained → previous pill auto-clears
+            active.delete(t.slug);
             if (ts) {
               try {
                 await client.setStatus(t.channelId, ts, WORKING_LABEL);
