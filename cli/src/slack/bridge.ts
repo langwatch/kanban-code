@@ -283,10 +283,15 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
         }
         if (prev && prev.hash === picker.hash) continue; // already posted
         const { text, blocks } = pickerBlocks(t.slug, picker);
-        const threadTs = readThreadRoot(t.slug);
+        // Pickers go to the channel root, not into the current thread: they
+        // are the agent blocking on YOU, so they need to be where the channel
+        // shows them at a glance. Also becomes the new thread anchor so
+        // subsequent tool calls thread under it cleanly.
         try {
-          const ts = await client.postBlocks(t.channelId, text, blocks, threadTs);
+          const ts = await client.postBlocks(t.channelId, text, blocks);
           if (ts) {
+            writeThreadRoot(t.slug, ts);
+            active.delete(t.slug); // clear stale "working…" pill state
             pickerByAgent.set(t.slug, {
               hash: picker.hash,
               options: picker.options.map((o) => ({ number: o.number, title: o.title })),
