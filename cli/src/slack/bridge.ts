@@ -241,17 +241,28 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             const ts = await client.post(t.channelId, post.text);
             if (ts) writeThreadRoot(t.slug, ts);
             active.delete(t.slug);
-            // `terminal: true` posts (currently only the codex out-of-credits
-            // sentinel) are the final word of the turn — no more work coming.
-            // Skip the WORKING pill entirely so the channel doesn't show a
-            // perpetual "is working…" against a state that's already finished.
-            // The previous anchor's pill was already cleared above.
-            if (ts && !post.terminal) {
-              try {
-                await client.setStatus(t.channelId, ts, WORKING_LABEL);
-                active.set(t.slug, { channelId: t.channelId, threadTs: ts, label: WORKING_LABEL, lastSetMs: Date.now() });
-              } catch (e) {
-                console.error(`setStatus (text) for ${t.slug} failed:`, e);
+            // `terminal: true` posts (codex out-of-credits sentinel, or a
+            // Claude assistant message with stop_reason === "end_turn") are
+            // the final word of the turn — no more work coming. Skip the
+            // WORKING pill so the channel doesn't show a perpetual
+            // "is working…" against a state that's already finished, and
+            // explicitly clear the pill on the new anchor to override
+            // Slack's default "is thinking" indicator that some clients
+            // auto-render when a user replies to an assistant-mode app.
+            if (ts) {
+              if (post.terminal) {
+                try {
+                  await client.setStatus(t.channelId, ts, "");
+                } catch (e) {
+                  console.error(`setStatus (terminal clear) for ${t.slug} failed:`, e);
+                }
+              } else {
+                try {
+                  await client.setStatus(t.channelId, ts, WORKING_LABEL);
+                  active.set(t.slug, { channelId: t.channelId, threadTs: ts, label: WORKING_LABEL, lastSetMs: Date.now() });
+                } catch (e) {
+                  console.error(`setStatus (text) for ${t.slug} failed:`, e);
+                }
               }
             }
           } else {

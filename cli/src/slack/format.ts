@@ -101,13 +101,20 @@ function role(obj: any): string | undefined {
 /// Emit one SlackPost per content block on an assistant turn. Each block keeps
 /// its own kind so the bridge can route it correctly (text -> channel root and
 /// new thread anchor, tool/thinking -> thread under the previous text).
-function emitAssistantBlocks(content: any, out: SlackPost[]): void {
+///
+/// When the message's stop_reason is "end_turn", the last text block emitted
+/// gets `terminal: true` so the bridge skips lighting the "is working…" pill
+/// on a turn that has actually finished. Without this the pill sits on the
+/// last anchor forever (the refresh loop re-applies it every 30s), and Slack
+/// shows the agent as still working even after a clean stop.
+function emitAssistantBlocks(content: any, stopReason: string | undefined, out: SlackPost[]): void {
   if (typeof content === "string") {
     const t = truncate(content);
-    if (t) out.push({ role: "assistant", kind: "text", text: t });
+    if (t) out.push({ role: "assistant", kind: "text", text: t, terminal: stopReason === "end_turn" });
     return;
   }
   if (!Array.isArray(content)) return;
+  const startLen = out.length;
   for (const block of content) {
     switch (block?.type) {
       case "text": {
@@ -128,6 +135,20 @@ function emitAssistantBlocks(content: any, out: SlackPost[]): void {
       }
       default:
         break;
+    }
+  }
+  // Tag the LAST text block of this message as terminal if the turn ended
+  // cleanly. We mark the last text (not the last block overall) because
+  // tool_use blocks within an end_turn-stopped message don't actually exist
+  // — a stop_reason of "end_turn" means no tool was invoked — but if the
+  // model ever does combine the two we still want the user-visible text
+  // post to carry the marker, not a buried tool entry.
+  if (stopReason === "end_turn") {
+    for (let i = out.length - 1; i >= startLen; i--) {
+      if (out[i].kind === "text") {
+        out[i].terminal = true;
+        break;
+      }
     }
   }
 }
@@ -159,7 +180,8 @@ export function formatTranscriptLines(objs: any[]): SlackPost[] {
   const posts: SlackPost[] = [];
   for (const obj of objs) {
     if (role(obj) !== "assistant") continue;
-    emitAssistantBlocks(obj.message?.content ?? obj.content, posts);
+    const stopReason: string | undefined = obj.message?.stop_reason ?? obj.stop_reason;
+    emitAssistantBlocks(obj.message?.content ?? obj.content, stopReason, posts);
   }
   return coalesceTools(posts);
 }

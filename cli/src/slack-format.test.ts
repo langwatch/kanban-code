@@ -129,4 +129,63 @@ describe("formatTranscriptLines", () => {
     assert.equal(posts.length, 0);
   });
 
+  // Per the screenshot in PR #82 review: after Claude hits stop_reason
+  // "end_turn", the pill should not be left lit on the channel. We mark
+  // the last text block terminal so the bridge skips lighting the WORKING
+  // pill and explicitly clears any auto-indicator on that anchor.
+  test("marks the last text post terminal when stop_reason is end_turn", () => {
+    const endTurn = (content: any) => ({
+      type: "assistant",
+      message: { role: "assistant", content, stop_reason: "end_turn" },
+    });
+    const posts = formatTranscriptLines([
+      endTurn([
+        { type: "text", text: "I checked the deps and the bump is safe." },
+      ]),
+    ]);
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].kind, "text");
+    assert.equal(posts[0].terminal, true);
+  });
+
+  test("end_turn marks only the LAST text in the message (not earlier ones)", () => {
+    const endTurn = (content: any) => ({
+      type: "assistant",
+      message: { role: "assistant", content, stop_reason: "end_turn" },
+    });
+    const posts = formatTranscriptLines([
+      endTurn([
+        { type: "text", text: "preamble" },
+        { type: "thinking", thinking: "considered an angle" },
+        { type: "text", text: "final answer" },
+      ]),
+    ]);
+    const texts = posts.filter((p) => p.kind === "text");
+    assert.equal(texts.length, 2);
+    assert.equal(texts[0].terminal, undefined);
+    assert.equal(texts[1].terminal, true);
+  });
+
+  test("does NOT mark terminal when stop_reason is tool_use (more work coming)", () => {
+    const toolUseStop = (content: any) => ({
+      type: "assistant",
+      message: { role: "assistant", content, stop_reason: "tool_use" },
+    });
+    const posts = formatTranscriptLines([
+      toolUseStop([
+        { type: "text", text: "Let me check." },
+        { type: "tool_use", name: "Bash", input: { description: "view tests" } },
+      ]),
+    ]);
+    const text = posts.find((p) => p.kind === "text");
+    assert.equal(text?.terminal, undefined);
+  });
+
+  test("does NOT mark terminal when stop_reason is absent (default to working)", () => {
+    const posts = formatTranscriptLines([
+      asst([{ type: "text", text: "midstream message, no stop reason yet" }]),
+    ]);
+    assert.equal(posts[0].terminal, undefined);
+  });
+
 });
