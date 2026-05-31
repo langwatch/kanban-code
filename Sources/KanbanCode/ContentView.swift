@@ -96,8 +96,6 @@ struct ContentView: View {
     @AppStorage("appearanceMode") var appearanceMode: AppearanceMode = .auto
     @AppStorage("boardViewMode") var boardViewModeRaw = BoardViewMode.kanban.rawValue
     @State var showProcessManager = false
-    @State var showQuitConfirmation = false
-    @State var quitOwnedSessions: [TmuxSession] = []
     @AppStorage("killTmuxOnQuit") var killTmuxOnQuit = true
     @AppStorage("uiTextSize") var uiTextSize: Int = 1
     @AppStorage("detailExpanded") var detailExpandedPersisted = false
@@ -1309,30 +1307,7 @@ struct ContentView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeQuitRequested).receive(on: RunLoop.main)) { _ in
-                // Tear down any active channel shares first — they're the only
-                // child processes we own that survive an unclean exit.
-                Task { await shareController.stopAll() }
-                let sessions = store.state.cards.compactMap { card -> TmuxSession? in
-                    guard let tmux = card.link.tmuxLink else { return nil }
-                    return TmuxSession(name: tmux.sessionName, path: card.link.projectPath ?? "")
-                }
-                if sessions.isEmpty {
-                    NSApp.reply(toApplicationShouldTerminate: true)
-                } else {
-                    quitOwnedSessions = sessions
-                    showQuitConfirmation = true
-                    Task.detached {
-                        let live = AppDelegate.listAllTmuxSessionsSync()
-                        let liveNames = Set(live.map(\.name))
-                        let updated = sessions.map { s in
-                            TmuxSession(name: s.name, path: s.path, attached: liveNames.contains(s.name))
-                        }
-                        await MainActor.run { quitOwnedSessions = updated }
-                    }
-                }
-            }
-            .sheet(isPresented: $showQuitConfirmation) {
-                quitConfirmationSheet
+                handleQuitRequest()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification).receive(on: RunLoop.main)) { _ in
                 store.appIsActive = true
@@ -2067,85 +2042,50 @@ struct ContentView: View {
 
     // MARK: - Quit Confirmation
 
-    private var quitConfirmationSheet: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 8) {
-                Image(systemName: "terminal")
-                    .font(.app(.largeTitle))
-                    .foregroundStyle(.secondary)
-                Text("Quit Kanban?")
-                    .font(.app(.headline))
-                Text("You have \(quitOwnedSessions.count) managed tmux session\(quitOwnedSessions.count == 1 ? "" : "s") running.")
-                    .font(.app(.subheadline))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 20)
-            .padding(.bottom, 12)
-
-            Table(quitOwnedSessions) {
-                TableColumn("") { session in
-                    Circle()
-                        .fill(session.attached ? .green : .gray)
-                        .frame(width: 8, height: 8)
-                }
-                .width(16)
-
-                TableColumn("Session") { session in
-                    Text(session.name)
-                        .lineLimit(1)
-                }
-
-                TableColumn("Card") { session in
-                    if let card = store.state.cards.first(where: { card in
-                        card.link.tmuxLink?.allSessionNames.contains(session.name) == true
-                    }) {
-                        Text(card.displayTitle)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                TableColumn("Path") { session in
-                    Text(abbreviateHomePath(session.path))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxHeight: .infinity)
-
-            Divider()
-
-            HStack {
-                Toggle("Kill managed sessions on quit", isOn: $killTmuxOnQuit)
-                    .toggleStyle(.checkbox)
-                Spacer()
-                Button("Cancel") {
-                    showQuitConfirmation = false
-                    NSApp.reply(toApplicationShouldTerminate: false)
-                }
-                .keyboardShortcut(.cancelAction)
-                Button("Quit Kanban") {
-                    showQuitConfirmation = false
-                    if killTmuxOnQuit {
-                        Task {
-                            // Kill tmux sessions and remove terminal associations from cards
-                            let killedNames = Set(quitOwnedSessions.map(\.name))
-                            for card in store.state.cards {
-                                if let tmux = card.link.tmuxLink, killedNames.contains(tmux.sessionName) {
-                                    await store.dispatchAndWait(.killTerminal(cardId: card.id, sessionName: tmux.sessionName))
-                                }
-                            }
-                            NSApp.reply(toApplicationShouldTerminate: true)
-                        }
-                    } else {
-                        NSApp.reply(toApplicationShouldTerminate: true)
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(16)
+    private func handleQuitRequest() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
         }
-        .frame(width: 520, height: 380)
+
+        // Tear down any active channel shares first. They are the only child
+        // processes we own that survive an unclean exit.
+        Task { await shareController.stopAll() }
+
+        let managedSessions = store.state.cards.flatMap { card -> [TmuxSession] in
+            guard let tmux = card.link.tmuxLink else { return [] }
+            return tmux.allSessionNames.map {
+                TmuxSession(name: $0, path: card.link.projectPath ?? "")
+            }
+        }
+        guard !managedSessions.isEmpty else {
+            appDelegate.replyToTermination(true)
+            return
+        }
+
+        switch AppDelegate.confirmQuit(
+            managedSessionCount: Set(managedSessions.map(\.name)).count,
+            killManagedSessions: killTmuxOnQuit
+        ) {
+        case .cancel:
+            appDelegate.replyToTermination(false)
+        case .quit(let shouldKill):
+            killTmuxOnQuit = shouldKill
+            guard shouldKill else {
+                appDelegate.replyToTermination(true)
+                return
+            }
+            let cards = store.state.cards
+            Task {
+                for card in cards {
+                    guard let tmux = card.link.tmuxLink else { continue }
+                    for sessionName in tmux.allSessionNames {
+                        await store.dispatchAndWait(.killTerminal(cardId: card.id, sessionName: sessionName))
+                    }
+                }
+                appDelegate.replyToTermination(true)
+            }
+        }
     }
     /// Find the card that should be selected after deleting the given card.
     /// Prefers the card directly below; if last in column, selects the one above.

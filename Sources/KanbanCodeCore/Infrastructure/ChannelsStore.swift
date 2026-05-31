@@ -116,6 +116,17 @@ public actor ChannelsStore {
         try fm.createDirectory(atPath: imagesDir, withIntermediateDirectories: true)
     }
 
+    private func writeReplacing(_ data: Data, at path: String) throws {
+        let fm = FileManager.default
+        let tmp = "\(path).tmp-\(UUID().uuidString)"
+        defer { try? fm.removeItem(atPath: tmp) }
+        try data.write(to: URL(fileURLWithPath: tmp))
+        if fm.fileExists(atPath: path) {
+            try? fm.removeItem(atPath: path)
+        }
+        try fm.moveItem(atPath: tmp, toPath: path)
+    }
+
     /// Copy attached image files (possibly from NSTemporaryDirectory) into a
     /// persistent location under `<baseDir>/images/<msgId>/N.<ext>`. Returns the
     /// absolute persistent paths. Input paths that don't exist are skipped.
@@ -142,12 +153,7 @@ public actor ChannelsStore {
         try ensureDirs()
         let container = ChannelsContainer(channels: channels)
         let data = try encoder.encode(container)
-        let tmp = channelsPath + ".tmp"
-        try data.write(to: URL(fileURLWithPath: tmp))
-        if FileManager.default.fileExists(atPath: channelsPath) {
-            try? FileManager.default.removeItem(atPath: channelsPath)
-        }
-        try FileManager.default.moveItem(atPath: tmp, toPath: channelsPath)
+        try writeReplacing(data, at: channelsPath)
     }
 
     public func appendMessage(_ msg: ChannelMessage, to channel: String) throws {
@@ -249,12 +255,7 @@ public actor ChannelsStore {
     public func saveReadState(_ state: ReadState) throws {
         try ensureDirs()
         let data = try encoder.encode(state)
-        let tmp = readStatePath + ".tmp"
-        try data.write(to: URL(fileURLWithPath: tmp))
-        if FileManager.default.fileExists(atPath: readStatePath) {
-            try? FileManager.default.removeItem(atPath: readStatePath)
-        }
-        try FileManager.default.moveItem(atPath: tmp, toPath: readStatePath)
+        try writeReplacing(data, at: readStatePath)
     }
 
     // MARK: - Drafts (per-channel / per-DM draft messages)
@@ -283,12 +284,7 @@ public actor ChannelsStore {
     public func saveDrafts(_ drafts: DraftsState) throws {
         try ensureDirs()
         let data = try encoder.encode(drafts)
-        let tmp = draftsPath + ".tmp"
-        try data.write(to: URL(fileURLWithPath: tmp))
-        if FileManager.default.fileExists(atPath: draftsPath) {
-            try? FileManager.default.removeItem(atPath: draftsPath)
-        }
-        try FileManager.default.moveItem(atPath: tmp, toPath: draftsPath)
+        try writeReplacing(data, at: draftsPath)
     }
 
     // MARK: - Direct messages

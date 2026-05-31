@@ -75,6 +75,21 @@ struct ChannelsStoreTests {
         #expect(msgs.map(\.body) == ["message 3", "message 4"])
     }
 
+    @Test func saveReadStateSucceedsWithStaleFixedTempFile() async throws {
+        let base = tmpBase()
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let channelsDir = (base as NSString).appendingPathComponent("channels")
+        try FileManager.default.createDirectory(atPath: channelsDir, withIntermediateDirectories: true)
+        let staleTemp = (channelsDir as NSString).appendingPathComponent("read-state.json.tmp")
+        try "stale".write(toFile: staleTemp, atomically: true, encoding: .utf8)
+
+        let store = ChannelsStore(baseDir: base)
+        try await store.saveReadState(.init(channels: ["general": "msg_1"], dms: [:]))
+
+        let loaded = await store.loadReadState()
+        #expect(loaded.channels["general"] == "msg_1")
+    }
+
     @Test func jsonlOnDiskInteroperatesWithCLIFormat() async throws {
         // Write a file using the same format the TS CLI writes, then read it
         // back through the Swift store and verify we parse it correctly.

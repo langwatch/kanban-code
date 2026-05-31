@@ -108,6 +108,13 @@ struct KanbanCodeApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    enum QuitDecision {
+        case cancel
+        case quit(killManagedSessions: Bool)
+    }
+
+    private var terminationReplyPending = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Disable macOS smart substitutions app-wide (smart quotes, dashes, autocorrect).
         // These break code input by replacing -- with em-dash, " with curly quotes, etc.
@@ -205,9 +212,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Post notification — ContentView checks store state for managed sessions
+        guard !terminationReplyPending else { return .terminateLater }
+        terminationReplyPending = true
+
+        // ContentView knows which tmux sessions belong to managed cards. It
+        // replies after presenting an app-modal confirmation when needed.
         NotificationCenter.default.post(name: .kanbanCodeQuitRequested, object: nil)
+
+        // Never leave AppKit stuck in its deferred-termination state if the
+        // main view is not mounted or an unexpected presentation error occurs.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard self?.terminationReplyPending == true else { return }
+            self?.replyToTermination(false)
+        }
         return .terminateLater
+    }
+
+    @MainActor
+    func replyToTermination(_ shouldTerminate: Bool) {
+        guard terminationReplyPending else { return }
+        terminationReplyPending = false
+        NSApp.reply(toApplicationShouldTerminate: shouldTerminate)
+    }
+
+    @MainActor
+    static func confirmQuit(managedSessionCount: Int, killManagedSessions: Bool) -> QuitDecision {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit Kanban?"
+        alert.informativeText = "You have \(managedSessionCount) managed tmux session\(managedSessionCount == 1 ? "" : "s") running."
+        alert.addButton(withTitle: "Quit Kanban")
+        alert.addButton(withTitle: "Cancel")
+
+        let checkbox = NSButton(
+            checkboxWithTitle: "Kill managed sessions on quit",
+            target: nil,
+            action: nil
+        )
+        checkbox.state = killManagedSessions ? .on : .off
+        alert.accessoryView = checkbox
+
+        // A SwiftUI sheet can end up attached behind another sheet or drawer.
+        // Use an application-modal alert so the quit decision is always visible.
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.level = .modalPanel
+        guard alert.runModal() == .alertFirstButtonReturn else { return .cancel }
+        return .quit(killManagedSessions: checkbox.state == .on)
     }
 
     /// Synchronous tmux list-sessions — returns all sessions (no filtering).
