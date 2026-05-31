@@ -10,6 +10,7 @@ import { Runtime } from "../agents/runtime.js";
 import { recordAnnounceSuppress } from "./announce-suppress.js";
 import { WORKING_PILL_LABEL } from "./announce.js";
 import { writeThreadRoot, readThreadRoot } from "./thread-root.js";
+import { writeActivePill, readActivePill, clearActivePill } from "./active-pill.js";
 import { downloadSlackFile, formatPromptWithAttachments, DownloadedFile, sweepInbox, DEFAULT_RETENTION_DAYS } from "./inbox.js";
 import { parsePicker, Picker } from "./picker.js";
 import { findSessionJsonl, findCodexRollout, pasteTmuxPrompt, captureTmuxPane, sendTmuxKey } from "../data.js";
@@ -166,6 +167,42 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
   interface ActivePill { channelId: string; threadTs: string; label: string; lastSetMs: number; }
   const active = new Map<string /* slug */, ActivePill>();
 
+  /// Restore pills from disk on startup so a bridge restart (config-sync
+  /// triggers one on every bundle apply, sometimes several per hour while
+  /// we iterate) doesn't drop the pill until the agent's next text post.
+  /// We only restore pills that were set recently — `MAX_RESTORE_AGE_MS`
+  /// older and the agent has likely already finished its turn, Slack's
+  /// own idle TTL would have cleared the visual pill, and re-lighting
+  /// would falsely advertise active work.
+  const MAX_RESTORE_AGE_MS = 10 * 60_000;
+  for (const a of agents) {
+    const pill = readActivePill(a.slug);
+    if (!pill) continue;
+    if (Date.now() - pill.lastSetMs > MAX_RESTORE_AGE_MS) {
+      clearActivePill(a.slug);
+      continue;
+    }
+    active.set(a.slug, pill);
+    // Re-light immediately rather than waiting for the next refresh tick,
+    // so the channel shows "is working…" within seconds of bridge start
+    // (the gap that prompted this whole change). Best-effort; the
+    // refresh loop will retry every cycle anyway.
+    try {
+      await client.setStatus(pill.channelId, pill.threadTs, pill.label);
+    } catch (e) {
+      console.error(`setStatus restore for ${a.slug} failed:`, e);
+    }
+  }
+
+  function setActivePill(slug: string, pill: ActivePill): void {
+    active.set(slug, pill);
+    writeActivePill(slug, pill);
+  }
+  function dropActivePill(slug: string): void {
+    active.delete(slug);
+    clearActivePill(slug);
+  }
+
   // Per-agent buffer of tool/thinking posts that have NOT yet been sent. We
   // hold them until the next text post arrives (or a picker pops), then drain
   // them all into the previous text's thread as a single message. This keeps
@@ -240,7 +277,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             }
             const ts = await client.post(t.channelId, post.text);
             if (ts) writeThreadRoot(t.slug, ts);
-            active.delete(t.slug);
+            dropActivePill(t.slug);
             // `terminal: true` posts (currently only the codex out-of-credits
             // sentinel) are the final word of the turn — no more work coming.
             // Skip the WORKING pill entirely so the channel doesn't show a
@@ -249,7 +286,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             if (ts && !post.terminal) {
               try {
                 await client.setStatus(t.channelId, ts, WORKING_LABEL);
-                active.set(t.slug, { channelId: t.channelId, threadTs: ts, label: WORKING_LABEL, lastSetMs: Date.now() });
+                setActivePill(t.slug, { channelId: t.channelId, threadTs: ts, label: WORKING_LABEL, lastSetMs: Date.now() });
               } catch (e) {
                 console.error(`setStatus (text) for ${t.slug} failed:`, e);
               }
@@ -279,6 +316,9 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
       try {
         await client.setStatus(pill.channelId, pill.threadTs, pill.label);
         pill.lastSetMs = now;
+        // Persist the refresh so a restart right after this tick keeps
+        // the pill fresh (and within the MAX_RESTORE_AGE_MS window).
+        writeActivePill(slug, pill);
       } catch (e) {
         console.error(`setStatus refresh for ${slug} failed:`, e);
       }
