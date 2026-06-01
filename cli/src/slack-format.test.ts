@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import { strict as assert } from "node:assert";
-import { shortenPath, toolLabel, formatTranscriptLines } from "./slack/format.js";
+import { shortenPath, toolLabel, formatTranscriptLines, gfmToSlackMrkdwn } from "./slack/format.js";
 
 describe("shortenPath", () => {
   test("keeps short paths, trims long ones to last 3", () => {
@@ -129,4 +129,75 @@ describe("formatTranscriptLines", () => {
     assert.equal(posts.length, 0);
   });
 
+  test("translates GFM markdown in assistant text to Slack mrkdwn", () => {
+    const posts = formatTranscriptLines([
+      asst([{ type: "text", text: "**hono 4.12.23**: serves, responds 200" }]),
+    ]);
+    assert.equal(posts[0].text, "*hono 4.12.23*: serves, responds 200");
+  });
+});
+
+describe("gfmToSlackMrkdwn", () => {
+  test("**bold** -> *bold*", () => {
+    assert.equal(gfmToSlackMrkdwn("hello **world** ok"), "hello *world* ok");
+  });
+
+  test("__bold__ -> *bold*", () => {
+    assert.equal(gfmToSlackMrkdwn("hello __world__ ok"), "hello *world* ok");
+  });
+
+  test("markdown italic *x* -> Slack italic _x_", () => {
+    assert.equal(gfmToSlackMrkdwn("hello *world* ok"), "hello _world_ ok");
+  });
+
+  test("Slack-native italic _x_ is left alone", () => {
+    assert.equal(gfmToSlackMrkdwn("hello _world_ ok"), "hello _world_ ok");
+  });
+
+  test("bold inside italic stays bold (not mistakenly italicised)", () => {
+    // The reverse order would be a bug — `**x**` shouldn't end up as `_x_`.
+    assert.equal(gfmToSlackMrkdwn("**bold**"), "*bold*");
+    assert.equal(gfmToSlackMrkdwn("foo **bold** *italic* bar"), "foo *bold* _italic_ bar");
+  });
+
+  test("links: [label](url) -> <url|label>", () => {
+    assert.equal(
+      gfmToSlackMrkdwn("see [the docs](https://example.com/x) for more"),
+      "see <https://example.com/x|the docs> for more",
+    );
+  });
+
+  test("ATX headings -> bold lines", () => {
+    assert.equal(gfmToSlackMrkdwn("# Heading 1\nbody"), "*Heading 1*\nbody");
+    assert.equal(gfmToSlackMrkdwn("### Heading 3"), "*Heading 3*");
+  });
+
+  test("strikethrough: ~~x~~ -> ~x~", () => {
+    assert.equal(gfmToSlackMrkdwn("~~old~~ new"), "~old~ new");
+  });
+
+  test("fenced code blocks pass through unchanged", () => {
+    const input = "before\n```\n**not bold inside**\n```\nafter **bold**";
+    assert.equal(gfmToSlackMrkdwn(input), "before\n```\n**not bold inside**\n```\nafter *bold*");
+  });
+
+  test("inline code passes through unchanged", () => {
+    assert.equal(gfmToSlackMrkdwn("call `foo(**x**)` then **bold**"), "call `foo(**x**)` then *bold*");
+  });
+
+  test("realistic agent paragraph with bullets, bold and link", () => {
+    const input = [
+      "Strong evidence:",
+      "- **hono 4.12.23 server smoke**: serves, responds 200",
+      "- **Real bullboard server**: gets past module loading",
+      "",
+      "See [the docs](https://example.com).",
+    ].join("\n");
+    const out = gfmToSlackMrkdwn(input);
+    assert.ok(out.includes("*hono 4.12.23 server smoke*"));
+    assert.ok(out.includes("*Real bullboard server*"));
+    assert.ok(out.includes("<https://example.com|the docs>"));
+    // Slack uses `-` for bullets natively (since 2024); we don't touch them.
+    assert.ok(out.includes("- *hono"));
+  });
 });
