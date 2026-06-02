@@ -255,10 +255,14 @@ export function scheduleTmuxSelfCompact(
   const tmux = findTmux();
   const delay = Math.max(0, Number.isFinite(followUpDelaySeconds) ? followUpDelaySeconds : 1);
   const compactSteps = [
-    // Let the CLI return control to Claude Code before we start sending keys
-    // to the same pane. Once this shell is detached, it survives Claude
-    // interrupting the Bash tool that launched `kanban self-compact`.
-    "sleep 0.1",
+    // Give the CLI time to finish printing its output and return control to
+    // Claude Code before we start sending keys to the same pane. The shell
+    // is detached so it survives Claude interrupting the Bash tool that
+    // launched `kanban self-compact` — but if we send Escape too soon, the
+    // interrupt races with Claude still processing the tool result and
+    // sometimes leaves the session in a state where `/compact` is not
+    // recognised as a slash command. 2s gives a comfortable buffer.
+    "sleep 2",
     `${tmux} send-keys -t ${shellEscape(sessionName)} Escape`,
     `${tmux} set-buffer ${shellEscape("/compact")}`,
     `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
