@@ -489,30 +489,6 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     relays.push({ text: prompt, ts: Date.now() });
     recentRelays.set(decision.slug, relays);
     pasteTmuxPrompt(decision.slug, prompt); // tmux session name == slug
-
-    // Light the "is working…" pill on the user's own Slack message right
-    // away, so the channel reflects "agent is processing this" without the
-    // operator having to wait for the agent's first text reply to land.
-    // Previously the pill only appeared on the assistant's first reply,
-    // which made it look like nothing was happening between sending the
-    // prompt and seeing output (in practice that can be 30s+ of tool
-    // calls). The pill then moves to the assistant's reply via the
-    // existing prevPill-clear path the moment that reply lands.
-    const userTs: string | undefined = (event as any)?.ts;
-    const userChannel: string | undefined = (event as any)?.channel;
-    if (userTs && userChannel) {
-      try {
-        await client.setStatus(userChannel, userTs, WORKING_PILL_LABEL);
-        setActivePill(decision.slug, {
-          channelId: userChannel,
-          threadTs: userTs,
-          label: WORKING_PILL_LABEL,
-          lastSetMs: Date.now(),
-        });
-      } catch (e) {
-        console.error(`setStatus (on user message) for ${decision.slug} failed:`, e);
-      }
-    }
   });
   await socket.start();
   console.error(`Slack bridge connected. Mirroring ${tails.length} agent(s).`);
