@@ -13,9 +13,9 @@ export interface SlackPost {
   text: string; // Slack mrkdwn
   /// True when this post is the final output of the turn — no more work is
   /// coming. The bridge uses this to suppress the "is working…" pill that
-  /// would otherwise sit on the channel indefinitely. Currently set on the
-  /// codex out-of-credits sentinel; could be extended to normal task_complete
-  /// once we're sure Claude-runtime parity is covered.
+  /// would otherwise sit on the channel indefinitely. Set on the codex
+  /// out-of-credits sentinel AND on the final assistant text post of any
+  /// normal codex turn (when task_complete lands in the same poll batch).
   terminal?: boolean;
 }
 
@@ -200,21 +200,36 @@ export function formatCodexRolloutLines(objs: any[]): SlackPost[] {
     } else if (p.type === "token_count" && p.rate_limits?.credits) {
       credits = p.rate_limits.credits;
       planType = p.rate_limits.plan_type;
-    } else if (p.type === "task_complete" && p.last_agent_message == null && credits?.has_credits === false) {
-      // Prompt was received but the turn produced no output because Codex ran
-      // out of credits. Surface it instead of mirroring silence. Routed as
-      // text so it anchors at the channel root (operators need to see it).
-      // `terminal: true` tells the bridge not to attach the working pill to
-      // this anchor — no more output is coming this turn, the pill would
-      // otherwise sit on the channel indefinitely (Slack auto-clears the
-      // built-in 2-min TTL but the refresh loop re-applies it forever).
-      const plan = planType ? ` (plan: ${planType}, balance ${credits.balance ?? "0"})` : "";
-      posts.push({
-        role: "assistant",
-        kind: "text",
-        terminal: true,
-        text: `:warning: Codex is out of credits${plan}. The prompt was received but no output was produced, and this will keep failing until credits are topped up at https://chatgpt.com/codex/settings/usage`,
-      });
+    } else if (p.type === "task_complete") {
+      if (p.last_agent_message == null && credits?.has_credits === false) {
+        // Prompt was received but the turn produced no output because Codex ran
+        // out of credits. Surface it instead of mirroring silence. Routed as
+        // text so it anchors at the channel root (operators need to see it).
+        // `terminal: true` tells the bridge not to attach the working pill to
+        // this anchor — no more output is coming this turn, the pill would
+        // otherwise sit on the channel indefinitely (Slack auto-clears the
+        // built-in 2-min TTL but the refresh loop re-applies it forever).
+        const plan = planType ? ` (plan: ${planType}, balance ${credits.balance ?? "0"})` : "";
+        posts.push({
+          role: "assistant",
+          kind: "text",
+          terminal: true,
+          text: `:warning: Codex is out of credits${plan}. The prompt was received but no output was produced, and this will keep failing until credits are topped up at https://chatgpt.com/codex/settings/usage`,
+        });
+      } else {
+        // Normal end of turn. Mark the most recent assistant text post in this
+        // batch as terminal so the bridge clears the working pill on it
+        // instead of setting a new one. The agent_message and task_complete
+        // events are written back-to-back in the rollout, so the same poll
+        // tick almost always sees both; the cross-batch case is covered by
+        // bridge.ts watching the raw objs for task_complete.
+        for (let i = posts.length - 1; i >= 0; i--) {
+          if (posts[i].role === "assistant" && posts[i].kind === "text") {
+            posts[i] = { ...posts[i], terminal: true };
+            break;
+          }
+        }
+      }
     }
   }
   return coalesceTools(posts);

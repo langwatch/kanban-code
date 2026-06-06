@@ -250,6 +250,18 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
       const { objs, newOffset } = readAppendedLines(t.path, t.offset);
       t.offset = newOffset;
       const posts = t.runtime === "codex" ? formatCodexRolloutLines(objs) : formatTranscriptLines(objs);
+      // Cross-batch turn-end safety net. The same-batch case is handled by
+      // format.ts marking the final agent_message terminal, but if the rollout
+      // tail picks up the agent_message in one poll and the task_complete in
+      // the next (rare, but possible if the rollout fsync straddles a poll),
+      // the bridge would have already attached a fresh pill to the assistant
+      // text and the refresh loop would keep it lit forever. Detect a bare
+      // task_complete and clear the active pill without posting anything.
+      const codexTurnEnded =
+        t.runtime === "codex" &&
+        objs.some(
+          (o: any) => o?.type === "event_msg" && o?.payload?.type === "task_complete"
+        );
       for (const post of posts) {
         // Don't echo a prompt we just relayed from a Slack human (it's already
         // in the channel as their message).
@@ -278,11 +290,13 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             const ts = await client.post(t.channelId, post.text);
             if (ts) writeThreadRoot(t.slug, ts);
             dropActivePill(t.slug);
-            // `terminal: true` posts (currently only the codex out-of-credits
-            // sentinel) are the final word of the turn — no more work coming.
-            // Skip the WORKING pill entirely so the channel doesn't show a
-            // perpetual "is working…" against a state that's already finished.
-            // The previous anchor's pill was already cleared above.
+            // `terminal: true` posts are the final word of the turn — no more
+            // work coming. Skip the WORKING pill entirely so the channel
+            // doesn't show a perpetual "is working…" against a state that's
+            // already finished. Codex sets this on its final agent_message
+            // when task_complete lands in the same poll batch, and on the
+            // out-of-credits sentinel. The previous anchor's pill was already
+            // cleared above.
             if (ts && !post.terminal) {
               try {
                 await client.setStatus(t.channelId, ts, WORKING_LABEL);
@@ -301,6 +315,20 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
           }
         } catch (e) {
           console.error(`post to ${t.slug} failed:`, e);
+        }
+      }
+      // After the per-post loop: if this codex batch carried a task_complete
+      // but none of the posts above were terminal text (i.e. the agent_message
+      // landed in a prior batch and got its pill), clear the pill now.
+      if (codexTurnEnded) {
+        const pill = active.get(t.slug);
+        if (pill) {
+          try {
+            await client.setStatus(pill.channelId, pill.threadTs, "");
+          } catch (e) {
+            console.error(`clear pill on codex task_complete for ${t.slug} failed:`, e);
+          }
+          dropActivePill(t.slug);
         }
       }
     }
