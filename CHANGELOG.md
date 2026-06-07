@@ -1,5 +1,102 @@
 # Changelog
 
+## [0.1.29](https://github.com/langwatch/kanban-code/compare/v0.1.28...v0.1.29) (2026-06-07)
+
+
+### Features
+
+* **board:** add pinned cards section ([3e72a89](https://github.com/langwatch/kanban-code/commit/3e72a89034df3c1bc4958db9006408b343af395e))
+* **board:** reorder channels and pinned cards ([160c492](https://github.com/langwatch/kanban-code/commit/160c4923936435fa871f49ac4d1328a676e6e9dc))
+* **bridge:** mirror Codex agent movement to Slack via rollout transcript ([c330f35](https://github.com/langwatch/kanban-code/commit/c330f3587dff393d2f4204e99155f25d6d611c09))
+* **card:** copy conversation as markdown ([383b8f8](https://github.com/langwatch/kanban-code/commit/383b8f8203484c7e891001e293fab0311dc4780c))
+* **channels:** copy conversation as markdown ([5c31168](https://github.com/langwatch/kanban-code/commit/5c3116881f403ba61b57428335b0df8c931aaafe))
+* **cli:** headless agent runtime (launch/resume, reconcile, daemon, hooks, slack) ([afc01cc](https://github.com/langwatch/kanban-code/commit/afc01cc9cf7a5019e378708b5d5752161df22ffa))
+* **cli:** headless agent runtime (launch/resume, reconcile, daemon, hooks, slack) ([86012bf](https://github.com/langwatch/kanban-code/commit/86012bfc58fdae392f6c681115db5c9aa63e45c9))
+* **headless:** add a Codex runtime alongside Claude ([06be666](https://github.com/langwatch/kanban-code/commit/06be666cc392b25035297f459355d894f6a8282f))
+* **headless:** add a Codex runtime alongside Claude ([2983a12](https://github.com/langwatch/kanban-code/commit/2983a1250c3dc6a8b5408c0799cae01599885163))
+* **slack:** /stop slash command to interrupt the agent in its channel ([30f7fda](https://github.com/langwatch/kanban-code/commit/30f7fda3829282700928cf4289afab818a579f83))
+* **slack:** add 'kanban slack post' to post to a channel as the bot ([631ed55](https://github.com/langwatch/kanban-code/commit/631ed5546cc729c118c11b5912313feca4beecb8))
+* **slack:** age out attachments after 7 days so the inbox does not grow ([5da540e](https://github.com/langwatch/kanban-code/commit/5da540e0a14e834a3c6a58464ce67e949d20a9b1))
+* **slack:** announce self-compact in the channel ([31317a7](https://github.com/langwatch/kanban-code/commit/31317a746e8fc75277a1145570456a32d6a07529))
+* **slack:** broaden bot scopes to full read + write in any invited channel ([b8b1002](https://github.com/langwatch/kanban-code/commit/b8b100228c4722d48326ac48d30757d3bd4a5340))
+* **slack:** buffer tool calls and flush them on the NEXT text post ([227ae06](https://github.com/langwatch/kanban-code/commit/227ae06d4fdeac994c4ac5b72e2a20a26873c520))
+* **slack:** follow codex rollout rotation so mirroring survives restarts/compaction ([552f0b5](https://github.com/langwatch/kanban-code/commit/552f0b5e359f051bb9762bbd539c8a59ce7ad333))
+* **slack:** live "working…" pill via assistant.threads.setStatus ([04439a8](https://github.com/langwatch/kanban-code/commit/04439a812f1123c51044fb6efc8942f9e22e937d))
+* **slack:** mark automated sends with [SYSTEM MESSAGE] ([07d46e3](https://github.com/langwatch/kanban-code/commit/07d46e3ac8e475448f3026e754525ba1d8af3ddd))
+* **slack:** mirror Claude Code's numbered picker as Slack buttons ([c40e6fb](https://github.com/langwatch/kanban-code/commit/c40e6fb2cf16bb7815cebd496238be0cad2f5623))
+* **slack:** mirror codex out-of-credits to the channel ([e3955c5](https://github.com/langwatch/kanban-code/commit/e3955c5c876b27548b6bfbe8f7c5b31a161f3d63))
+* **slack:** mirror codex received prompts as '&gt;&gt;&gt; Received user message' ([c4429d9](https://github.com/langwatch/kanban-code/commit/c4429d954bf73db6dc5ad7e0de4155e1859f7acc))
+* **slack:** mirror every injected prompt as "&gt;&gt;&gt; Received user message" ([cc6fa1e](https://github.com/langwatch/kanban-code/commit/cc6fa1ed3fa92c9d8f88c14dc1cebc35da295ec2))
+* **slack:** relay file attachments into the agent prompt ([25d5bb1](https://github.com/langwatch/kanban-code/commit/25d5bb1123b81e2008aaa3b0788509b5227e4b8d))
+* **slack:** relay file attachments to the agent's tmux prompt ([77ce266](https://github.com/langwatch/kanban-code/commit/77ce266a880e5fea1f959d78f712b302828a1e2c))
+* **slack:** render command tool calls in fenced code blocks ([65d1a59](https://github.com/langwatch/kanban-code/commit/65d1a5999e541d9b6a48c3050e348f2dfe4bf42b))
+* **slack:** route text to channel root, fold tool calls into in-thread batches ([e6571a5](https://github.com/langwatch/kanban-code/commit/e6571a507b9e7abd023b221b71b3472ba2c5d867))
+* **slack:** thread agent activity under the received prompt ([8381dc6](https://github.com/langwatch/kanban-code/commit/8381dc64d448acf28db15dcfb7f19639e1d37a5d))
+* **slack:** translate GFM markdown to Slack mrkdwn before posting ([e0c817a](https://github.com/langwatch/kanban-code/commit/e0c817a5fc0e2351bb3e9b92837a5da416f4d9d7))
+
+
+### Bug Fixes
+
+* **app:** make quit confirmation app-modal ([0e878f5](https://github.com/langwatch/kanban-code/commit/0e878f5bffeb8674de57cb3b31e7e5f86af4aa9a))
+* **app:** make quit confirmation delegate-owned ([2d8f0b8](https://github.com/langwatch/kanban-code/commit/2d8f0b81b6407a08571b0c62cb309be8ec03626f))
+* **app:** present quit confirmation reliably ([56b462a](https://github.com/langwatch/kanban-code/commit/56b462a03003dbebabc67095ac6874bed8de772a))
+* **app:** restore managed-session quit dialog ([c376a68](https://github.com/langwatch/kanban-code/commit/c376a6825b90a3d83fc49922df7caeab3c42c63f))
+* **board:** avoid lazy layout hang when pinning cards ([02a2b1d](https://github.com/langwatch/kanban-code/commit/02a2b1da22b6110d1b95e05ca7052987974649b4))
+* **bridge:** match codex rollout cwd via regex (session_meta line is huge) ([a9176ec](https://github.com/langwatch/kanban-code/commit/a9176ecd9cb9ebc6f84b76f3bd4617ce6534b11f))
+* **build:** bundle the whole cli/dist tree, not just top-level files ([5fce3e5](https://github.com/langwatch/kanban-code/commit/5fce3e5b4156a7d6cb56168f4de32250db26453a))
+* **channels:** avoid heavy markdown render hangs ([a293d9c](https://github.com/langwatch/kanban-code/commit/a293d9c0351fca1a35f6baa2876979b7630b3fdb))
+* **channels:** avoid reloading cached message tails ([5ea50e6](https://github.com/langwatch/kanban-code/commit/5ea50e6047b7d8667c5b4d071669e0a00072e3a0))
+* **channels:** cap chat rendering hot path ([4600dd4](https://github.com/langwatch/kanban-code/commit/4600dd488813ac57f2965820cf34168a86613844))
+* **channels:** skip no-op state reloads ([4e04853](https://github.com/langwatch/kanban-code/commit/4e04853cc48e87e1e1037cd8c41e95bedc7ea20b))
+* **chat:** avoid history pagination plateau ([b565af8](https://github.com/langwatch/kanban-code/commit/b565af8cd698a91ba76e1acdb0f27cf31f1f720d))
+* **codex:** resume the prior session on restart instead of starting fresh ([0df50c8](https://github.com/langwatch/kanban-code/commit/0df50c8509495dc7e8385946b58ebd00ab089bde))
+* **daemon:** send self-compact nudge straight away, not queued for Stop ([ec0767a](https://github.com/langwatch/kanban-code/commit/ec0767a07230cbdbca522aa472556e027c483bc1))
+* **hooks:** wrap codex hooks.json events under top-level "hooks" key ([9665210](https://github.com/langwatch/kanban-code/commit/966521027452010c10141f5d8d74e3a0bb2fa7ab))
+* make channel live share startup reliable ([0871638](https://github.com/langwatch/kanban-code/commit/08716387e7c001d0819de2eb347907f5461ec644))
+* **notifications:** bound transcript reads ([93d1737](https://github.com/langwatch/kanban-code/commit/93d17371a463bca12f357dbbdc209f3525ffcb70))
+* remeasure prompt editor after complex pastes ([440afa7](https://github.com/langwatch/kanban-code/commit/440afa74b119bd59010a8d4516e4673bbcad812c))
+* **search:** exact PR and URL deep search ([911c2fb](https://github.com/langwatch/kanban-code/commit/911c2fbce553d9a94160b3940c0ea4b6330fe1c6))
+* **search:** highlight quoted exact matches ([5252817](https://github.com/langwatch/kanban-code/commit/5252817f036438ca39273d917c0a83d00308bcd0))
+* **search:** make PR deep search exact and fast ([6e3d487](https://github.com/langwatch/kanban-code/commit/6e3d4875f82dba612e53f128701d019dec667733))
+* **self-compact:** give Claude Code 2s to settle before sending Escape ([433130e](https://github.com/langwatch/kanban-code/commit/433130e5cfd505abcf8100dcc8e915ed0e678636))
+* **slack:** also detect the footer-less 'Review your answers' submit picker ([961386d](https://github.com/langwatch/kanban-code/commit/961386d63b5f4a4c31235cca1bfb2a65361426c0))
+* **slack:** clear the previous "is working…" pill explicitly on each new text ([8ca0dde](https://github.com/langwatch/kanban-code/commit/8ca0dde1be402cdc929a8df22b982a3d6787cf94))
+* **slack:** drop "is working…" pill on codex out-of-credits ([f904adb](https://github.com/langwatch/kanban-code/commit/f904adbc29c2fb287f0217c30ee7c0baa3be27d8))
+* **slack:** drop the eyes-emoji ack post; light the pill on the prior anchor ([4bdc027](https://github.com/langwatch/kanban-code/commit/4bdc0270125fec5fce9d138310614958ac16f039))
+* **slack:** drop the working pill when a codex turn ends (task_complete) ([a8d68d6](https://github.com/langwatch/kanban-code/commit/a8d68d64b550347c9daee9a876e0bacfb30e5562))
+* **slack:** drop the working pill when Claude finishes its turn (end_turn) ([0d670d9](https://github.com/langwatch/kanban-code/commit/0d670d95d923e21ee598fc686c11322d02f2d3f1))
+* **slack:** drop working pill on codex out-of-credits warning ([437d1df](https://github.com/langwatch/kanban-code/commit/437d1dfd3491db05b9ab0b0374169cc733b9bf19))
+* **slack:** light the working pill the moment we deliver a user prompt ([15fb4a9](https://github.com/langwatch/kanban-code/commit/15fb4a991a96e00678d1b2f029842f3f9a92a80e))
+* **slack:** light working pill immediately when a Slack human relays a prompt ([5dd137a](https://github.com/langwatch/kanban-code/commit/5dd137aa352c6e5bc2dd8b462cfc83ba77accd60))
+* **slack:** mirror prompts only on confirmed receipt, suppress bridge echoes ([8792f8a](https://github.com/langwatch/kanban-code/commit/8792f8a8b180ff68ff56b44e816606bfdb2e4d66))
+* **slack:** persist the working pill across bridge restarts ([2667543](https://github.com/langwatch/kanban-code/commit/266754323bef9c92f9babf6b19cf5fa37f6a911b))
+* **slack:** persist working pill across bridge restarts ([d8591b1](https://github.com/langwatch/kanban-code/commit/d8591b18ac1521cb8930f91153899c94a090c679))
+* **slack:** post pickers to channel root, not into the current thread ([20a5a84](https://github.com/langwatch/kanban-code/commit/20a5a84d099c4f2b0cfc0a61c8e2f0324213e8dd))
+* **slack:** render agent markdown + drop stale pill on Claude end_turn ([2aaa594](https://github.com/langwatch/kanban-code/commit/2aaa5945aea89d287a6ba0665a0d5072e5c46fcf))
+* **slack:** thread Claude agent activity too, via a shared thread-root ([759a298](https://github.com/langwatch/kanban-code/commit/759a2980d4a229d58e1d22fa6f41943821d89611))
+* stabilize prompt editor height measurement ([cfacf24](https://github.com/langwatch/kanban-code/commit/cfacf240734cffbfa5346d4690590c3290e1d48f))
+* **store:** isolate chat actions from card rebuilds ([0a5dd5e](https://github.com/langwatch/kanban-code/commit/0a5dd5eedf38a90eafaddfb156b626a9a74dfada))
+* **transcript:** preserve slash command prompt text ([db42014](https://github.com/langwatch/kanban-code/commit/db420141a075578565481628c76f659976d6b430))
+* **ui:** keep watcher notifications on main thread ([78a92e2](https://github.com/langwatch/kanban-code/commit/78a92e29de23f83a5e09779f7c54670d7d918af0))
+* wait for share tunnel warmup before publishing URL ([6bf744d](https://github.com/langwatch/kanban-code/commit/6bf744de3c1f56b9fc75a2a5724a1170a52e64f3))
+
+
+### Performance
+
+* **terminal:** reuse resolved render attributes ([49a6176](https://github.com/langwatch/kanban-code/commit/49a6176286998f3fe5f3fb8d43a7a475ac9764a7))
+
+
+### Refactoring
+
+* **card-menu:** require explicit action routing ([ec40ef9](https://github.com/langwatch/kanban-code/commit/ec40ef97345f3fc48af4c799e2b9ee852c9c88d3))
+* **slack:** drop per-tool status label, show plain "working…" pill ([ce5aa83](https://github.com/langwatch/kanban-code/commit/ce5aa835eabb4d7bb4624083b62693e58fba67d9))
+
+
+### Documentation
+
+* **cli:** operator guide for headless agents ([4964b0e](https://github.com/langwatch/kanban-code/commit/4964b0e4529317cd4dacf0cc076145b28f09c8d1))
+* **spec:** codex mirrors via rollout transcript, not hooks ([2cb8583](https://github.com/langwatch/kanban-code/commit/2cb8583337359c2650deacec559dfca51e65b0fa))
+
 ## [0.1.28](https://github.com/langwatch/kanban-code/compare/v0.1.27...v0.1.28) (2026-05-23)
 
 
