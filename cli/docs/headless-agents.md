@@ -47,7 +47,9 @@ Point the CLI at it with `--config` or `KANBAN_AGENTS_CONFIG`.
 | `kanban hooks install` | Install Claude hooks + statusline into `~/.claude/settings.json` |
 | `kanban slack manifest` | Print a Slack app manifest (Socket Mode) + setup steps |
 | `kanban slack bridge` | Run the bidirectional Slack <-> agent bridge |
-| `kanban send <slug> "<msg>" [--announce]` | Send a prompt to an agent; `--announce` also posts it to the agent's Slack channel |
+| `kanban channel send <channel> "<msg>"` | Send a room-visible message to a shared channel; run `kanban channel --help` for join/history/share options |
+| `kanban dm <handle> "<msg>"` | Send a private direct message to one agent |
+| `kanban send <slug> "<msg>"` | Low-level: paste a prompt directly into one agent's tmux session; use channel or dm for normal coordination |
 
 ## Auto-compaction
 
@@ -69,7 +71,7 @@ agent channels:
   thinking + reply lines Claude writes separately.
 - **Slack -> agent:** a human message in a mapped channel is relayed into the
   agent's tmux session as a prompt. The bot's own messages are ignored (no loops).
-- Automated traffic (scheduled nudges via `kanban send --announce`, auto-compact
+- Automated traffic (scheduled nudges via `kanban send`, auto-compact
   notes, auto-sent reminders) is posted to the channel; human relays are not
   re-posted (they already appear in Slack).
 
@@ -83,7 +85,7 @@ steps, then invite the bot to each agent's channel.
 agents-reconcile.service   # oneshot on boot: kanban reconcile (resumes sessions)
 agents-daemon.service      # long-running: kanban daemon
 agents-slack-bridge.service# long-running: kanban slack bridge
-agents-<slug>.timer        # daily: kanban send <slug> "<dailyPrompt>" --announce
+agents-<slug>.timer        # daily: kanban send <slug> "<dailyPrompt>"
 ```
 
 On reboot or spot reclaim, `agents-reconcile.service` resumes every agent with

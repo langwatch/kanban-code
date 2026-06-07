@@ -72,6 +72,18 @@ program
   .description("Kanban Code CLI — inspect cards, sessions, and orchestrate agents")
   .version("0.1.0");
 
+function sortTopLevelCommands(names: string[]): void {
+  const rank = new Map(names.map((name, index) => [name, index]));
+  const originalIndex = new Map(program.commands.map((cmd, index) => [cmd, index]));
+  const commands = program.commands as unknown as Command[];
+  commands.sort((a: Command, b: Command) => {
+    const aRank = rank.get(a.name()) ?? Number.MAX_SAFE_INTEGER;
+    const bRank = rank.get(b.name()) ?? Number.MAX_SAFE_INTEGER;
+    if (aRank !== bRank) return aRank - bRank;
+    return (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+  });
+}
+
 // ── Helper: output as JSON or pretty ─────────────────────────────────
 
 function output(data: unknown, opts: { json?: boolean }) {
@@ -290,7 +302,7 @@ program
 
 program
   .command("send")
-  .description("Send a message to a card's tmux session (paste + Enter)")
+  .description("Low-level: paste a message directly into one card's tmux session (not channel chat)")
   .argument("<card>", "Card ID, ID prefix, or name search")
   .argument("<message>", "Message to send")
   .option("--keys", "Use send-keys instead of paste-buffer (for short single-line)")
@@ -904,7 +916,9 @@ function liveTmuxSet(): Set<string> {
   }
 }
 
-const channelCmd = program.command("channel").description("Chat channels for multi-agent coordination");
+const channelCmd = program.command("channel").description(
+  "Shared channel chat for room-visible agent updates; use `kanban channel --help`"
+);
 
 channelCmd
   .command("list")
@@ -1076,7 +1090,7 @@ channelCmd
 
 channelCmd
   .command("send")
-  .description("Send a message to a channel (broadcasts to all members)")
+  .description("Send a room-visible message to a channel (broadcasts to all members)")
   .argument("<name>", "Channel name")
   .argument("<message...>", "Message body (joined with spaces)")
   .option("--as <handle>", "Act as this handle")
@@ -1297,7 +1311,7 @@ function findCardByHandle(handle: string): Link | undefined {
   return undefined;
 }
 
-const dmCmd = program.command("dm").description("Send a direct message to another agent");
+const dmCmd = program.command("dm").description("Send/read direct messages between agents (private, not channel chat)");
 
 dmCmd
   .command("send", { isDefault: true })
@@ -1426,5 +1440,7 @@ program
     );
     program.help({ error: true });
   });
+
+sortTopLevelCommands(["open", "list", "show", "sessions", "capture", "channel", "dm", "send"]);
 
 program.parse();

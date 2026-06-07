@@ -57,6 +57,25 @@ exit 0
   return { binDir, logPath };
 }
 
+describe("kanban help", () => {
+  test("prioritizes channel and dm over low-level send", () => {
+    const r = runCli(["--help"]);
+    assert.equal(r.code, 0, r.stderr);
+    const helpText = r.stdout.replace(/\s+/g, " ");
+    assert.match(helpText, /kanban channel --help/);
+    assert.match(helpText, /Low-level: paste a message directly into one card's tmux session/);
+
+    const channelIndex = r.stdout.indexOf("  channel");
+    const dmIndex = r.stdout.indexOf("  dm");
+    const sendIndex = r.stdout.indexOf("  send");
+    assert.ok(channelIndex >= 0, "channel command should be listed");
+    assert.ok(dmIndex >= 0, "dm command should be listed");
+    assert.ok(sendIndex >= 0, "send command should be listed");
+    assert.ok(channelIndex < dmIndex, "channel should appear before dm");
+    assert.ok(dmIndex < sendIndex, "dm should appear before low-level send");
+  });
+});
+
 describe("kanban channel (CLI e2e)", () => {
   beforeEach(() => { home = mkdtempSync(join(tmpdir(), "kanban-cli-e2e-")); });
   afterEach(() => { rmSync(home, { recursive: true, force: true }); });
