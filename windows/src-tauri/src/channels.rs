@@ -65,10 +65,34 @@ pub enum MessageType {
     Join,
     Leave,
     System,
+    /// Append-only edit row referencing a prior message via `refs.editsMessageId`.
+    /// Render layer collapses these into the original message (#113).
+    Edit,
+    /// Append-only delete row referencing a prior message via `refs.editsMessageId`.
+    /// Render layer hides or stubs the referenced message (#113).
+    Delete,
+    /// Append-only reaction row referencing a prior message via
+    /// `refs.reactionTo` and carrying an emoji in `refs.emoji`. Aggregated
+    /// at render time; even-count = toggled off (#113).
+    Reaction,
 }
 
 impl Default for MessageType {
     fn default() -> Self { MessageType::Message }
+}
+
+/// Cross-row references for the append-only edit/delete/reaction strategy
+/// (#113). All fields optional so a single struct serves all three kinds.
+/// Wire shape matches the macOS Swift app's `MessageRefs`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageRefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edits_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reaction_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,6 +119,50 @@ pub struct ChannelMessage {
     pub image_paths: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<MessageSource>,
+    /// Cross-row reference for Edit / Delete / Reaction rows (#113). None on
+    /// plain message rows so pre-#113 jsonl loads unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refs: Option<MessageRefs>,
+    /// Handles mentioned in `body` (without the leading `@`). Populated at
+    /// send time so notifications and search can read it without re-parsing.
+    /// Optional so legacy rows continue to parse (#113).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<String>>,
+}
+
+/// Extracts `@handle` mentions from a message body (#113). Matches the
+/// same regex shape the TS CLI uses for syntactic mention rendering:
+/// `@` followed by `[A-Za-z0-9_-]+`. Returns deduped, ordered-by-first-
+/// occurrence handles (without the `@`).
+pub fn extract_mentions(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || bytes[end] == b'_'
+                    || bytes[end] == b'-')
+            {
+                end += 1;
+            }
+            if end > start {
+                if let Ok(handle) = std::str::from_utf8(&bytes[start..end]) {
+                    let h = handle.to_string();
+                    if !out.contains(&h) {
+                        out.push(h);
+                    }
+                }
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Top-level container written to `channels.json`.
@@ -219,10 +287,14 @@ mod tests {
             kind: MessageType::Message,
             image_paths: None,
             source: None,
+            refs: None,
+            mentions: None,
         };
         let s = serde_json::to_string(&m).unwrap();
         assert!(!s.contains("imagePaths"));
         assert!(!s.contains("source"));
+        assert!(!s.contains("refs"));
+        assert!(!s.contains("mentions"));
         assert!(s.contains("\"type\":\"message\""));
     }
 
@@ -237,6 +309,8 @@ mod tests {
             kind: MessageType::Message,
             image_paths: None,
             source: None,
+            refs: None,
+            mentions: None,
         };
         let s = serde_json::to_string(&m).unwrap();
         assert!(s.contains("2024-01-15T12:34:56.789Z"), "got: {s}");
@@ -269,6 +343,64 @@ mod tests {
         assert_eq!(normalize_channel_name("#General"), "general");
         assert_eq!(normalize_channel_name("  #foo  "), "foo");
         assert_eq!(normalize_channel_name("Bar"), "bar");
+    }
+
+    #[test]
+    fn extracts_mentions_in_first_occurrence_order() {
+        assert_eq!(extract_mentions("hi @alice and @bob"), vec!["alice", "bob"]);
+        // Dedup, keep first.
+        assert_eq!(
+            extract_mentions("@alice @bob @alice"),
+            vec!["alice", "bob"]
+        );
+        // Underscores and dashes are allowed; punctuation terminates.
+        assert_eq!(
+            extract_mentions("ping @user_1, @ops-team!"),
+            vec!["user_1", "ops-team"]
+        );
+        // Bare `@` is dropped.
+        assert!(extract_mentions("email@example.com").contains(&"example".to_string()));
+        assert!(extract_mentions("ping @").is_empty());
+    }
+
+    #[test]
+    fn message_with_refs_round_trips() {
+        let raw = r#"{
+            "id": "msg_2",
+            "ts": "2024-01-15T12:34:56.789Z",
+            "from": {"cardId": null, "handle": "alice"},
+            "body": "",
+            "type": "reaction",
+            "refs": {"reactionTo": "msg_1", "emoji": "👍"}
+        }"#;
+        let m: ChannelMessage = serde_json::from_str(raw).unwrap();
+        assert_eq!(m.kind, MessageType::Reaction);
+        assert_eq!(m.refs.as_ref().and_then(|r| r.reaction_to.as_deref()), Some("msg_1"));
+        assert_eq!(m.refs.as_ref().and_then(|r| r.emoji.as_deref()), Some("👍"));
+        let s = serde_json::to_string(&m).unwrap();
+        // refs round-trips
+        let m2: ChannelMessage = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn pre_113_message_still_parses() {
+        // A jsonl row written by Phase 7 (no refs, no mentions, no edit kind).
+        let raw = r#"{
+            "id": "msg_legacy",
+            "ts": "2024-01-15T12:34:56.789Z",
+            "from": {"cardId": null, "handle": "user"},
+            "body": "old message",
+            "type": "message"
+        }"#;
+        let m: ChannelMessage = serde_json::from_str(raw).unwrap();
+        assert_eq!(m.kind, MessageType::Message);
+        assert!(m.refs.is_none());
+        assert!(m.mentions.is_none());
+        // And serializing back doesn't introduce phantom fields.
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(!s.contains("refs"));
+        assert!(!s.contains("mentions"));
     }
 
     #[test]

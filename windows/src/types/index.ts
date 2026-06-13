@@ -289,7 +289,20 @@ export interface Channel {
   sortOrder?: number;
 }
 
-export type ChannelMessageType = "message" | "join" | "leave" | "system";
+export type ChannelMessageType =
+  | "message"
+  | "join"
+  | "leave"
+  | "system"
+  | "edit"
+  | "delete"
+  | "reaction";
+
+export interface MessageRefs {
+  editsMessageId?: string;
+  reactionTo?: string;
+  emoji?: string;
+}
 
 export interface ChannelMessage {
   id: string;
@@ -299,6 +312,8 @@ export interface ChannelMessage {
   type?: ChannelMessageType;
   imagePaths?: string[];
   source?: "external";
+  refs?: MessageRefs;
+  mentions?: string[];
 }
 
 export interface ChannelReadState {

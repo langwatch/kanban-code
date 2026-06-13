@@ -13,6 +13,7 @@ pub mod events {
     pub const CHANNEL_MESSAGES_CHANGED: &str = "channel-messages-changed";
     pub const DM_LOGS_CHANGED: &str = "dm-logs-changed";
     pub const READ_STATE_CHANGED: &str = "read-state-changed";
+    pub const DRAFTS_CHANGED: &str = "drafts-changed";
 }
 
 /// Spin up a background thread that watches the channels dir + the dm subdir,
@@ -98,6 +99,9 @@ fn dispatch(app: &AppHandle, base_dir: &Path, path: &Path) {
         }
         "read-state.json" => {
             let _ = app.emit(events::READ_STATE_CHANGED, ());
+        }
+        "drafts.json" => {
+            let _ = app.emit(events::DRAFTS_CHANGED, ());
         }
         _ if name.ends_with(".jsonl") => {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {

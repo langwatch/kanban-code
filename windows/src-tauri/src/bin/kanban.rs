@@ -9,7 +9,7 @@
 //! markdown export, image paste, and tmux fanout are NOT here — those live in
 //! the TS CLI under `cli/`.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use kanban_code_lib::channels::{normalize_channel_name, ChannelParticipant};
 use kanban_code_lib::channels_store::ChannelsStore;
 use std::process::ExitCode;
@@ -85,6 +85,11 @@ enum ChannelCmd {
         ident: IdentityOpts,
         #[arg(short, long)]
         json: bool,
+        /// Attach an image. Repeat to attach multiple. Missing files print
+        /// a warning and are skipped (matches the persist_images lenient
+        /// behavior).
+        #[arg(short = 'i', long = "image", value_name = "PATH", action = ArgAction::Append)]
+        images: Vec<String>,
         /// Message body — joined with single spaces. Quote multi-word
         /// messages, or put any flags BEFORE the message words.
         #[arg(required = true)]
@@ -111,6 +116,37 @@ enum ChannelCmd {
         #[arg(short, long)]
         json: bool,
     },
+    /// Edit a previously-sent message. Appends an Edit row; render layer
+    /// collapses it into the original message body (#113).
+    Edit {
+        name: String,
+        message_id: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
+        #[arg(short, long)]
+        json: bool,
+        #[arg(required = true)]
+        body: Vec<String>,
+    },
+    /// Soft-delete a message — append a Delete row (#113).
+    DeleteMsg {
+        name: String,
+        message_id: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
+        #[arg(short, long)]
+        json: bool,
+    },
+    /// Add (or toggle off) an emoji reaction on a message (#113).
+    React {
+        name: String,
+        message_id: String,
+        emoji: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
+        #[arg(short, long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -122,6 +158,10 @@ enum DmCmd {
         ident: IdentityOpts,
         #[arg(short, long)]
         json: bool,
+        /// Attach an image. Repeat to attach multiple. Missing files print
+        /// a warning and are skipped.
+        #[arg(short = 'i', long = "image", value_name = "PATH", action = ArgAction::Append)]
+        images: Vec<String>,
         /// Message body — joined with single spaces. Quote multi-word
         /// messages, or put any flags BEFORE the message words.
         #[arg(required = true)]
@@ -139,6 +179,36 @@ enum DmCmd {
     },
     /// List the DM threads the caller participates in.
     List {
+        #[arg(short, long)]
+        json: bool,
+    },
+    /// Edit a DM message (#113).
+    Edit {
+        other: String,
+        message_id: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
+        #[arg(short, long)]
+        json: bool,
+        #[arg(required = true)]
+        body: Vec<String>,
+    },
+    /// Soft-delete a DM message (#113).
+    DeleteMsg {
+        other: String,
+        message_id: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
+        #[arg(short, long)]
+        json: bool,
+    },
+    /// React to a DM message with an emoji (#113).
+    React {
+        other: String,
+        message_id: String,
+        emoji: String,
+        #[command(flatten)]
+        ident: IdentityOpts,
         #[arg(short, long)]
         json: bool,
     },
@@ -174,6 +244,22 @@ fn resolve_caller(opts: &IdentityOpts) -> ChannelParticipant {
         .clone()
         .or_else(|| std::env::var("KANBAN_CARD_ID").ok());
     ChannelParticipant { card_id, handle }
+}
+
+/// Pre-validates `--image` paths. Missing files print a warning to stderr
+/// and are dropped from the returned list — matches the lenient persist
+/// behavior so a typo doesn't fail the send.
+fn warn_skipped_images(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|p| {
+            let exists = std::path::Path::new(p).exists();
+            if !exists {
+                eprintln!("kanban: warning: image not found, skipping: {p}");
+            }
+            exists
+        })
+        .collect()
 }
 
 fn parse_target(s: &str) -> ChannelParticipant {
@@ -265,7 +351,7 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
             let caller = resolve_caller(&ident);
             let clean = normalize_channel_name(&name);
             let (channel, already) = store.join_channel(&clean, caller.clone()).await?;
-            let tail_msgs = store.tail_messages(&clean, tail).await?;
+            let tail_msgs = store.read_messages(&clean, Some(tail)).await?;
             if json {
                 println!(
                     "{}",
@@ -329,14 +415,15 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
             }
             Ok(())
         }
-        ChannelCmd::Send { name, message, ident, json } => {
+        ChannelCmd::Send { name, message, ident, images, json } => {
             let caller = resolve_caller(&ident);
             let clean = normalize_channel_name(&name);
             // Auto-join on first send so the roster stays in sync.
             let _ = store.join_channel(&clean, caller.clone()).await;
             let body = message.join(" ");
+            let kept = warn_skipped_images(images);
             let msg = store
-                .send_message(&clean, caller.clone(), body.clone(), Vec::new())
+                .send_message(&clean, caller.clone(), body.clone(), kept)
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msg)?);
@@ -347,7 +434,7 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
         }
         ChannelCmd::History { name, tail, json } => {
             let clean = normalize_channel_name(&name);
-            let msgs = store.tail_messages(&clean, tail).await?;
+            let msgs = store.read_messages(&clean, Some(tail)).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msgs)?);
                 return Ok(());
@@ -374,6 +461,46 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
                 println!("Deleted #{}", clean);
             } else {
                 anyhow::bail!("channel '#{}' does not exist", clean);
+            }
+            Ok(())
+        }
+        ChannelCmd::Edit { name, message_id, ident, json, body } => {
+            let caller = resolve_caller(&ident);
+            let clean = normalize_channel_name(&name);
+            let new_body = body.join(" ");
+            let msg = store
+                .edit_channel_message(&clean, &message_id, caller.clone(), new_body.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("edited {} in #{}: {}", message_id, clean, new_body);
+            }
+            Ok(())
+        }
+        ChannelCmd::DeleteMsg { name, message_id, ident, json } => {
+            let caller = resolve_caller(&ident);
+            let clean = normalize_channel_name(&name);
+            let msg = store
+                .delete_channel_message(&clean, &message_id, caller.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("deleted {} in #{}", message_id, clean);
+            }
+            Ok(())
+        }
+        ChannelCmd::React { name, message_id, emoji, ident, json } => {
+            let caller = resolve_caller(&ident);
+            let clean = normalize_channel_name(&name);
+            let msg = store
+                .react_channel_message(&clean, &message_id, caller.clone(), emoji.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("@{} reacted {} on {} in #{}", caller.handle, emoji, message_id, clean);
             }
             Ok(())
         }
@@ -410,12 +537,13 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
 
 async fn run_dm(cmd: DmCmd, store: &ChannelsStore) -> anyhow::Result<()> {
     match cmd {
-        DmCmd::Send { to, message, ident, json } => {
+        DmCmd::Send { to, message, ident, images, json } => {
             let from = resolve_caller(&ident);
             let target = parse_target(&to);
             let body = message.join(" ");
+            let kept = warn_skipped_images(images);
             let msg = store
-                .send_dm(from.clone(), target.clone(), body.clone(), Vec::new())
+                .send_dm(from.clone(), target.clone(), body.clone(), kept)
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msg)?);
@@ -451,6 +579,46 @@ async fn run_dm(cmd: DmCmd, store: &ChannelsStore) -> anyhow::Result<()> {
             }
             for m in &msgs {
                 println!("[{}] @{}: {}", m.ts.to_rfc3339(), m.from.handle, m.body);
+            }
+            Ok(())
+        }
+        DmCmd::Edit { other, message_id, ident, json, body } => {
+            let me = resolve_caller(&ident);
+            let target = parse_target(&other);
+            let new_body = body.join(" ");
+            let msg = store
+                .edit_dm_message(&me, &target, &message_id, me.clone(), new_body.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("edited {} in dm with {}: {}", message_id, other, new_body);
+            }
+            Ok(())
+        }
+        DmCmd::DeleteMsg { other, message_id, ident, json } => {
+            let me = resolve_caller(&ident);
+            let target = parse_target(&other);
+            let msg = store
+                .delete_dm_message(&me, &target, &message_id, me.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("deleted {} in dm with {}", message_id, other);
+            }
+            Ok(())
+        }
+        DmCmd::React { other, message_id, emoji, ident, json } => {
+            let me = resolve_caller(&ident);
+            let target = parse_target(&other);
+            let msg = store
+                .react_dm_message(&me, &target, &message_id, me.clone(), emoji.clone())
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&msg)?);
+            } else {
+                println!("@{} reacted {} on {} in dm with {}", me.handle, emoji, message_id, other);
             }
             Ok(())
         }

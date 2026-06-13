@@ -824,6 +824,53 @@ async fn read_channel_messages(
         .map_err(|e| e.to_string())
 }
 
+/// Append-only edit; render layer collapses (#113).
+#[tauri::command]
+async fn edit_channel_message(
+    channel: String,
+    target_id: String,
+    from: ChannelParticipant,
+    new_body: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .edit_channel_message(&channel, &target_id, from, new_body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Append-only soft-delete (#113).
+#[tauri::command]
+async fn delete_channel_message(
+    channel: String,
+    target_id: String,
+    from: ChannelParticipant,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .delete_channel_message(&channel, &target_id, from)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Append-only reaction toggle (count parity per sender) (#113).
+#[tauri::command]
+async fn react_channel_message(
+    channel: String,
+    target_id: String,
+    from: ChannelParticipant,
+    emoji: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .react_channel_message(&channel, &target_id, from, emoji)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn send_dm(
     from: ChannelParticipant,
@@ -849,6 +896,53 @@ async fn read_dm_messages(
     state
         .channels_store
         .read_dm_messages(&a, &b, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn edit_dm_message(
+    a: ChannelParticipant,
+    b: ChannelParticipant,
+    target_id: String,
+    from: ChannelParticipant,
+    new_body: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .edit_dm_message(&a, &b, &target_id, from, new_body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_dm_message(
+    a: ChannelParticipant,
+    b: ChannelParticipant,
+    target_id: String,
+    from: ChannelParticipant,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .delete_dm_message(&a, &b, &target_id, from)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn react_dm_message(
+    a: ChannelParticipant,
+    b: ChannelParticipant,
+    target_id: String,
+    from: ChannelParticipant,
+    emoji: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ChannelMessage, String> {
+    state
+        .channels_store
+        .react_dm_message(&a, &b, &target_id, from, emoji)
         .await
         .map_err(|e| e.to_string())
 }
@@ -882,6 +976,113 @@ async fn save_drafts(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     state.channels_store.save_drafts(&drafts).await.map_err(|e| e.to_string())
+}
+
+/// Dispatch an OS + Pushover notification for an inbound chat message. The
+/// frontend decides *whether* to notify (foreground suppression, debounce,
+/// SELF-skip etc); this command just executes the dispatch, gated by the same
+/// settings toggles the card-finish path honors.
+#[tauri::command]
+async fn notify_chat_message(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    thread_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = state.settings_store.read().await.ok();
+    let os_enabled = settings
+        .as_ref()
+        .map(|s| s.notifications.notifications_enabled)
+        .unwrap_or(true);
+    let push_cfg = settings.and_then(|s| {
+        if s.notifications.pushover_enabled {
+            Some((
+                s.notifications.pushover_token.clone(),
+                s.notifications.pushover_user_key.clone(),
+            ))
+        } else {
+            None
+        }
+    });
+
+    if os_enabled {
+        let _ = app
+            .notification()
+            .builder()
+            .title(title.clone())
+            .body(body.clone())
+            .show();
+    }
+    if let Some((Some(token), Some(user))) =
+        push_cfg.as_ref().map(|(t, u)| (t.clone(), u.clone()))
+    {
+        let t = title.clone();
+        let b = body.clone();
+        let tid = thread_id.clone();
+        tokio::spawn(async move {
+            match pushover::send(&token, &user, &t, &b, tid.as_deref()).await {
+                Ok(()) => logging::info(
+                    "pushover",
+                    &format!("chat notification sent ({})", tid.as_deref().unwrap_or("-")),
+                ),
+                Err(e) => logging::warn(
+                    "pushover",
+                    &format!("chat notification failed: {e}"),
+                ),
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Reads image bytes for rendering in the chat UI. The frontend wraps the
+/// returned bytes in a Blob URL. Used for both stored message attachments
+/// (paths under the channels images dir) and staged previews (paths from
+/// the file picker / drag-drop). Caps at 25 MB to avoid OOM if a bogus
+/// path is ever requested; #112.
+#[tauri::command]
+async fn read_image_bytes(path: String) -> Result<Vec<u8>, String> {
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("stat image: {e}"))?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "image too large for preview ({} bytes, limit {MAX_BYTES})",
+            meta.len()
+        ));
+    }
+    tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("read image: {e}"))
+}
+
+/// Writes pasted/dropped clipboard bytes to a uniquely-named file in the
+/// system temp dir and returns its absolute path. The frontend then passes
+/// the path to send_channel_message / send_dm, which copies the file into
+/// the persistent images dir; #112.
+#[tauri::command]
+async fn persist_clipboard_image(
+    bytes: Vec<u8>,
+    ext: String,
+) -> Result<String, String> {
+    let safe_ext: String = ext
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let ext = if safe_ext.is_empty() { "png".to_string() } else { safe_ext };
+    let dir = std::env::temp_dir().join("kanban-code-clipboard");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("create temp dir: {e}"))?;
+    let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4().simple(), ext));
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| format!("write temp image: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 // ── Background polling ───────────────────────────────────────────────────────
@@ -1502,13 +1703,22 @@ pub fn run() {
             leave_channel,
             send_channel_message,
             read_channel_messages,
+            edit_channel_message,
+            delete_channel_message,
+            react_channel_message,
             send_dm,
             read_dm_messages,
+            edit_dm_message,
+            delete_dm_message,
+            react_dm_message,
             list_dm_pairs,
             get_read_state,
             save_read_state,
             get_drafts,
             save_drafts,
+            notify_chat_message,
+            read_image_bytes,
+            persist_clipboard_image,
         ])
         .setup(|app| {
             logging::info(
