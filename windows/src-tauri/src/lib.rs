@@ -884,6 +884,64 @@ async fn save_drafts(
     state.channels_store.save_drafts(&drafts).await.map_err(|e| e.to_string())
 }
 
+/// Dispatch an OS + Pushover notification for an inbound chat message. The
+/// frontend decides *whether* to notify (foreground suppression, debounce,
+/// SELF-skip etc); this command just executes the dispatch, gated by the same
+/// settings toggles the card-finish path honors.
+#[tauri::command]
+async fn notify_chat_message(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    thread_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = state.settings_store.read().await.ok();
+    let os_enabled = settings
+        .as_ref()
+        .map(|s| s.notifications.notifications_enabled)
+        .unwrap_or(true);
+    let push_cfg = settings.and_then(|s| {
+        if s.notifications.pushover_enabled {
+            Some((
+                s.notifications.pushover_token.clone(),
+                s.notifications.pushover_user_key.clone(),
+            ))
+        } else {
+            None
+        }
+    });
+
+    if os_enabled {
+        let _ = app
+            .notification()
+            .builder()
+            .title(title.clone())
+            .body(body.clone())
+            .show();
+    }
+    if let Some((Some(token), Some(user))) =
+        push_cfg.as_ref().map(|(t, u)| (t.clone(), u.clone()))
+    {
+        let t = title.clone();
+        let b = body.clone();
+        let tid = thread_id.clone();
+        tokio::spawn(async move {
+            match pushover::send(&token, &user, &t, &b, tid.as_deref()).await {
+                Ok(()) => logging::info(
+                    "pushover",
+                    &format!("chat notification sent ({})", tid.as_deref().unwrap_or("-")),
+                ),
+                Err(e) => logging::warn(
+                    "pushover",
+                    &format!("chat notification failed: {e}"),
+                ),
+            }
+        });
+    }
+    Ok(())
+}
+
 // ── Background polling ───────────────────────────────────────────────────────
 
 fn start_polling(app: tauri::AppHandle) {
@@ -1509,6 +1567,7 @@ pub fn run() {
             save_read_state,
             get_drafts,
             save_drafts,
+            notify_chat_message,
         ])
         .setup(|app| {
             logging::info(
