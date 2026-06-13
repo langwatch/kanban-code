@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tokio::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +174,31 @@ fn default_issue_template() -> String {
     "#${number}: ${title}\n\n${body}".to_string()
 }
 
+/// First time the settings file is read on this process, peek at the raw JSON
+/// to see whether it came from the macOS app — macOS doesn't write
+/// `terminalShell` or `terminalFontSize`, so when those keys are absent serde's
+/// `#[serde(default)]` silently backfills the Windows defaults. We log that fact
+/// once so users (and bug reports) have a paper trail. No schema_version field —
+/// that would break the macOS byte-compat invariant.
+fn log_cross_platform_backfill_once(raw: &[u8]) {
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if LOGGED.get().is_some() {
+        return;
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(raw) else { return };
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+    if !obj.contains_key("terminalShell") {
+        let _ = LOGGED.set(());
+        crate::logging::info(
+            "settings",
+            "settings.json missing terminalShell/terminalFontSize — backfilling Windows defaults (file appears to originate from macOS)",
+        );
+    }
+}
+
 pub struct SettingsStore {
     file_path: PathBuf,
 }
@@ -193,6 +219,7 @@ impl SettingsStore {
             return Ok(defaults);
         }
         let data = fs::read(&self.file_path).await.context("read settings.json")?;
+        log_cross_platform_backfill_once(&data);
         let settings: Settings = serde_json::from_slice(&data).unwrap_or_default();
         Ok(settings)
     }
