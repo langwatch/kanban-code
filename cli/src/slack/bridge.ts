@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { SocketModeClient } from "@slack/socket-mode";
 import { SlackClient } from "./client.js";
 import { routeSlackMessage, ChannelMapping } from "./inbound.js";
-import { formatTranscriptLines, formatCodexRolloutLines } from "./format.js";
+import { formatTranscriptLines, formatCodexRolloutLines, TERMINAL_STOP_REASONS } from "./format.js";
 import { loadAgentsConfig } from "../agents/config.js";
 import { agentIdentity } from "../agents/identity.js";
 import { Runtime } from "../agents/runtime.js";
@@ -11,6 +11,7 @@ import { recordAnnounceSuppress } from "./announce-suppress.js";
 import { WORKING_PILL_LABEL } from "./announce.js";
 import { writeThreadRoot, readThreadRoot } from "./thread-root.js";
 import { writeActivePill, readActivePill, clearActivePill } from "./active-pill.js";
+import { writeEyesAnchor, readEyesAnchor, clearEyesAnchor, PersistedEyesAnchor } from "./eyes-anchor.js";
 import { downloadSlackFile, formatPromptWithAttachments, DownloadedFile, sweepInbox, DEFAULT_RETENTION_DAYS } from "./inbox.js";
 import { parsePicker, Picker } from "./picker.js";
 import { findSessionJsonl, findCodexRollout, pasteTmuxPrompt, captureTmuxPane, sendTmuxKey } from "../data.js";
@@ -79,6 +80,72 @@ function pickerSelectedBlocks(picker: Picker, choice: number, by: string): { tex
   const label = chosen ? `${choice}. ${chosen.title}` : String(choice);
   const text = `${picker.question || "Selected"} — picked: *${label}* by <@${by}>`;
   return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] };
+}
+
+/// Read up to the last `tailBytes` of a jsonl file and return the parsed
+/// objects in order. Used by the restore-time turn-end check to inspect the
+/// most recent agent activity without loading the whole transcript (Claude
+/// transcripts grow to hundreds of MB). Returns [] on any read error so the
+/// caller can fall back to "assume turn is still live".
+function readTailObjs(path: string, tailBytes = 64 * 1024): any[] {
+  try {
+    const size = statSync(path).size;
+    const readFrom = Math.max(0, size - tailBytes);
+    const fd = openSync(path, "r");
+    const buf = Buffer.alloc(size - readFrom);
+    readSync(fd, buf, 0, buf.length, readFrom);
+    closeSync(fd);
+    const text = buf.toString("utf-8");
+    // Drop the partial first line when we did not start from byte 0 — it is
+    // almost certainly cut mid-JSON and parsing it would just throw.
+    const sliceFrom = readFrom > 0 ? text.indexOf("\n") + 1 : 0;
+    const objs: any[] = [];
+    for (const line of text.slice(sliceFrom).split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        objs.push(JSON.parse(line));
+      } catch {
+        /* skip malformed */
+      }
+    }
+    return objs;
+  } catch {
+    return [];
+  }
+}
+
+/// True when the agent's most recent Claude assistant turn carries a
+/// terminal stop_reason (end_turn / stop_sequence / refusal). Used at bridge
+/// startup to detect that the live pill state on disk no longer reflects
+/// active work — the bridge crashed/restarted AFTER the agent finished a
+/// turn, the offset jumped past the end_turn marker, and the normal post
+/// loop would never see it again so the refresh loop would re-light the
+/// pill forever.
+export function claudeTranscriptTurnEnded(path: string): boolean {
+  const objs = readTailObjs(path);
+  for (let i = objs.length - 1; i >= 0; i--) {
+    const o = objs[i];
+    if (o?.type !== "assistant") continue;
+    const sr = o?.message?.stop_reason;
+    return typeof sr === "string" && TERMINAL_STOP_REASONS.has(sr);
+  }
+  return false;
+}
+
+/// True when the agent's most recent Codex turn has a `task_complete` event
+/// AFTER any subsequent `user_message`. Mirror of the Claude check above for
+/// the codex-runtime side.
+export function codexRolloutTurnEnded(path: string): boolean {
+  const objs = readTailObjs(path);
+  let lastUserAt = -1;
+  let lastTaskCompleteAt = -1;
+  for (let i = 0; i < objs.length; i++) {
+    const p = objs[i]?.type === "event_msg" ? objs[i].payload : undefined;
+    if (!p) continue;
+    if (p.type === "user_message") lastUserAt = i;
+    else if (p.type === "task_complete") lastTaskCompleteAt = i;
+  }
+  return lastTaskCompleteAt >= 0 && lastTaskCompleteAt > lastUserAt;
 }
 
 function readAppendedLines(path: string, offset: number): { objs: any[]; newOffset: number } {
@@ -182,6 +249,35 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
       clearActivePill(a.slug);
       continue;
     }
+    // Cross-restart turn-end check. The MAX_RESTORE_AGE_MS guard above is
+    // defeated by the refresh loop bumping lastSetMs every minute — even an
+    // hours-old idle turn looks "recent" on restore. Tail-scan the agent's
+    // transcript / rollout: if the most recent assistant turn already ended
+    // (Claude terminal stop_reason or codex task_complete after the last
+    // user_message), drop the pill instead of re-lighting it. Without this
+    // the channel keeps showing "is working…" for as long as the bridge runs
+    // even though Claude's stop_reason landed before this process started.
+    const tail = tails.find((t) => t.slug === a.slug);
+    const turnEnded =
+      tail?.path
+        ? tail.runtime === "codex"
+          ? codexRolloutTurnEnded(tail.path)
+          : claudeTranscriptTurnEnded(tail.path)
+        : false;
+    if (turnEnded) {
+      try {
+        await client.setStatus(pill.channelId, pill.threadTs, "");
+      } catch (e) {
+        console.error(`clear stale pill on restore for ${a.slug} failed:`, e);
+      }
+      clearActivePill(a.slug);
+      // If the pill was anchored on a 👀 ack and the agent's turn already
+      // ended without ever posting text (rare: hooks failed, agent crashed,
+      // or codex turn produced only tool calls), the ack would orphan in
+      // the channel. Delete it too so the restart leaves the channel clean.
+      await consumePendingEyes(a.slug);
+      continue;
+    }
     active.set(a.slug, pill);
     // Re-light immediately rather than waiting for the next refresh tick,
     // so the channel shows "is working…" within seconds of bridge start
@@ -201,6 +297,30 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
   function dropActivePill(slug: string): void {
     active.delete(slug);
     clearActivePill(slug);
+  }
+
+  /// 👀 ack messages we posted on Slack-relayed prompts, awaiting deletion
+  /// once the agent posts its first real reply. Persisted to disk via
+  /// eyes-anchor so a bridge restart still gets to finish the cleanup.
+  const pendingEyes = new Map<string /* slug */, PersistedEyesAnchor>();
+  for (const a of agents) {
+    const anchor = readEyesAnchor(a.slug);
+    if (anchor) pendingEyes.set(a.slug, anchor);
+  }
+  function setPendingEyes(slug: string, anchor: PersistedEyesAnchor): void {
+    pendingEyes.set(slug, anchor);
+    writeEyesAnchor(slug, anchor);
+  }
+  async function consumePendingEyes(slug: string): Promise<void> {
+    const anchor = pendingEyes.get(slug);
+    if (!anchor) return;
+    pendingEyes.delete(slug);
+    clearEyesAnchor(slug);
+    try {
+      await client.deleteMessage(anchor.channelId, anchor.ts);
+    } catch (e) {
+      console.error(`delete eyes anchor for ${slug} failed:`, e);
+    }
   }
 
   // Per-agent buffer of tool/thinking posts that have NOT yet been sent. We
@@ -271,7 +391,11 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
             // A text post (user prompt OR assistant narrative) is the natural
             // beat: first drain the tools that piled up under the PREVIOUS
             // text into its thread, then post this text as the new channel-
-            // root anchor and move the "working…" pill onto it.
+            // root anchor and move the "working…" pill onto it. Delete the
+            // 👀 ack message (if any) BEFORE posting so the new reply lands
+            // next to the human's message instead of below an ack we're
+            // about to remove.
+            await consumePendingEyes(t.slug);
             await drainBuffer(t.slug, t.channelId);
             // Explicitly clear the pill on the previous anchor. Draining the
             // buffer above auto-clears it (Slack drops the pill when the bot
@@ -439,6 +563,21 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     } catch (e) {
       console.error(`/stop announce for ${slug} failed:`, e);
     }
+    // The user explicitly interrupted, so the agent will not produce a
+    // terminal stop_reason / task_complete event the post loop could read
+    // to drop the pill. Clear it directly. Also remove the 👀 ack if one
+    // is still pending — same reason: no real reply is coming so the eyes
+    // would orphan.
+    const pill = active.get(slug);
+    if (pill) {
+      try {
+        await client.setStatus(pill.channelId, pill.threadTs, "");
+      } catch (e) {
+        console.error(`/stop clear pill for ${slug} failed:`, e);
+      }
+      dropActivePill(slug);
+    }
+    await consumePendingEyes(slug);
   });
 
   // Block Kit button clicks land here over the same socket connection. The
@@ -518,30 +657,37 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     recentRelays.set(decision.slug, relays);
     pasteTmuxPrompt(decision.slug, prompt); // tmux session name == slug
 
-    // Light the working pill immediately so the channel shows activity
-    // within seconds of the relay, instead of looking dead until the
-    // agent's first text post (10-20s later). Slack's
-    // assistant.threads.setStatus only accepts thread roots authored by
-    // the app itself, so the human's own message ts is not a valid
-    // anchor. Instead, reuse the most recent app-authored anchor for the
-    // slug (the previous turn's text post). No new bot message is
-    // posted — the pill rides on the existing prior reply. The agent's
-    // first text post in this turn will then become the new anchor via
-    // the existing post loop, moving the pill onto it.
+    // Post a 👀 ack and light the working pill on it, ONLY if the agent
+    // isn't already mid-turn. The eyes give the channel a visible
+    // "received" beat in the 10-20s gap before the agent's first reply
+    // for the cold-start case, and double as the app-authored anchor
+    // that assistant.threads.setStatus requires (Slack rejects the
+    // human's own message ts with invalid_thread_ts). The agent's first
+    // real text post in this turn will become the new thread root in
+    // the post loop, which is also where we delete this eyes message —
+    // so the ack disappears the moment the agent actually replies.
     //
-    // If there is no prior anchor (very first interaction with the
-    // agent), skip: the pill will appear the natural way on the first
-    // reply. That happens once per agent lifetime, so the one-time
-    // delay is acceptable to avoid a noise-only bot post.
-    if (event.channel) {
-      const prevAnchor = readThreadRoot(decision.slug);
-      if (prevAnchor) {
-        try {
-          await client.setStatus(event.channel, prevAnchor, WORKING_LABEL);
-          setActivePill(decision.slug, { channelId: event.channel, threadTs: prevAnchor, label: WORKING_LABEL, lastSetMs: Date.now() });
-        } catch (e) {
-          console.error(`setStatus on prior anchor for ${decision.slug} failed:`, e);
+    // If a pill is already active for this slug, the agent IS already
+    // working: its existing anchor is the truth, an eyes ack just
+    // produces a double-pill flash (one on the eyes, one on the agent's
+    // ongoing text) and adds a noise emoji that never gets cleaned up
+    // because the next text post will land naturally without consuming
+    // a freshly-pushed eyes. Skip the ack entirely in that case — the
+    // current pill already says the agent is on it.
+    if (event.channel && !active.has(decision.slug)) {
+      try {
+        const ts = await client.post(event.channel, "👀");
+        if (ts) {
+          setPendingEyes(decision.slug, { channelId: event.channel, ts });
+          try {
+            await client.setStatus(event.channel, ts, WORKING_LABEL);
+            setActivePill(decision.slug, { channelId: event.channel, threadTs: ts, label: WORKING_LABEL, lastSetMs: Date.now() });
+          } catch (e) {
+            console.error(`setStatus on eyes anchor for ${decision.slug} failed:`, e);
+          }
         }
+      } catch (e) {
+        console.error(`eyes anchor post for ${decision.slug} failed:`, e);
       }
     }
   });

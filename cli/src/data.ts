@@ -2,6 +2,21 @@ import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, read
 import { execSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, basename, matchesGlob } from "node:path";
+
+/// tmux's anonymous paste buffer is a server-wide singleton, so concurrent
+/// `set-buffer` + `paste-buffer` pairs from different processes race: the
+/// second `set-buffer` clobbers the first's contents before the first gets
+/// to paste. That bit us when the daily nudges for two agents fired at the
+/// same wall-clock minute and the prompts swapped between sessions. Routing
+/// every paste through a uniquely-named buffer (and deleting it via
+/// `paste-buffer -d`) eliminates the shared-state collision. The pid+counter
+/// scheme keeps the names stable within a process so tests can assert the
+/// command stream, and unique across processes so the race is fixed.
+let tmuxBufferSeq = 0;
+function nextTmuxBufferName(): string {
+  tmuxBufferSeq += 1;
+  return `kc-${process.pid}-${tmuxBufferSeq}`;
+}
 import {
   Link,
   Settings,
@@ -186,10 +201,14 @@ export function pasteTmuxPrompt(
   text: string
 ): { ok: boolean; error?: string } {
   const tmux = findTmux();
+  const buf = nextTmuxBufferName();
   try {
-    // Use tmux paste-buffer with bracketed paste for reliable multi-line input
+    // Use tmux paste-buffer with bracketed paste for reliable multi-line input.
+    // A named buffer (-b <buf>) plus `paste-buffer -d` keeps each call
+    // self-contained so concurrent pastes from sibling processes can't clobber
+    // each other's text on the shared anonymous buffer.
     execSync(
-      `${tmux} set-buffer ${shellEscape(text)} && ${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+      `${tmux} set-buffer -b ${shellEscape(buf)} ${shellEscape(text)} && ${tmux} paste-buffer -p -d -b ${shellEscape(buf)} -t ${shellEscape(sessionName)}`,
       { encoding: "utf-8" }
     );
     // Small delay before sending Enter, matching Swift implementation
@@ -226,10 +245,11 @@ export function scheduleTmuxPrompt(
 ): { ok: boolean; error?: string } {
   const tmux = findTmux();
   const delay = Math.max(0, Number.isFinite(delaySeconds) ? delaySeconds : 1);
+  const buf = nextTmuxBufferName();
   const cmd = [
     `sleep ${shellEscape(String(delay))}`,
-    `${tmux} set-buffer ${shellEscape(text)}`,
-    `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+    `${tmux} set-buffer -b ${shellEscape(buf)} ${shellEscape(text)}`,
+    `${tmux} paste-buffer -p -d -b ${shellEscape(buf)} -t ${shellEscape(sessionName)}`,
     "sleep 0.1",
     `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
   ].join(" && ");
@@ -254,6 +274,7 @@ export function scheduleTmuxSelfCompact(
 ): { ok: boolean; error?: string } {
   const tmux = findTmux();
   const delay = Math.max(0, Number.isFinite(followUpDelaySeconds) ? followUpDelaySeconds : 1);
+  const compactBuf = nextTmuxBufferName();
   const compactSteps = [
     // Give the CLI time to finish printing its output and return control to
     // Claude Code before we start sending keys to the same pane. The shell
@@ -264,18 +285,19 @@ export function scheduleTmuxSelfCompact(
     // recognised as a slash command. 2s gives a comfortable buffer.
     "sleep 2",
     `${tmux} send-keys -t ${shellEscape(sessionName)} Escape`,
-    `${tmux} set-buffer ${shellEscape("/compact")}`,
-    `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+    `${tmux} set-buffer -b ${shellEscape(compactBuf)} ${shellEscape("/compact")}`,
+    `${tmux} paste-buffer -p -d -b ${shellEscape(compactBuf)} -t ${shellEscape(sessionName)}`,
     "sleep 0.15",
     `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
   ];
 
+  const followUpBuf = nextTmuxBufferName();
   const followUpSteps = followUp.trim().length === 0
     ? []
     : [
         `sleep ${shellEscape(String(delay))}`,
-        `${tmux} set-buffer ${shellEscape(followUp)}`,
-        `${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+        `${tmux} set-buffer -b ${shellEscape(followUpBuf)} ${shellEscape(followUp)}`,
+        `${tmux} paste-buffer -p -d -b ${shellEscape(followUpBuf)} -t ${shellEscape(sessionName)}`,
         "sleep 0.1",
         `${tmux} send-keys -t ${shellEscape(sessionName)} Enter`,
       ];
@@ -298,9 +320,10 @@ export function pasteTmuxText(
   text: string
 ): { ok: boolean; error?: string } {
   const tmux = findTmux();
+  const buf = nextTmuxBufferName();
   try {
     execSync(
-      `${tmux} set-buffer ${shellEscape(text)} && ${tmux} paste-buffer -p -t ${shellEscape(sessionName)}`,
+      `${tmux} set-buffer -b ${shellEscape(buf)} ${shellEscape(text)} && ${tmux} paste-buffer -p -d -b ${shellEscape(buf)} -t ${shellEscape(sessionName)}`,
       { encoding: "utf-8" }
     );
     return { ok: true };

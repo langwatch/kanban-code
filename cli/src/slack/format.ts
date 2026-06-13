@@ -221,7 +221,7 @@ function coalesceTools(posts: SlackPost[]): SlackPost[] {
 /// Claude `stop_reason` values that mean "the agent is done; this turn won't
 /// produce more output". `tool_use` / `max_tokens` / `pause_turn` are NOT
 /// terminal — the agent will continue on the next call.
-const TERMINAL_STOP_REASONS = new Set(["end_turn", "stop_sequence", "refusal"]);
+export const TERMINAL_STOP_REASONS = new Set(["end_turn", "stop_sequence", "refusal"]);
 
 /// Convert a batch of transcript lines into Slack posts. User turns and
 /// tool_result lines are skipped: relayed human messages already appear in

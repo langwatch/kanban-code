@@ -47,6 +47,12 @@ export class SlackClient {
     await this.web.chat.update({ channel, ts, text, blocks });
   }
 
+  /// Delete a message the bot posted (requires `chat:write` only). Used to
+  /// remove the 👀 ack message once the agent's first real reply lands.
+  async deleteMessage(channel: string, ts: string): Promise<void> {
+    await this.web.chat.delete({ channel, ts });
+  }
+
   /// Set the "working…" pill on a thread (Slack's Agents & Assistants UI).
   /// An empty status clears the pill explicitly; a normal post in the same
   /// thread also clears it automatically. Slack drops the pill on its own
