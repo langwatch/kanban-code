@@ -37,11 +37,15 @@ export default function CardView({ card, isDragging = false }: Props) {
   const hasBranch = !!card.link.worktreeLink?.branch;
   const hasSession = !!card.link.sessionLink;
 
-  const prStatus = card.link.prLinks[0]?.status;
+  const pr = card.link.prLinks[0];
+  const prStatus = pr?.status;
   const prStatusColor =
     prStatus === "MERGED" ? "#a371f7"
     : prStatus === "CLOSED" ? "#f85149"
     : "#3fb950";
+  // Worst CI conclusion → colored dot next to PR badge. Mirrors
+  // gh_cli::worst_check_state ranking server-side.
+  const ciState = worstCi(pr?.checkRuns);
 
   return (
     <>
@@ -95,7 +99,12 @@ export default function CardView({ card, isDragging = false }: Props) {
         {/* Badges row */}
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           {hasBranch && <Badge text={card.link.worktreeLink!.branch!} color="#4f8ef7" theme={theme} title={`Branch: ${card.link.worktreeLink!.branch}`} />}
-          {hasPR && <Badge text={`PR #${card.link.prLinks[0].number}`} color={prStatusColor} theme={theme} title={card.link.prLinks[0].title ?? `PR #${card.link.prLinks[0].number}`} />}
+          {hasPR && (
+            <span className="inline-flex items-center gap-1">
+              <Badge text={`PR #${pr!.number}`} color={prStatusColor} theme={theme} title={pr!.title ?? `PR #${pr!.number}`} />
+              {ciState && <CiDot state={ciState} runs={pr!.checkRuns ?? []} />}
+            </span>
+          )}
           {hasIssue && <Badge text={`#${card.link.issueLink!.number}`} color="#d29922" theme={theme} title={card.link.issueLink!.title ?? `Issue #${card.link.issueLink!.number}`} />}
           {hasSession && !hasBranch && !hasPR && !hasIssue && <Badge text="session" color="#6b7280" theme={theme} title={`Session: ${card.link.sessionLink!.sessionId}`} />}
           <span className="flex-1" />
@@ -121,6 +130,51 @@ export default function CardView({ card, isDragging = false }: Props) {
         />
       )}
     </>
+  );
+}
+
+type CiState = "FAILURE" | "PENDING" | "NEUTRAL" | "SUCCESS";
+
+function worstCi(runs?: { name: string; conclusion?: string }[]): CiState | null {
+  if (!runs || runs.length === 0) return null;
+  const rank = (s: string) => {
+    if (["FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"].includes(s)) return 4;
+    if (["PENDING", "QUEUED", "IN_PROGRESS"].includes(s)) return 3;
+    if (["NEUTRAL", "SKIPPED", "STALE"].includes(s)) return 2;
+    if (s === "SUCCESS") return 1;
+    return 0;
+  };
+  let worst: CiState = "SUCCESS";
+  for (const r of runs) {
+    const c = r.conclusion ?? "PENDING";
+    if (rank(c) <= rank(worst === "FAILURE" ? "FAILURE" : worst === "PENDING" ? "PENDING" : worst === "NEUTRAL" ? "NEUTRAL" : "SUCCESS")) {
+      continue;
+    }
+    worst =
+      rank(c) === 4 ? "FAILURE"
+      : rank(c) === 3 ? "PENDING"
+      : rank(c) === 2 ? "NEUTRAL"
+      : "SUCCESS";
+  }
+  return worst;
+}
+
+function CiDot({ state, runs }: { state: CiState; runs: { name: string; conclusion?: string }[] }) {
+  const color =
+    state === "FAILURE" ? "#f85149"
+    : state === "PENDING" ? "#d29922"
+    : state === "NEUTRAL" ? "#8b8b8b"
+    : "#3fb950";
+  const title = runs.map((r) => `${r.name}: ${r.conclusion ?? "pending"}`).join("\n");
+  return (
+    <span
+      className="inline-block w-2 h-2 rounded-full"
+      style={{
+        background: color,
+        boxShadow: state === "PENDING" ? "0 0 0 2px rgba(210,153,34,0.25)" : undefined,
+      }}
+      title={`CI: ${state.toLowerCase()}\n${title}`}
+    />
   );
 }
 

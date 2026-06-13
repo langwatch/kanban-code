@@ -140,39 +140,84 @@ fn parse_check_runs(rollup: &Value) -> Vec<CheckRun> {
         .collect()
 }
 
-/// Worst CI conclusion across the rollup. Used for the per-card badge so a
-/// single failing check turns the card red without the user opening the PR
-/// tab. Ordering: FAILURE/CANCELLED/TIMED_OUT/STARTUP_FAILURE > PENDING (no
-/// conclusion) > NEUTRAL/SKIPPED > SUCCESS.
-pub fn worst_check_state(runs: &[CheckRun]) -> Option<&'static str> {
-    if runs.is_empty() {
-        return None;
+/// Second-pass enrichment: ask the GraphQL API for unresolved review-thread
+/// counts. `gh pr list --json` doesn't surface this, so we batch a single
+/// GraphQL query per repo with one `pr<N>` alias per PR. Returns a map from
+/// PR number → unresolved thread count. Best-effort: any failure returns an
+/// empty map and the caller leaves the field as None.
+///
+/// Owner/repo are derived from the first PR's URL (every PR in `prs` is in
+/// the same repo because the caller batches per project_path).
+pub async fn fetch_unresolved_threads(prs: &[PullRequest]) -> std::collections::HashMap<i64, i64> {
+    let mut out = std::collections::HashMap::new();
+    if prs.is_empty() {
+        return out;
     }
-    let mut worst = "SUCCESS";
-    for run in runs {
-        let c = run.conclusion.as_deref().unwrap_or("PENDING");
-        let r = rank(c);
-        if r > rank(worst) {
-            worst = match c {
-                "FAILURE" | "CANCELLED" | "TIMED_OUT" | "STARTUP_FAILURE" | "ACTION_REQUIRED" => "FAILURE",
-                "PENDING" | "QUEUED" | "IN_PROGRESS" => "PENDING",
-                "NEUTRAL" | "SKIPPED" | "STALE" => "NEUTRAL",
-                _ => "SUCCESS",
-            };
-        }
+    let Some((owner, repo)) = prs.first().and_then(|p| parse_owner_repo(&p.url)) else {
+        return out;
+    };
+
+    // Build a query body with one alias per PR.
+    let mut aliases = String::new();
+    for pr in prs {
+        // Aliases must start with a letter; "pr" + number is safe.
+        aliases.push_str(&format!(
+            "pr{n}: pullRequest(number: {n}) {{ reviewThreads(first: 100) {{ nodes {{ isResolved }} }} }}\n",
+            n = pr.number
+        ));
     }
-    Some(worst)
+    let query = format!(
+        "query {{ repository(owner: \"{owner}\", name: \"{repo}\") {{ {aliases} }} }}"
+    );
+
+    let output = match tokio::process::Command::new(gh_bin())
+        .args(["api", "graphql", "-f", &format!("query={query}")])
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(_) => return out,
+    };
+    if !output.status.success() {
+        return out;
+    }
+    let body: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(_) => return out,
+    };
+    let repo_node = match body["data"]["repository"].as_object() {
+        Some(o) => o,
+        None => return out,
+    };
+    for (alias, node) in repo_node {
+        // alias is "pr<n>"
+        let Some(n_str) = alias.strip_prefix("pr") else { continue };
+        let Ok(number) = n_str.parse::<i64>() else { continue };
+        let unresolved = node["reviewThreads"]["nodes"]
+            .as_array()
+            .map(|arr| arr.iter().filter(|n| n["isResolved"].as_bool() != Some(true)).count() as i64)
+            .unwrap_or(0);
+        out.insert(number, unresolved);
+    }
+    out
 }
 
-fn rank(state: &str) -> u8 {
-    match state {
-        "FAILURE" | "CANCELLED" | "TIMED_OUT" | "STARTUP_FAILURE" | "ACTION_REQUIRED" => 4,
-        "PENDING" | "QUEUED" | "IN_PROGRESS" => 3,
-        "NEUTRAL" | "SKIPPED" | "STALE" => 2,
-        "SUCCESS" => 1,
-        _ => 0,
+/// Parse owner/repo from a PR HTML URL: https://github.com/owner/repo/pull/42
+fn parse_owner_repo(url: &str) -> Option<(String, String)> {
+    let idx = url.find("github.com/")?;
+    let path = &url[idx + "github.com/".len()..];
+    let mut parts = path.split('/');
+    let owner = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
     }
+    Some((owner, repo))
 }
+
+// Frontend (CardView.tsx::worstCi) computes the worst conclusion from
+// PrLink.check_runs directly; no Rust-side helper needed yet. If a future
+// consumer wants it (e.g. badge in a system-tray menu), add it back here.
 
 /// Fetch issues matching a filter using `gh issue list`.
 pub async fn fetch_issues(repo_root: &str, filter: &str) -> Result<Vec<Issue>> {

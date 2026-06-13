@@ -704,6 +704,9 @@ fn start_pr_polling(app: tauri::AppHandle) {
 
                 for project in &project_paths {
                     if let Ok(prs) = gh_cli::fetch_prs(project).await {
+                        // Batch one GraphQL query per repo for unresolved-thread
+                        // counts. Empty map on any failure → field stays None.
+                        let threads = gh_cli::fetch_unresolved_threads(&prs).await;
                         for pr in &prs {
                             // Find card whose worktree branch matches this PR's head ref
                             for link in &mut updated_links {
@@ -721,10 +724,7 @@ fn start_pr_polling(app: tauri::AppHandle) {
                                         title: Some(pr.title.clone()),
                                         body: pr.body.clone(),
                                         approval_count: pr.approval_count,
-                                        // unresolved_threads needs raw GraphQL —
-                                        // gh's --json doesn't surface it for
-                                        // `pr list`. Tracked as a follow-up.
-                                        unresolved_threads: None,
+                                        unresolved_threads: threads.get(&pr.number).copied(),
                                         merge_state_status: pr.merge_state_status.clone(),
                                         review_decision: pr.review_decision.clone(),
                                         check_runs: pr.check_runs

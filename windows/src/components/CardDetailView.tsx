@@ -677,6 +677,7 @@ export default function CardDetailView() {
                 approvalCount: pr.approvalCount,
                 mergeStateStatus: pr.mergeStateStatus,
                 checkRuns: pr.checkRuns ?? [],
+                unresolvedThreads: pr.unresolvedThreads,
               }}
             />
           </div>
@@ -883,6 +884,7 @@ function PrMetaRow({
     approvalCount?: number;
     mergeStateStatus?: string;
     checkRuns: { name: string; conclusion?: string }[];
+    unresolvedThreads?: number;
   };
   c: ReturnType<typeof t>;
 }) {
@@ -930,6 +932,11 @@ function PrMetaRow({
       )}
       {meta.mergeStateStatus && (
         <Chip color={mergeColor} c={c}>merge: {meta.mergeStateStatus.toLowerCase()}</Chip>
+      )}
+      {meta.unresolvedThreads != null && meta.unresolvedThreads > 0 && (
+        <Chip color="#d29922" c={c} title="Unresolved review threads">
+          {meta.unresolvedThreads} unresolved thread{meta.unresolvedThreads === 1 ? "" : "s"}
+        </Chip>
       )}
       {checks.length > 0 && (
         <Chip
@@ -1344,6 +1351,7 @@ function ContentTab({
     approvalCount?: number;
     mergeStateStatus?: string;
     checkRuns: { name: string; conclusion?: string }[];
+    unresolvedThreads?: number;
   };
 }) {
   const { theme } = useTheme();
