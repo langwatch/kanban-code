@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   getTranscript,
   getSettings,
@@ -172,6 +173,21 @@ export default function CardDetailView() {
   const handleRename = () => {
     if (editName.trim()) renameCard(card.id, editName.trim());
     setIsEditing(false);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!card) return;
+    const title = card.displayTitle || card.link.name || "this card";
+    const detail = terminalActive
+      ? "The open terminal will be stopped. The Claude session .jsonl on disk is not deleted."
+      : "The Claude session .jsonl on disk is not deleted — you can still find it in All Sessions.";
+    const ok = await ask(`Delete "${title}"?\n\n${detail}`, {
+      title: "Delete card",
+      kind: "warning",
+      okLabel: "Delete",
+      cancelLabel: "Cancel",
+    });
+    if (ok) deleteCard(card.id);
   };
 
   // Split the user-configurable shell string into [exe, ...args]. Default is
@@ -402,7 +418,7 @@ export default function CardDetailView() {
             </button>
           )}
           <button
-            onClick={() => { deleteCard(card.id); selectCard(null); }}
+            onClick={handleConfirmDelete}
             className="flex items-center justify-center gap-2 h-9 px-3 rounded-lg text-[13px] font-medium transition-all duration-150"
             style={{ border: `1px solid ${c.border}`, color: c.textDim }}
             onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#f85149"; e.currentTarget.style.color = "#f85149"; e.currentTarget.style.background = "rgba(248,81,73,0.06)"; }}

@@ -106,9 +106,12 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   deleteCard: async (cardId) => {
+    // If the deleted card was selected, slide selection to its column neighbor
+    // so the drawer stays useful instead of snapping shut.
+    const nextSelectedId = computeNextSelection(get(), cardId);
     set((state) => ({
       cards: state.cards.filter((c) => c.id !== cardId),
-      selectedCardId: state.selectedCardId === cardId ? null : state.selectedCardId,
+      selectedCardId: state.selectedCardId === cardId ? nextSelectedId : state.selectedCardId,
     }));
     try {
       await invoke("delete_card", { cardId });
@@ -119,12 +122,16 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   archiveCard: async (cardId) => {
+    // Archive yanks the card out of its current column into all_sessions.
+    // Same UX as delete from the user's perspective — keep selection alive.
+    const nextSelectedId = computeNextSelection(get(), cardId);
     set((state) => ({
       cards: state.cards.map((c) =>
         c.id === cardId
           ? { ...c, link: { ...c.link, column: "all_sessions" as KanbanColumn, manuallyArchived: true } }
           : c
       ),
+      selectedCardId: state.selectedCardId === cardId ? nextSelectedId : state.selectedCardId,
     }));
     try {
       await invoke("archive_card", { cardId });
@@ -205,6 +212,25 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     return cards.find((c) => c.id === selectedCardId) ?? null;
   },
 }));
+
+/**
+ * After deleting/archiving the card with `removedId`, pick the next card to
+ * select. Returns the same-column neighbor (next-newer, falling back to next-
+ * older) so the drawer stays useful. `null` if the column will be empty.
+ */
+function computeNextSelection(
+  state: { cards: CardDto[]; selectedCardId: string | null },
+  removedId: string
+): string | null {
+  if (state.selectedCardId !== removedId) return state.selectedCardId;
+  const removed = state.cards.find((c) => c.id === removedId);
+  if (!removed) return null;
+  // Use the same ordered slice the column UI sees, then pick a neighbor.
+  const ordered = useBoardStore.getState().cardsInColumn(removed.link.column);
+  const idx = ordered.findIndex((c) => c.id === removedId);
+  if (idx === -1) return null;
+  return ordered[idx + 1]?.id ?? ordered[idx - 1]?.id ?? null;
+}
 
 // Subscribe to Tauri backend events
 export function initBoardEventListener() {

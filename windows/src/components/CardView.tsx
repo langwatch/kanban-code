@@ -1,6 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useState } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useBoardStore } from "../store/boardStore";
 import { COLUMNS, COLUMN_DISPLAY, type CardDto, type KanbanColumn } from "../types";
 import { useTheme, t } from "../theme";
@@ -107,7 +108,15 @@ export default function CardView({ card, isDragging = false }: Props) {
           x={contextMenu.x} y={contextMenu.y} card={card}
           onClose={() => setContextMenu(null)}
           onMove={(col) => { moveCard(card.id, col); setContextMenu(null); }}
-          onDelete={() => { deleteCard(card.id); setContextMenu(null); }}
+          onDelete={async () => {
+            setContextMenu(null);
+            const title = card.displayTitle || card.link.name || "this card";
+            const ok = await ask(
+              `Delete "${title}"?\n\nThe Claude session .jsonl on disk is not deleted — you can still find it in All Sessions.`,
+              { title: "Delete card", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" }
+            );
+            if (ok) deleteCard(card.id);
+          }}
           onArchive={() => { archiveCard(card.id); setContextMenu(null); }}
         />
       )}
