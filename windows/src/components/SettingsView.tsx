@@ -1,10 +1,23 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getSettings, saveSettings, useBoardStore } from "../store/boardStore";
+import { useTheme, t } from "../theme";
 import type { Settings } from "../types";
+
+type ThemeTokens = ReturnType<typeof t>;
+
+function inputStyle(c: ThemeTokens): React.CSSProperties {
+  return {
+    background: c.bgAccent("0.03"),
+    border: `1px solid ${c.border}`,
+    color: c.textPrimary,
+  };
+}
 
 export default function SettingsView() {
   const { setSettingsOpen } = useBoardStore();
+  const { theme } = useTheme();
+  const c = t(theme);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -33,7 +46,7 @@ export default function SettingsView() {
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 border-[1.5px] border-[#4f8ef7] border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-zinc-500">Loading settings...</span>
+          <span className="text-sm" style={{ color: c.textMuted }}>Loading settings...</span>
         </div>
       </div>
     );
@@ -48,20 +61,28 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] shrink-0">
+    <div
+      className="flex-1 flex flex-col overflow-hidden"
+      style={{ background: c.bg, color: c.text }}
+    >
+      <div
+        className="flex items-center justify-between px-6 py-4 shrink-0"
+        style={{ borderBottom: `1px solid ${c.border}` }}
+      >
         <div className="flex items-center gap-3">
           <button
             onClick={() => setSettingsOpen(false)}
-            className="text-zinc-500 hover:text-zinc-200 transition-colors"
+            className="transition-colors"
+            style={{ color: c.textMuted }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = c.textPrimary; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = c.textMuted; }}
             title="Back to board"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
             </svg>
           </button>
-          <h1 className="text-base font-semibold text-zinc-200">Settings</h1>
+          <h1 className="text-base font-semibold" style={{ color: c.textPrimary }}>Settings</h1>
         </div>
         <div className="flex items-center gap-2">
           {saved && (
@@ -76,7 +97,10 @@ export default function SettingsView() {
           </button>
           <button
             onClick={() => setSettingsOpen(false)}
-            className="text-zinc-500 hover:text-zinc-300 ml-1 transition-colors"
+            className="ml-1 transition-colors"
+            style={{ color: c.textMuted }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = c.textPrimary; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = c.textMuted; }}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -86,42 +110,50 @@ export default function SettingsView() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <nav className="w-48 border-r border-white/[0.06] py-3 shrink-0">
-          {sections.map((section) => (
-            <button
-              key={section}
-              onClick={() => setActiveSection(section)}
-              className={`w-full text-left px-4 py-2.5 text-sm capitalize transition-all flex items-center gap-2.5 ${
-                activeSection === section
-                  ? "text-zinc-200 bg-white/[0.04] border-r-2 border-[#4f8ef7]"
-                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.02]"
-              }`}
-            >
-              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d={sectionIcons[section]} />
-              </svg>
-              {section}
-            </button>
-          ))}
+        <nav
+          className="w-48 py-3 shrink-0"
+          style={{ borderRight: `1px solid ${c.border}` }}
+        >
+          {sections.map((section) => {
+            const active = activeSection === section;
+            return (
+              <button
+                key={section}
+                onClick={() => setActiveSection(section)}
+                className="w-full text-left px-4 py-2.5 text-sm capitalize transition-all flex items-center gap-2.5"
+                style={{
+                  color: active ? c.textPrimary : c.textMuted,
+                  background: active ? c.hoverBg : "transparent",
+                  borderRight: active ? "2px solid #4f8ef7" : "2px solid transparent",
+                }}
+                onMouseEnter={(e) => {
+                  if (!active) { e.currentTarget.style.background = c.hoverBg; e.currentTarget.style.color = c.textSecondary; }
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = c.textMuted; }
+                }}
+              >
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d={sectionIcons[section]} />
+                </svg>
+                {section}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {activeSection === "general" && (
-            <GeneralSection settings={settings} onChange={setSettings} />
+            <GeneralSection settings={settings} onChange={setSettings} themeTokens={c} />
           )}
           {activeSection === "projects" && (
-            <ProjectsSection
-              settings={settings}
-              onChange={setSettings}
-            />
+            <ProjectsSection settings={settings} onChange={setSettings} themeTokens={c} />
           )}
           {activeSection === "github" && (
-            <GitHubSection settings={settings} onChange={setSettings} />
+            <GitHubSection settings={settings} onChange={setSettings} themeTokens={c} />
           )}
           {activeSection === "notifications" && (
-            <NotificationsSection settings={settings} onChange={setSettings} />
+            <NotificationsSection settings={settings} onChange={setSettings} themeTokens={c} />
           )}
         </div>
       </div>
@@ -132,26 +164,29 @@ export default function SettingsView() {
 function GeneralSection({
   settings,
   onChange,
+  themeTokens: c,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
+  themeTokens: ThemeTokens;
 }) {
   return (
     <div className="flex flex-col gap-5 max-w-lg">
-      <FieldGroup label="Editor command">
+      <FieldGroup label="Editor command" themeTokens={c}>
         <input
           type="text"
           value={settings.editor}
           onChange={(e) => onChange({ ...settings, editor: e.target.value })}
           placeholder="code"
-          className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-colors"
+          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none transition-colors"
+          style={inputStyle(c)}
         />
-        <p className="text-[11px] text-zinc-500 mt-1">
-          e.g. <code className="font-mono text-zinc-400">code</code>, <code className="font-mono text-zinc-400">cursor</code>, <code className="font-mono text-zinc-400">nvim</code>
+        <p className="text-[11px] mt-1" style={{ color: c.textMuted }}>
+          e.g. <Code c={c}>code</Code>, <Code c={c}>cursor</Code>, <Code c={c}>nvim</Code>
         </p>
       </FieldGroup>
 
-      <FieldGroup label="Session timeout (minutes)">
+      <FieldGroup label="Session timeout (minutes)" themeTokens={c}>
         <input
           type="number"
           value={settings.sessionTimeout.activeThresholdMinutes}
@@ -164,11 +199,12 @@ function GeneralSection({
               },
             })
           }
-          className="w-32 bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 outline-none transition-colors"
+          className="w-32 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors"
+          style={inputStyle(c)}
         />
       </FieldGroup>
 
-      <FieldGroup label="Terminal font size">
+      <FieldGroup label="Terminal font size" themeTokens={c}>
         <div className="flex items-center gap-3">
           <input
             type="range"
@@ -181,30 +217,31 @@ function GeneralSection({
             }
             className="flex-1 accent-[#4f8ef7] h-1.5 rounded-full cursor-pointer"
           />
-          <span className="text-sm text-zinc-300 font-mono w-8 text-right">
+          <span className="text-sm font-mono w-8 text-right" style={{ color: c.textSecondary }}>
             {settings.terminalFontSize || 15}
           </span>
         </div>
-        <p className="text-[11px] text-zinc-500 mt-1">
+        <p className="text-[11px] mt-1" style={{ color: c.textMuted }}>
           Adjust the font size in embedded terminals (8–24pt). Takes effect on next terminal launch.
         </p>
       </FieldGroup>
 
-      <FieldGroup label="Terminal shell">
+      <FieldGroup label="Terminal shell" themeTokens={c}>
         <input
           type="text"
           value={settings.terminalShell || "cmd.exe"}
           onChange={(e) => onChange({ ...settings, terminalShell: e.target.value })}
           placeholder="cmd.exe"
           spellCheck={false}
-          className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none font-mono transition-colors"
+          className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none transition-colors"
+          style={inputStyle(c)}
         />
-        <p className="text-[11px] text-zinc-500 mt-1">
-          Command used by the embedded terminal. Default <code className="font-mono text-zinc-400">cmd.exe</code> for native Windows. Set to <code className="font-mono text-zinc-400">wsl.exe</code> to run Claude inside WSL, or e.g. <code className="font-mono text-zinc-400">pwsh.exe -NoLogo</code>. Takes effect on the next terminal launch.
+        <p className="text-[11px] mt-1" style={{ color: c.textMuted }}>
+          Command used by the embedded terminal. Default <Code c={c}>cmd.exe</Code> for native Windows. Set to <Code c={c}>wsl.exe</Code> to run Claude inside WSL, or e.g. <Code c={c}>pwsh.exe -NoLogo</Code>. Takes effect on the next terminal launch.
         </p>
       </FieldGroup>
 
-      <FieldGroup label="Prompt template">
+      <FieldGroup label="Prompt template" themeTokens={c}>
         <textarea
           rows={3}
           value={settings.promptTemplate}
@@ -212,7 +249,8 @@ function GeneralSection({
             onChange({ ...settings, promptTemplate: e.target.value })
           }
           placeholder="Optional default prompt prefix..."
-          className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none resize-none transition-colors"
+          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none resize-none transition-colors"
+          style={inputStyle(c)}
         />
       </FieldGroup>
     </div>
@@ -222,9 +260,11 @@ function GeneralSection({
 function ProjectsSection({
   settings,
   onChange,
+  themeTokens: c,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
+  themeTokens: ThemeTokens;
 }) {
   const addProjectViaDialog = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Select project folder" });
@@ -257,10 +297,10 @@ function ProjectsSection({
 
       {settings.projects.length === 0 && (
         <div className="text-center py-8">
-          <svg className="w-8 h-8 text-zinc-700 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <svg className="w-8 h-8 mx-auto mb-2" style={{ color: c.textDim }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
           </svg>
-          <p className="text-sm text-zinc-500">No projects configured yet.</p>
+          <p className="text-sm" style={{ color: c.textMuted }}>No projects configured yet.</p>
         </div>
       )}
 
@@ -268,17 +308,21 @@ function ProjectsSection({
         {settings.projects.map((p) => (
           <div
             key={p.path}
-            className="flex items-center justify-between px-3 py-3 glass-card rounded-xl"
+            className="flex items-center justify-between px-3 py-3 rounded-xl"
+            style={{ background: c.bgCard, border: `1px solid ${c.borderCard}` }}
           >
             <div>
-              <p className="text-sm text-zinc-300">
+              <p className="text-sm" style={{ color: c.textSecondary }}>
                 {p.name ?? p.path.split(/[/\\]/).pop() ?? p.path}
               </p>
-              <p className="text-[11px] text-zinc-500 font-mono">{p.path}</p>
+              <p className="text-[11px] font-mono" style={{ color: c.textMuted }}>{p.path}</p>
             </div>
             <button
               onClick={() => removeProject(p.path)}
-              className="text-zinc-600 hover:text-[#f85149] transition-colors ml-3"
+              className="ml-3 transition-colors"
+              style={{ color: c.textDim }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "#f85149"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = c.textDim; }}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -294,13 +338,15 @@ function ProjectsSection({
 function GitHubSection({
   settings,
   onChange,
+  themeTokens: c,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
+  themeTokens: ThemeTokens;
 }) {
   return (
     <div className="flex flex-col gap-5 max-w-lg">
-      <FieldGroup label="Default issue filter">
+      <FieldGroup label="Default issue filter" themeTokens={c}>
         <input
           type="text"
           value={settings.github.defaultFilter}
@@ -311,10 +357,11 @@ function GitHubSection({
             })
           }
           placeholder="assignee:@me is:open"
-          className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition-colors"
+          className="w-full rounded-xl px-3 py-2.5 text-sm outline-none transition-colors"
+          style={inputStyle(c)}
         />
       </FieldGroup>
-      <FieldGroup label="Poll interval (seconds)">
+      <FieldGroup label="Poll interval (seconds)" themeTokens={c}>
         <input
           type="number"
           value={settings.github.pollIntervalSeconds}
@@ -327,10 +374,11 @@ function GitHubSection({
               },
             })
           }
-          className="w-32 bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 outline-none transition-colors"
+          className="w-32 rounded-xl px-3 py-2.5 text-sm outline-none transition-colors"
+          style={inputStyle(c)}
         />
       </FieldGroup>
-      <FieldGroup label="Merge command">
+      <FieldGroup label="Merge command" themeTokens={c}>
         <input
           type="text"
           value={settings.github.mergeCommand}
@@ -340,7 +388,8 @@ function GitHubSection({
               github: { ...settings.github, mergeCommand: e.target.value },
             })
           }
-          className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 font-mono outline-none transition-colors"
+          className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none transition-colors"
+          style={inputStyle(c)}
         />
       </FieldGroup>
     </div>
@@ -350,9 +399,11 @@ function GitHubSection({
 function NotificationsSection({
   settings,
   onChange,
+  themeTokens: c,
 }: {
   settings: Settings;
   onChange: (s: Settings) => void;
+  themeTokens: ThemeTokens;
 }) {
   return (
     <div className="flex flex-col gap-5 max-w-lg">
@@ -366,6 +417,7 @@ function NotificationsSection({
         }
         label="Enable OS notifications"
         description="Show a system notification when Claude finishes a turn and needs your input"
+        themeTokens={c}
       />
 
       <Toggle
@@ -377,11 +429,12 @@ function NotificationsSection({
           })
         }
         label="Enable Pushover notifications"
+        themeTokens={c}
       />
 
       {settings.notifications.pushoverEnabled && (
         <>
-          <FieldGroup label="Pushover token (optional)">
+          <FieldGroup label="Pushover token (optional)" themeTokens={c}>
             <input
               type="password"
               value={settings.notifications.pushoverToken ?? ""}
@@ -394,10 +447,11 @@ function NotificationsSection({
                   },
                 })
               }
-              className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none font-mono transition-colors"
+              className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none transition-colors"
+              style={inputStyle(c)}
             />
           </FieldGroup>
-          <FieldGroup label="Pushover user key">
+          <FieldGroup label="Pushover user key" themeTokens={c}>
             <input
               type="password"
               value={settings.notifications.pushoverUserKey ?? ""}
@@ -410,7 +464,8 @@ function NotificationsSection({
                   },
                 })
               }
-              className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-[#4f8ef7]/40 rounded-xl px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none font-mono transition-colors"
+              className="w-full rounded-xl px-3 py-2.5 text-sm font-mono outline-none transition-colors"
+              style={inputStyle(c)}
             />
           </FieldGroup>
         </>
@@ -424,11 +479,13 @@ function Toggle({
   onChange,
   label,
   description,
+  themeTokens: c,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
   description?: string;
+  themeTokens: ThemeTokens;
 }) {
   return (
     <div className="flex items-start gap-3 group">
@@ -440,9 +497,8 @@ function Toggle({
           className="sr-only"
         />
         <div
-          className={`w-9 h-5 rounded-full transition-colors ${
-            checked ? "bg-[#4f8ef7]" : "bg-white/[0.08]"
-          }`}
+          className="w-9 h-5 rounded-full transition-colors"
+          style={{ background: checked ? "#4f8ef7" : c.bgAccent("0.10") }}
         >
           <div
             className={`w-4 h-4 bg-white rounded-full shadow mt-0.5 transition-transform ${
@@ -452,9 +508,9 @@ function Toggle({
         </div>
       </label>
       <div>
-        <span className="text-sm text-zinc-300 group-hover:text-zinc-200 transition-colors">{label}</span>
+        <span className="text-sm transition-colors" style={{ color: c.textSecondary }}>{label}</span>
         {description && (
-          <p className="text-[11px] text-zinc-500 mt-0.5">{description}</p>
+          <p className="text-[11px] mt-0.5" style={{ color: c.textMuted }}>{description}</p>
         )}
       </div>
     </div>
@@ -464,16 +520,29 @@ function Toggle({
 function FieldGroup({
   label,
   children,
+  themeTokens: c,
 }: {
   label: string;
   children: ReactNode;
+  themeTokens: ThemeTokens;
 }) {
   return (
     <div>
-      <label className="block text-[11px] font-medium text-zinc-400 mb-1.5 uppercase tracking-wider">
+      <label
+        className="block text-[11px] font-medium mb-1.5 uppercase tracking-wider"
+        style={{ color: c.textSecondary }}
+      >
         {label}
       </label>
       {children}
     </div>
+  );
+}
+
+function Code({ children, c }: { children: ReactNode; c: ThemeTokens }) {
+  return (
+    <code className="font-mono" style={{ color: c.textSecondary }}>
+      {children}
+    </code>
   );
 }

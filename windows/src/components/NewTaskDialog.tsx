@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { getSettings, useBoardStore } from "../store/boardStore";
+import { useTheme, t } from "../theme";
 
 export default function NewTaskDialog() {
   const { createCard, setNewTaskOpen, selectCard, cards } = useBoardStore();
+  const { theme } = useTheme();
+  const c = t(theme);
   const [prompt, setPrompt] = useState("");
   const [title, setTitle] = useState("");
   const [project, setProject] = useState("");
@@ -19,7 +22,6 @@ export default function NewTaskDialog() {
     ),
   ];
 
-  // Merge settings projects + card projects, deduplicated
   const projects = [...new Set([...settingsProjects, ...cardProjects])].slice(0, 30);
 
   useEffect(() => {
@@ -46,7 +48,6 @@ export default function NewTaskDialog() {
       const cardId = await createCard(prompt.trim(), title.trim() || null, project || ".", launch);
       setNewTaskOpen(false);
       if (launch && cardId) {
-        // Auto-select the card so the drawer opens with embedded terminal
         selectCard(cardId);
       }
     } finally {
@@ -54,21 +55,38 @@ export default function NewTaskDialog() {
     }
   };
 
+  const inputStyle: React.CSSProperties = {
+    background: c.bgInput,
+    border: `1px solid ${c.border}`,
+    color: c.textPrimary,
+  };
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center glass-overlay animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in"
+      style={{ background: c.bgOverlay }}
       onClick={() => setNewTaskOpen(false)}
     >
       <div
-        className="w-[520px] bg-[#141417] border border-white/10 rounded-xl shadow-2xl animate-slide-up"
+        className="w-[520px] rounded-xl shadow-2xl animate-slide-up"
+        style={{
+          background: c.bgDialog,
+          border: `1px solid ${c.borderBright}`,
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <h2 className="text-[16px] font-semibold text-zinc-100">New Task</h2>
+        <div
+          className="flex items-center justify-between px-5 py-4"
+          style={{ borderBottom: `1px solid ${c.border}` }}
+        >
+          <h2 className="text-[16px] font-semibold" style={{ color: c.textPrimary }}>New Task</h2>
           <button
             onClick={() => setNewTaskOpen(false)}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="transition-colors"
+            style={{ color: c.textMuted }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = c.textPrimary; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = c.textMuted; }}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -77,45 +95,41 @@ export default function NewTaskDialog() {
         </div>
 
         <form onSubmit={handleSubmit} className="px-5 py-5 flex flex-col gap-5">
-          {/* Prompt */}
           <div>
-            <label className="block text-[13px] font-medium text-zinc-300 mb-2">
-              Prompt
-            </label>
+            <label className="block text-[13px] font-medium mb-2" style={{ color: c.textSecondary }}>Prompt</label>
             <textarea
               ref={promptRef}
               rows={4}
               placeholder="Describe the task for Claude..."
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              className="w-full bg-[#0a0a0c] border border-white/10 focus:border-[#4f8ef7]/50 rounded-lg px-3.5 py-3 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none resize-none transition-colors leading-relaxed"
+              className="w-full rounded-lg px-3.5 py-3 text-[14px] outline-none resize-none transition-colors leading-relaxed"
+              style={inputStyle}
             />
           </div>
 
-          {/* Title */}
           <div>
-            <label className="block text-[13px] font-medium text-zinc-300 mb-2">
-              Title <span className="text-zinc-600 font-normal">(optional)</span>
+            <label className="block text-[13px] font-medium mb-2" style={{ color: c.textSecondary }}>
+              Title <span className="font-normal" style={{ color: c.textDim }}>(optional)</span>
             </label>
             <input
               type="text"
               placeholder="Short title for the board card"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full bg-[#0a0a0c] border border-white/10 focus:border-[#4f8ef7]/50 rounded-lg px-3.5 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors"
+              className="w-full rounded-lg px-3.5 py-2.5 text-[14px] outline-none transition-colors"
+              style={inputStyle}
             />
           </div>
 
-          {/* Project */}
           <div>
-            <label className="block text-[13px] font-medium text-zinc-300 mb-2">
-              Project
-            </label>
+            <label className="block text-[13px] font-medium mb-2" style={{ color: c.textSecondary }}>Project</label>
             {projects.length > 0 ? (
               <select
                 value={project}
                 onChange={(e) => setProject(e.target.value)}
-                className="w-full bg-[#0a0a0c] border border-white/10 focus:border-[#4f8ef7]/50 rounded-lg px-3.5 py-2.5 text-[14px] text-zinc-100 outline-none transition-colors"
+                className="w-full rounded-lg px-3.5 py-2.5 text-[14px] outline-none transition-colors"
+                style={inputStyle}
               >
                 {projects.map((p) => (
                   <option key={p} value={p}>
@@ -129,28 +143,30 @@ export default function NewTaskDialog() {
                 placeholder="C:\path\to\project"
                 value={project}
                 onChange={(e) => setProject(e.target.value)}
-                className="w-full bg-[#0a0a0c] border border-white/10 focus:border-[#4f8ef7]/50 rounded-lg px-3.5 py-2.5 text-[14px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors"
+                className="w-full rounded-lg px-3.5 py-2.5 text-[14px] outline-none transition-colors"
+                style={inputStyle}
               />
             )}
           </div>
 
-          {/* Launch toggle */}
           <label className="flex items-center gap-3 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={launch}
               onChange={(e) => setLaunch(e.target.checked)}
-              className="w-4 h-4 rounded accent-[#4f8ef7] bg-[#0a0a0c] border-white/10"
+              className="w-4 h-4 rounded accent-[#4f8ef7]"
             />
-            <span className="text-[13px] text-zinc-300">Start immediately in terminal</span>
+            <span className="text-[13px]" style={{ color: c.textSecondary }}>Start immediately in terminal</span>
           </label>
 
-          {/* Buttons */}
           <div className="flex gap-3 pt-1">
             <button
               type="button"
               onClick={() => setNewTaskOpen(false)}
-              className="flex-1 py-2.5 rounded-lg border border-white/10 text-[13px] text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+              className="flex-1 py-2.5 rounded-lg text-[13px] transition-colors"
+              style={{ border: `1px solid ${c.border}`, color: c.textMuted }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; e.currentTarget.style.color = c.textPrimary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = c.textMuted; }}
             >
               Cancel
             </button>
