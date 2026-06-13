@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tokio::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,6 +11,10 @@ pub struct Project {
     pub name: Option<String>,
     pub github_filter: Option<String>,
     pub repo_root: Option<String>,
+    /// Per-project prompt prefix. When set, overrides Settings.promptTemplate
+    /// for tasks created against this project. Optional.
+    #[serde(default)]
+    pub prompt_template: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -79,6 +84,23 @@ impl Default for NotificationSettings {
     }
 }
 
+/// Byte-compatible with macOS `RemoteSettings` (Sources/.../SettingsStore.swift).
+/// Field names — `host`, `remotePath`, `localPath`, `syncIgnores` — match exactly
+/// so a settings.json moved between Mac and Windows keeps working.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSettings {
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub remote_path: String,
+    #[serde(default)]
+    pub local_path: String,
+    /// nil = use mutagen::default_ignores()
+    #[serde(default)]
+    pub sync_ignores: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTimeoutSettings {
@@ -123,14 +145,63 @@ pub struct Settings {
     /// Terminal font size (8-24)
     #[serde(default = "default_terminal_font_size")]
     pub terminal_font_size: u32,
+    /// Shell command used by the embedded terminal — space-separated tokens.
+    /// Defaults to `cmd.exe` for a native Windows experience. Set to
+    /// `wsl.exe` (or `pwsh.exe -NoLogo`, etc.) to run Claude in a different
+    /// shell. The first token is the executable; remaining tokens are args.
+    #[serde(default = "default_terminal_shell")]
+    pub terminal_shell: String,
+    #[serde(default)]
+    pub remote: Option<RemoteSettings>,
 }
 
 fn default_terminal_font_size() -> u32 {
     15
 }
 
+fn default_terminal_shell() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "cmd.exe".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "bash".to_string()
+    }
+}
+
 fn default_issue_template() -> String {
     "#${number}: ${title}\n\n${body}".to_string()
+}
+
+/// First time the settings file is read on this process, peek at the raw JSON
+/// to see whether it came from the macOS app. macOS doesn't write the
+/// Windows-only keys (`terminalShell`, `terminalFontSize`, `editor`); when
+/// they're absent serde's `#[serde(default)]` silently backfills the Windows
+/// defaults. We use `terminalShell` alone as the sentinel — adding more keys
+/// to the AND would just create false negatives if a Windows user explicitly
+/// cleared one. A new Windows-only field does NOT need to be added to the
+/// check; just keep this comment up to date.
+///
+/// No `schema_version` field is added — that would break the macOS byte-compat
+/// invariant (sortedKeys+prettyPrinted JSON shared with the Swift app).
+fn log_cross_platform_backfill_once(raw: &[u8]) {
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if LOGGED.get().is_some() {
+        return;
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(raw) else { return };
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+    if !obj.contains_key("terminalShell") {
+        let _ = LOGGED.set(());
+        crate::logging::info(
+            "settings",
+            "settings.json missing terminalShell/terminalFontSize — backfilling Windows defaults (file appears to originate from macOS)",
+        );
+    }
 }
 
 pub struct SettingsStore {
@@ -153,6 +224,7 @@ impl SettingsStore {
             return Ok(defaults);
         }
         let data = fs::read(&self.file_path).await.context("read settings.json")?;
+        log_cross_platform_backfill_once(&data);
         let settings: Settings = serde_json::from_slice(&data).unwrap_or_default();
         Ok(settings)
     }

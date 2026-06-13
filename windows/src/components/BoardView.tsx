@@ -1,11 +1,11 @@
 import {
-  DndContext, DragEndEvent, DragOverlay, DragStartEvent,
+  DndContext, DragEndEvent, DragOverEvent, DragOverlay, DragStartEvent,
   PointerSensor, useSensor, useSensors, closestCenter,
   type DropAnimation, defaultDropAnimationSideEffects,
 } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { useState } from "react";
-import { useBoardStore } from "../store/boardStore";
+import { canMergeCards, mergeCards, useBoardStore } from "../store/boardStore";
 import { COLUMNS, type CardDto, type KanbanColumn } from "../types";
 import { useTheme, t } from "../theme";
 import CardView from "./CardView";
@@ -20,7 +20,7 @@ const dropAnimation: DropAnimation = {
 };
 
 export default function BoardView() {
-  const { moveCard, reorderCards, isLoading, cards, setNewTaskOpen } = useBoardStore();
+  const { moveCard, reorderCards, isLoading, cards, setNewTaskOpen, refresh, setMergeTargetId } = useBoardStore();
   const [draggingCard, setDraggingCard] = useState<CardDto | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
@@ -31,10 +31,44 @@ export default function BoardView() {
 
   const handleDragStart = (event: DragStartEvent) => {
     setDraggingCard(event.active.data.current as CardDto);
+    setMergeTargetId(null);
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { active, over } = event;
+    if (!over) {
+      setMergeTargetId(null);
+      return;
+    }
+    const overId = over.id as string;
+    // Hovering a column droppable — definitely not a merge gesture.
+    if (COLUMNS.includes(overId as KanbanColumn)) {
+      setMergeTargetId(null);
+      return;
+    }
+    const activeCard = active.data.current as CardDto | undefined;
+    const overCard = over.data.current as CardDto | undefined;
+    if (!activeCard || !overCard) {
+      setMergeTargetId(null);
+      return;
+    }
+    // Same-column hover is reorder by default — only flag as merge candidate
+    // when the cards live in different columns, so reordering inside a
+    // column doesn't suddenly look like a merge. Cross-column drop on a
+    // card is meaningless otherwise, which lines up with macOS where the
+    // whole card frame becomes the merge hit zone for cross-column drops.
+    if (activeCard.link.column === overCard.link.column) {
+      setMergeTargetId(null);
+      return;
+    }
+    setMergeTargetId(canMergeCards(activeCard, overCard) ? overCard.id : null);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
+    const wasMergeTarget = useBoardStore.getState().mergeTargetId;
     setDraggingCard(null);
+    setMergeTargetId(null);
+
     const { active, over } = event;
     if (!over) return;
 
@@ -57,6 +91,19 @@ export default function BoardView() {
     const overCard = over.data.current as CardDto;
     if (!overCard) return;
 
+    // Merge takes priority over the column-move fallback. The mergeTargetId
+    // state was set by handleDragOver only when canMergeCards returned true,
+    // so we don't re-validate here.
+    if (wasMergeTarget === overCard.id) {
+      mergeCards(activeId, overCard.id)
+        .then(() => refresh())
+        .catch((e) => {
+          useBoardStore.setState({ error: String(e) });
+          refresh();
+        });
+      return;
+    }
+
     if (activeCard.link.column === overCard.link.column) {
       // Same column → reorder
       const column = activeCard.link.column;
@@ -72,7 +119,7 @@ export default function BoardView() {
         reorderCards(column, newOrder);
       }
     } else {
-      // Cross-column: move to the target card's column
+      // Cross-column: move to the target card's column (merge didn't apply)
       moveCard(activeId, overCard.link.column);
     }
   };
@@ -85,6 +132,7 @@ export default function BoardView() {
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
         <div className="flex flex-1 gap-1.5 overflow-x-auto p-2">

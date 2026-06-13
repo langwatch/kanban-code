@@ -184,6 +184,38 @@ async fn launch_terminal_command(command: &str) -> Result<()> {
     Ok(())
 }
 
+/// Open an arbitrary URL in the user's default browser.
+///
+/// On Windows uses `cmd /c start "" <url>` — the empty title arg is required
+/// after `start` to prevent the shell from treating a quoted URL as the title.
+/// On Linux/macOS falls through to `xdg-open` / `open`.
+pub async fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        tokio::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .spawn()
+            .with_context(|| format!("open url '{url}'"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        tokio::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .with_context(|| format!("open url '{url}'"))?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        tokio::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .with_context(|| format!("open url '{url}'"))?;
+        return Ok(());
+    }
+}
+
 /// Open a path in the configured editor.
 ///
 /// In WSL, prefers the Windows-side editor (e.g. `code.cmd`, `cursor.cmd`) so the

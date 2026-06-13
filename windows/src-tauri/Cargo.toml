@@ -29,6 +29,9 @@ regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+# default-features = false drops openssl so Windows builds don't need the C openssl toolchain.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-pty = "0.1"
 tauri-plugin-dialog = "2"
 

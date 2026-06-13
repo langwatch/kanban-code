@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
-use uuid::Uuid;
+
+use crate::ksuid;
 
 // ── Queued Prompt ────────────────────────────────────────────────────────────
 
@@ -34,6 +35,13 @@ pub struct WorktreeLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PrCheckRun {
+    pub name: String,
+    pub conclusion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrLink {
     pub number: i64,
     pub url: Option<String>,
@@ -43,6 +51,14 @@ pub struct PrLink {
     pub approval_count: Option<i64>,
     pub unresolved_threads: Option<i64>,
     pub merge_state_status: Option<String>,
+    /// APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED — populated from
+    /// `gh pr list --json reviewDecision`. None when no review yet.
+    #[serde(default)]
+    pub review_decision: Option<String>,
+    /// Flattened statusCheckRollup so the card UI doesn't have to fork out
+    /// per-PR. Empty Vec when no CI is configured.
+    #[serde(default)]
+    pub check_runs: Vec<PrCheckRun>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +119,20 @@ pub struct Link {
     pub is_launching: Option<bool>,
     #[serde(default)]
     pub queued_prompts: Option<Vec<QueuedPrompt>>,
+    /// Manual sort position within a column. `None` = fall back to time-based
+    /// ordering. Set by drag-to-reorder; persisted so it survives refresh.
+    #[serde(default)]
+    pub sort_order: Option<f64>,
+    /// Coding assistant that owns this card. Drives which CLI binary is
+    /// invoked in the embedded terminal. Defaults to "claude" so legacy
+    /// links.json files (and files written by macOS without an
+    /// `assistantId`) keep working.
+    #[serde(default = "default_assistant")]
+    pub assistant_id: String,
+}
+
+fn default_assistant() -> String {
+    "claude".to_string()
 }
 
 fn default_source() -> String {
@@ -145,9 +175,17 @@ impl Link {
         self.id.clone()
     }
 
-    fn new_card(prompt: String, title: Option<String>, project: String) -> Self {
+    fn new_card(
+        prompt: String,
+        title: Option<String>,
+        project: String,
+        assistant_id: String,
+    ) -> Self {
         let now = Utc::now();
-        let id = format!("card_{}", Uuid::new_v4().simple());
+        // KSUID matches the macOS format (chronologically sortable across the
+        // links.json file). Legacy UUID-style ids still parse since `id` is
+        // just a string — readers don't validate the format.
+        let id = ksuid::generate(Some("card"));
         Link {
             id,
             name: title,
@@ -168,6 +206,8 @@ impl Link {
             is_remote: false,
             is_launching: None,
             queued_prompts: None,
+            sort_order: None,
+            assistant_id,
         }
     }
 }
@@ -175,7 +215,7 @@ impl Link {
 impl QueuedPrompt {
     pub fn new(body: String, send_automatically: bool) -> Self {
         Self {
-            id: format!("prompt_{}", Uuid::new_v4().simple()),
+            id: ksuid::generate(Some("prompt")),
             body,
             send_automatically,
         }
@@ -229,8 +269,30 @@ impl CoordinationStore {
         let data = fs::read(&self.file_path)
             .await
             .context("read links.json")?;
-        let container: LinksContainer = serde_json::from_slice(&data).unwrap_or_default();
-        Ok(container.links)
+        // Try the normal parse first.
+        if let Ok(container) = serde_json::from_slice::<LinksContainer>(&data) {
+            return Ok(container.links);
+        }
+        // Corruption recovery: copy the bad file to links.json.bkp and start
+        // fresh, mirroring macOS CoordinationStore.swift (~L105). Losing all
+        // cards is bad, but at least the user can inspect the .bkp afterwards
+        // — silently returning empty without a backup is worse.
+        let backup_path = self.file_path.with_extension("json.bkp");
+        if let Err(e) = fs::copy(&self.file_path, &backup_path).await {
+            crate::logging::error(
+                "coordination",
+                &format!("failed to back up corrupt links.json to {:?}: {e}", backup_path),
+            );
+        } else {
+            crate::logging::warn(
+                "coordination",
+                &format!(
+                    "links.json failed to parse; copied to {:?} and resetting to empty",
+                    backup_path
+                ),
+            );
+        }
+        Ok(vec![])
     }
 
     pub async fn write_links(&self, links: &[Link]) -> Result<()> {
@@ -277,8 +339,9 @@ impl CoordinationStore {
         prompt: String,
         title: Option<String>,
         project: String,
+        assistant_id: String,
     ) -> Result<Link> {
-        let link = Link::new_card(prompt, title, project);
+        let link = Link::new_card(prompt, title, project, assistant_id);
         self.upsert_link(&link).await?;
         Ok(link)
     }
@@ -355,7 +418,7 @@ impl CoordinationStore {
         prompt_body: &str,
     ) -> Result<Link> {
         let now = Utc::now();
-        let id = format!("card_{}", Uuid::new_v4().simple());
+        let id = ksuid::generate(Some("card"));
         let link = Link {
             id,
             name: Some(format!("#{}: {}", issue_number, issue_title)),
@@ -381,6 +444,8 @@ impl CoordinationStore {
             is_remote: false,
             is_launching: None,
             queued_prompts: None,
+            sort_order: None,
+            assistant_id: default_assistant(),
         };
         self.upsert_link(&link).await?;
         Ok(link)
@@ -396,6 +461,19 @@ impl CoordinationStore {
                 }
             }
             link.updated_at = Utc::now();
+        }
+        self.write_links(&links).await
+    }
+
+    /// Persist a manual ordering by assigning each card its index in
+    /// `ordered_ids` as `sort_order`. Intentionally does NOT bump `updated_at`,
+    /// so reordering never reshuffles time-based sorting elsewhere.
+    pub async fn reorder_cards(&self, ordered_ids: &[String]) -> Result<()> {
+        let mut links = self.read_links().await?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            if let Some(link) = links.iter_mut().find(|l| &l.id == id) {
+                link.sort_order = Some(idx as f64);
+            }
         }
         self.write_links(&links).await
     }

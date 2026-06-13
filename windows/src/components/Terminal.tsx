@@ -9,7 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 interface Props {
   /** Unique terminal session id (for React key purposes) */
   ptyId: string;
-  /** Command to run, e.g. ["wsl.exe"] */
+  /** Command to run, e.g. ["cmd.exe"] (default) or ["wsl.exe"] (configurable in Settings) */
   command: string[];
   /** Text to write into the PTY after shell starts (e.g. "claude --resume abc\r") */
   initialInput?: string;
