@@ -17,7 +17,7 @@ import {
   truncateSession,
   moveCardToProject,
 } from "../store/boardStore";
-import type { Project } from "../types";
+import { ASSISTANT_CLI, type Project, type AssistantId } from "../types";
 import { useTheme, t } from "../theme";
 import type { Turn, TranscriptPage, QueuedPrompt } from "../types";
 import TerminalView from "./Terminal";
@@ -279,20 +279,23 @@ export default function CardDetailView() {
   const shellExe = (shellCommand[0] ?? "cmd.exe").toLowerCase();
   const isUnixShell = /(^|[\\/])(wsl|bash|sh|zsh|fish)(\.exe)?$/.test(shellExe);
 
+  const assistantId: AssistantId = (card.link.assistantId ?? "claude") as AssistantId;
+  const cli = ASSISTANT_CLI[assistantId] ?? "claude";
+
   const terminalInput = (() => {
     if (isUnixShell) {
       // bash-style: backslash-escape spaces in path, single-quote the prompt.
       const cdCmd = projectPath ? `cd ${projectPath.replace(/ /g, "\\ ")} && ` : "";
       return sessionId
-        ? `${cdCmd}claude --resume ${sessionId}\r`
-        : `${cdCmd}claude '${(promptBody ?? "").replace(/'/g, "'\\''")}'\r`;
+        ? `${cdCmd}${cli} --resume ${sessionId}\r`
+        : `${cdCmd}${cli} '${(promptBody ?? "").replace(/'/g, "'\\''")}'\r`;
     }
     // cmd.exe / pwsh — double-quote the path; "" escapes a quote inside cmd
     // double-quotes (PowerShell also accepts it).
     const cdCmd = projectPath ? `cd "${projectPath}" && ` : "";
     return sessionId
-      ? `${cdCmd}claude --resume ${sessionId}\r`
-      : `${cdCmd}claude "${(promptBody ?? "").replace(/"/g, '""')}"\r`;
+      ? `${cdCmd}${cli} --resume ${sessionId}\r`
+      : `${cdCmd}${cli} "${(promptBody ?? "").replace(/"/g, '""')}"\r`;
   })();
 
   const handleStartTerminal = () => {

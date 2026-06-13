@@ -3,6 +3,7 @@ mod assign_column;
 mod bm25;
 mod board_state;
 mod card_reconciler;
+mod coding_assistant;
 mod coordination_store;
 mod gh_cli;
 mod git_remote;
@@ -87,11 +88,18 @@ async fn create_card(
     title: Option<String>,
     project: String,
     launch: Option<bool>,
+    assistant_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<coordination_store::Link, String> {
+    let assistant = assistant_id
+        .as_deref()
+        .and_then(coding_assistant::AssistantId::from_str)
+        .unwrap_or_default()
+        .as_str()
+        .to_string();
     let link = state
         .coordination_store
-        .create_card(prompt.clone(), title, project.clone())
+        .create_card(prompt.clone(), title, project.clone(), assistant)
         .await
         .map_err(|e| e.to_string())?;
 

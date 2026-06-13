@@ -103,7 +103,22 @@ export interface Link {
   queuedPrompts?: QueuedPrompt[];
   /** Manual sort position within a column; undefined = time-based ordering. */
   sortOrder?: number;
+  /** Coding assistant that owns this card. Drives which CLI runs in the
+   *  terminal. Defaults to "claude" for legacy/macOS-written cards. */
+  assistantId?: AssistantId;
 }
+
+export type AssistantId = "claude" | "gemini";
+
+export const ASSISTANT_DISPLAY: Record<AssistantId, string> = {
+  claude: "Claude Code",
+  gemini: "Gemini CLI",
+};
+
+export const ASSISTANT_CLI: Record<AssistantId, string> = {
+  claude: "claude",
+  gemini: "gemini",
+};
 
 export interface Session {
   id: string;

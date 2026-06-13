@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getSettings, useBoardStore } from "../store/boardStore";
 import { useTheme, t } from "../theme";
+import { ASSISTANT_DISPLAY, type AssistantId } from "../types";
 
 export default function NewTaskDialog() {
   const { createCard, setNewTaskOpen, selectCard, cards } = useBoardStore();
@@ -10,6 +11,7 @@ export default function NewTaskDialog() {
   const [title, setTitle] = useState("");
   const [project, setProject] = useState("");
   const [launch, setLaunch] = useState(true);
+  const [assistantId, setAssistantId] = useState<AssistantId>("claude");
   const [submitting, setSubmitting] = useState(false);
   const [settingsProjects, setSettingsProjects] = useState<string[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -45,7 +47,7 @@ export default function NewTaskDialog() {
     if (!prompt.trim()) return;
     setSubmitting(true);
     try {
-      const cardId = await createCard(prompt.trim(), title.trim() || null, project || ".", launch);
+      const cardId = await createCard(prompt.trim(), title.trim() || null, project || ".", launch, assistantId);
       setNewTaskOpen(false);
       if (launch && cardId) {
         selectCard(cardId);
@@ -146,6 +148,42 @@ export default function NewTaskDialog() {
                 className="w-full rounded-lg px-3.5 py-2.5 text-[14px] outline-none transition-colors"
                 style={inputStyle}
               />
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[13px] font-medium mb-2" style={{ color: c.textSecondary }}>
+              Assistant
+            </label>
+            <div
+              className="inline-flex items-center rounded-lg p-0.5"
+              style={{ background: c.bgAccent("0.05"), border: `1px solid ${c.border}` }}
+            >
+              {(Object.keys(ASSISTANT_DISPLAY) as AssistantId[]).map((id) => {
+                const active = assistantId === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setAssistantId(id)}
+                    className="px-3 py-1 rounded-md text-[12px] font-medium transition-colors"
+                    style={{
+                      background: active ? c.bgCard : "transparent",
+                      color: active ? c.textPrimary : c.textMuted,
+                      border: active ? `1px solid ${c.borderBright}` : "1px solid transparent",
+                    }}
+                  >
+                    {ASSISTANT_DISPLAY[id]}
+                  </button>
+                );
+              })}
+            </div>
+            {assistantId === "gemini" && (
+              <p className="mt-2 text-[11.5px]" style={{ color: c.textDim }}>
+                Gemini support is minimal in this build — the embedded terminal
+                will invoke <code>gemini</code> from PATH. Activity detection
+                and hooks remain Claude-only.
+              </p>
             )}
           </div>
 
