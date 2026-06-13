@@ -51,6 +51,8 @@ interface BoardStore {
   deleteCard: (cardId: string) => Promise<void>;
   archiveCard: (cardId: string) => Promise<void>;
   renameCard: (cardId: string, name: string) => Promise<void>;
+  setCardPinned: (cardId: string, isPinned: boolean) => Promise<void>;
+  reorderPinnedCards: (orderedIds: string[]) => void;
   createCard: (
     prompt: string,
     title: string | null,
@@ -69,6 +71,7 @@ interface BoardStore {
 
   // Computed helpers
   cardsInColumn: (column: KanbanColumn) => CardDto[];
+  pinnedCards: () => CardDto[];
   selectedCard: () => CardDto | null;
 }
 
@@ -181,6 +184,52 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     }
   },
 
+  setCardPinned: async (cardId, isPinned) => {
+    // Optimistic: stamp pinnedAt locally so the card jumps into the pinned
+    // section immediately. Assign a sort order one slot above current min so
+    // it lands at the top — matches the backend's behavior.
+    const minOrder = Math.min(
+      0,
+      ...get().cards
+        .map((c) => c.link.pinnedSortOrder)
+        .filter((v): v is number => v != null)
+    );
+    set((state) => ({
+      cards: state.cards.map((c) =>
+        c.id === cardId
+          ? {
+              ...c,
+              link: {
+                ...c.link,
+                pinnedAt: isPinned ? new Date().toISOString() : undefined,
+                pinnedSortOrder: isPinned ? minOrder - 1 : undefined,
+              },
+            }
+          : c
+      ),
+    }));
+    try {
+      await invoke("set_card_pinned", { cardId, isPinned });
+    } catch (e) {
+      set({ error: String(e) });
+      get().refresh();
+    }
+  },
+
+  reorderPinnedCards: (orderedIds) => {
+    set((state) => ({
+      cards: state.cards.map((c) => {
+        const idx = orderedIds.indexOf(c.id);
+        return idx === -1
+          ? c
+          : { ...c, link: { ...c.link, pinnedSortOrder: idx } };
+      }),
+    }));
+    invoke("reorder_pinned_cards", { orderedIds }).catch((e) =>
+      set({ error: String(e) })
+    );
+  },
+
   createCard: async (prompt, title, project, launch = false, assistantId) => {
     try {
       const link = await invoke<{ id: string }>("create_card", {
@@ -216,6 +265,8 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     const { cards, selectedProjectPath } = get();
     const filtered = cards
       .filter((c) => c.link.column === column)
+      // Pinned cards float into the Pinned section instead of double-rendering.
+      .filter((c) => !c.link.pinnedAt)
       .filter((c) => {
         if (!selectedProjectPath) return true;
         const cardPath = c.link.projectPath ?? c.session?.projectPath;
@@ -245,6 +296,35 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
       if (sa != null) return -1;
       if (sb != null) return 1;
       return byTimeDesc(a, b);
+    });
+  },
+
+  pinnedCards: () => {
+    const { cards, selectedProjectPath } = get();
+    const filtered = cards
+      .filter((c) => c.link.pinnedAt != null)
+      .filter((c) => {
+        if (!selectedProjectPath) return true;
+        const cardPath = c.link.projectPath ?? c.session?.projectPath;
+        if (!cardPath) return false;
+        return (
+          cardPath === selectedProjectPath ||
+          cardPath.startsWith(selectedProjectPath + "/") ||
+          cardPath.startsWith(selectedProjectPath + "\\")
+        );
+      });
+
+    return filtered.sort((a, b) => {
+      const sa = a.link.pinnedSortOrder;
+      const sb = b.link.pinnedSortOrder;
+      if (sa != null && sb != null && sa !== sb) return sa - sb;
+      if (sa != null && sb == null) return -1;
+      if (sa == null && sb != null) return 1;
+      // Newest pin first — mirrors macOS BoardStore.pinnedCards.
+      const ta = a.link.pinnedAt ?? "";
+      const tb = b.link.pinnedAt ?? "";
+      if (ta !== tb) return tb.localeCompare(ta);
+      return a.id.localeCompare(b.id);
     });
   },
 

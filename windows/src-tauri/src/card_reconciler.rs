@@ -267,6 +267,8 @@ fn new_discovered_link(session: &Session) -> Link {
         is_launching: None,
         queued_prompts: None,
         sort_order: None,
+        pinned_at: None,
+        pinned_sort_order: None,
         assistant_id: "claude".to_string(),
     }
 }

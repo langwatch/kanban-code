@@ -79,6 +79,8 @@ export interface QueuedPrompt {
   id: string;
   body: string;
   sendAutomatically: boolean;
+  /** Set only for prompts the self-compact guard enqueued (mirrors macOS). */
+  selfCompactThresholdTokens?: number;
 }
 
 export interface Link {
@@ -103,6 +105,11 @@ export interface Link {
   queuedPrompts?: QueuedPrompt[];
   /** Manual sort position within a column; undefined = time-based ordering. */
   sortOrder?: number;
+  /** When set, the card is shown in the Pinned section above the lanes. */
+  pinnedAt?: string;
+  /** Manual order within the Pinned section. Separate from sortOrder so
+   *  rearranging a pin never disturbs the card's lane position. */
+  pinnedSortOrder?: number;
   /** Coding assistant that owns this card. Drives which CLI runs in the
    *  terminal. Defaults to "claude" for legacy/macOS-written cards. */
   assistantId?: AssistantId;
@@ -224,6 +231,21 @@ export interface RemotePrereqs {
   bashPath?: string;
 }
 
+export type SelfCompactAction = "queuePrompt" | "compactNow";
+
+export interface SelfCompactRule {
+  id: string;
+  thresholdTokens: number;
+  action: SelfCompactAction;
+  message: string;
+}
+
+export interface SelfCompactSettings {
+  enabled: boolean;
+  pollIntervalSeconds: number;
+  rules: SelfCompactRule[];
+}
+
 export interface Settings {
   projects: Project[];
   globalView: GlobalViewSettings;
@@ -238,6 +260,8 @@ export interface Settings {
   /** Shell command for the embedded terminal — space-separated tokens. Default "cmd.exe". */
   terminalShell: string;
   remote?: RemoteSettings;
+  /** Automatic context-limit guard for Claude sessions (mirrors macOS). */
+  selfCompact?: SelfCompactSettings;
 }
 
 export interface DependencyStatus {

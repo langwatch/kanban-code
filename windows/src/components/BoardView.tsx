@@ -3,7 +3,7 @@ import {
   PointerSensor, useSensor, useSensors, closestCenter,
   type DropAnimation, defaultDropAnimationSideEffects,
 } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
+import { arrayMove, SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useState } from "react";
 import { canMergeCards, mergeCards, useBoardStore } from "../store/boardStore";
 import { COLUMNS, type CardDto, type KanbanColumn } from "../types";
@@ -20,7 +20,8 @@ const dropAnimation: DropAnimation = {
 };
 
 export default function BoardView() {
-  const { moveCard, reorderCards, isLoading, cards, setNewTaskOpen, refresh, setMergeTargetId } = useBoardStore();
+  const { moveCard, reorderCards, reorderPinnedCards, isLoading, cards, setNewTaskOpen, refresh, setMergeTargetId } = useBoardStore();
+  const pinnedCards = useBoardStore((s) => s.pinnedCards());
   const [draggingCard, setDraggingCard] = useState<CardDto | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
@@ -104,6 +105,23 @@ export default function BoardView() {
       return;
     }
 
+    // Reordering inside the Pinned strip is its own sortable scope — both
+    // cards carry pinnedAt regardless of which real column they live in.
+    if (activeCard.link.pinnedAt && overCard.link.pinnedAt) {
+      const pinned = useBoardStore.getState().pinnedCards();
+      const oldIndex = pinned.findIndex((c) => c.id === activeId);
+      const newIndex = pinned.findIndex((c) => c.id === overId);
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const newOrder = arrayMove(
+          pinned.map((c) => c.id),
+          oldIndex,
+          newIndex
+        );
+        reorderPinnedCards(newOrder);
+      }
+      return;
+    }
+
     if (activeCard.link.column === overCard.link.column) {
       // Same column → reorder
       const column = activeCard.link.column;
@@ -135,8 +153,40 @@ export default function BoardView() {
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex flex-1 gap-1.5 overflow-x-auto p-2">
-          {COLUMNS.map((column) => <ColumnView key={column} column={column} />)}
+        <div className="flex flex-col flex-1 overflow-hidden">
+          {pinnedCards.length > 0 && (
+            <div
+              className="shrink-0 px-2 pt-2 pb-1"
+              style={{ borderBottom: `1px solid ${c.border}` }}
+            >
+              <div className="flex items-center gap-2 mb-1.5 px-1">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                  style={{ color: c.textDim }}>
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M12 2l1.5 4.5L18 8l-3.5 3 1 5L12 13.8 8.5 16l1-5L6 8l4.5-1.5L12 2z" />
+                </svg>
+                <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: c.textDim }}>
+                  Pinned
+                </span>
+                <span className="text-[11px]" style={{ color: c.textDim }}>{pinnedCards.length}</span>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                <SortableContext
+                  items={pinnedCards.map((card) => card.id)}
+                  strategy={horizontalListSortingStrategy}
+                >
+                  {pinnedCards.map((card) => (
+                    <div key={card.id} style={{ minWidth: 220, maxWidth: 260, flex: "0 0 auto" }}>
+                      <CardView card={card} />
+                    </div>
+                  ))}
+                </SortableContext>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-1 gap-1.5 overflow-x-auto p-2">
+            {COLUMNS.map((column) => <ColumnView key={column} column={column} />)}
+          </div>
         </div>
         <DragOverlay dropAnimation={dropAnimation}>
           {draggingCard && (

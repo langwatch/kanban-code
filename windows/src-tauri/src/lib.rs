@@ -8,6 +8,7 @@ pub mod channels_store;
 mod channels_watcher;
 mod chat_bootstrap;
 mod coding_assistant;
+mod context_usage;
 pub mod crash_handler;
 mod coordination_store;
 mod gh_cli;
@@ -158,6 +159,31 @@ async fn rename_card(
     state
         .coordination_store
         .rename_link(&card_id, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_card_pinned(
+    card_id: String,
+    is_pinned: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .coordination_store
+        .set_card_pinned(&card_id, is_pinned)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reorder_pinned_cards(
+    ordered_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .coordination_store
+        .reorder_pinned_cards(&ordered_ids)
         .await
         .map_err(|e| e.to_string())
 }
@@ -346,6 +372,91 @@ async fn update_queued_prompt(
         .update_queued_prompt(&card_id, &prompt_id, &body, send_automatically)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// True when the given queued prompt was enqueued by the self-compact
+/// guard AND the session's current context usage has dropped back below
+/// the prompt's threshold (i.e. a compaction already happened and the
+/// nudge would be a false alarm). Mirrors macOS
+/// `BackgroundOrchestrator.shouldDropStaleSelfCompactPrompt`.
+///
+/// Returns false on every uncertainty (settings unreadable, prompt not
+/// found, no statusline JSON yet) — better to deliver a benign nudge
+/// than to silently swallow a real one.
+#[tauri::command]
+async fn should_drop_self_compact_prompt(
+    card_id: String,
+    prompt_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    let settings_store = settings_store::SettingsStore::new(None);
+    let settings = match settings_store.read().await {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+    if !settings.self_compact.enabled {
+        return Ok(false);
+    }
+
+    let links = state
+        .coordination_store
+        .read_links()
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(link) = links.iter().find(|l| l.id == card_id) else {
+        return Ok(false);
+    };
+    let Some(session_id) = link.session_link.as_ref().map(|s| s.session_id.clone()) else {
+        return Ok(false);
+    };
+    let Some(prompt) = link
+        .queued_prompts
+        .as_ref()
+        .and_then(|p| p.iter().find(|p| p.id == prompt_id))
+    else {
+        return Ok(false);
+    };
+
+    let queue_rules: Vec<&settings_store::SelfCompactRule> = settings
+        .self_compact
+        .rules
+        .iter()
+        .filter(|r| r.action == settings_store::SelfCompactAction::QueuePrompt)
+        .collect();
+
+    // Resolve the threshold: prefer the field on the prompt, then fall
+    // back to body-text match for prompts written by older builds (or by
+    // macOS, which always stamps the field).
+    let threshold: Option<i64> = if let Some(t) = prompt.self_compact_threshold_tokens {
+        Some(
+            queue_rules
+                .iter()
+                .find(|r| r.threshold_tokens == t)
+                .map(|r| r.threshold_tokens)
+                .unwrap_or(t),
+        )
+    } else {
+        let body = prompt.body.trim();
+        if body.is_empty() {
+            None
+        } else {
+            queue_rules
+                .iter()
+                .find(|r| r.message.trim() == body)
+                .map(|r| r.threshold_tokens)
+        }
+    };
+
+    let Some(threshold) = threshold else {
+        return Ok(false);
+    };
+
+    // No statusline JSON yet → match macOS: assume the nudge is stale
+    // (the alternative is hounding the user forever in absence of data).
+    let Some(usage) = context_usage::read(&session_id) else {
+        return Ok(true);
+    };
+    Ok(usage.current_context_tokens() < threshold)
 }
 
 #[tauri::command]
@@ -1651,6 +1762,8 @@ pub fn run() {
             get_board_state,
             move_card,
             reorder_cards,
+            set_card_pinned,
+            reorder_pinned_cards,
             create_card,
             delete_card,
             archive_card,
@@ -1664,6 +1777,7 @@ pub fn run() {
             add_queued_prompt,
             update_queued_prompt,
             remove_queued_prompt,
+            should_drop_self_compact_prompt,
             search_transcript,
             check_dependencies,
             resolve_github_base_url,
