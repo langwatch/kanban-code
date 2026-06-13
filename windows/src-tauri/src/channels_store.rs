@@ -313,14 +313,6 @@ impl ChannelsStore {
         Self::read_jsonl(&path, limit).await
     }
 
-    pub async fn tail_messages(
-        &self,
-        channel: &str,
-        count: usize,
-    ) -> Result<Vec<ChannelMessage>> {
-        self.read_messages(channel, Some(count)).await
-    }
-
     // ── DMs ──────────────────────────────────────────────────────────────────
 
     pub async fn send_dm(
@@ -632,7 +624,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let tail = store.tail_messages("t", 2).await.unwrap();
+        let tail = store.read_messages("t", Some(2)).await.unwrap();
         assert_eq!(tail.len(), 2);
         assert_eq!(tail[0].body, "m3");
         assert_eq!(tail[1].body, "m4");

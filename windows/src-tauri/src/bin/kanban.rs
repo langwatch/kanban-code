@@ -265,7 +265,7 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
             let caller = resolve_caller(&ident);
             let clean = normalize_channel_name(&name);
             let (channel, already) = store.join_channel(&clean, caller.clone()).await?;
-            let tail_msgs = store.tail_messages(&clean, tail).await?;
+            let tail_msgs = store.read_messages(&clean, Some(tail)).await?;
             if json {
                 println!(
                     "{}",
@@ -347,7 +347,7 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
         }
         ChannelCmd::History { name, tail, json } => {
             let clean = normalize_channel_name(&name);
-            let msgs = store.tail_messages(&clean, tail).await?;
+            let msgs = store.read_messages(&clean, Some(tail)).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msgs)?);
                 return Ok(());
