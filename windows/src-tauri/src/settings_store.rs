@@ -120,6 +120,80 @@ impl Default for SessionTimeoutSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SelfCompactAction {
+    QueuePrompt,
+    CompactNow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfCompactRule {
+    pub id: String,
+    pub threshold_tokens: i64,
+    pub action: SelfCompactAction,
+    pub message: String,
+}
+
+impl SelfCompactRule {
+    /// Byte-compatible defaults with macOS SelfCompactRule.defaults so a
+    /// settings.json round-tripped between platforms keeps the same rule set.
+    pub fn defaults() -> Vec<Self> {
+        vec![
+            Self {
+                id: "ctx-500k".into(),
+                threshold_tokens: 500_000,
+                action: SelfCompactAction::QueuePrompt,
+                message: "You are above the 500k context limit. Whenever it is convenient, use the kanban CLI to send yourself a self-compact.".into(),
+            },
+            Self {
+                id: "ctx-600k".into(),
+                threshold_tokens: 600_000,
+                action: SelfCompactAction::QueuePrompt,
+                message: "You are above the 600k context limit. Please compact yourself soon using the kanban CLI self-compact command.".into(),
+            },
+            Self {
+                id: "ctx-700k".into(),
+                threshold_tokens: 700_000,
+                action: SelfCompactAction::QueuePrompt,
+                message: "You are above the 700k context limit. Compact yourself IMMEDIATELY using the kanban CLI self-compact command.".into(),
+            },
+            Self {
+                id: "ctx-750k".into(),
+                threshold_tokens: 750_000,
+                action: SelfCompactAction::CompactNow,
+                message: "/compact".into(),
+            },
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfCompactSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_self_compact_poll")]
+    pub poll_interval_seconds: u64,
+    #[serde(default = "SelfCompactRule::defaults")]
+    pub rules: Vec<SelfCompactRule>,
+}
+
+fn default_self_compact_poll() -> u64 {
+    30
+}
+
+impl Default for SelfCompactSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_seconds: default_self_compact_poll(),
+            rules: SelfCompactRule::defaults(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -153,6 +227,11 @@ pub struct Settings {
     pub terminal_shell: String,
     #[serde(default)]
     pub remote: Option<RemoteSettings>,
+    /// Automatic context-limit guard for Claude sessions. Byte-compatible
+    /// with macOS Settings.selfCompact — a settings.json moved between Mac
+    /// and Windows keeps its rule set.
+    #[serde(default)]
+    pub self_compact: SelfCompactSettings,
 }
 
 fn default_terminal_font_size() -> u32 {

@@ -14,6 +14,11 @@ pub struct QueuedPrompt {
     pub id: String,
     pub body: String,
     pub send_automatically: bool,
+    /// Set only for prompts the self-compact guard enqueued. Manual prompts
+    /// keep this nil so we can drop stale compact nudges without touching
+    /// unrelated queue items. Mirrors macOS QueuedPrompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_compact_threshold_tokens: Option<i64>,
 }
 
 // ── Sub-structs ──────────────────────────────────────────────────────────────
@@ -123,6 +128,15 @@ pub struct Link {
     /// ordering. Set by drag-to-reorder; persisted so it survives refresh.
     #[serde(default)]
     pub sort_order: Option<f64>,
+    /// When set, show this card in the pinned section while preserving its
+    /// real column. The timestamp gives newest-pinned-first as a fallback
+    /// when pinned_sort_order isn't set. Mirrors macOS Link.pinnedAt.
+    #[serde(default)]
+    pub pinned_at: Option<DateTime<Utc>>,
+    /// Manual display order within the pinned section. Kept separate from
+    /// sort_order so rearranging a pin never changes its column position.
+    #[serde(default)]
+    pub pinned_sort_order: Option<i64>,
     /// Coding assistant that owns this card. Drives which CLI binary is
     /// invoked in the embedded terminal. Defaults to "claude" so legacy
     /// links.json files (and files written by macOS without an
@@ -207,8 +221,14 @@ impl Link {
             is_launching: None,
             queued_prompts: None,
             sort_order: None,
+            pinned_at: None,
+            pinned_sort_order: None,
             assistant_id,
         }
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.pinned_at.is_some()
     }
 }
 
@@ -218,6 +238,7 @@ impl QueuedPrompt {
             id: ksuid::generate(Some("prompt")),
             body,
             send_automatically,
+            self_compact_threshold_tokens: None,
         }
     }
 }
@@ -326,6 +347,8 @@ impl CoordinationStore {
             link.manual_overrides.column = true;
             if column == "all_sessions" {
                 link.manually_archived = true;
+                link.pinned_at = None;
+                link.pinned_sort_order = None;
             } else if link.manually_archived {
                 link.manually_archived = false;
             }
@@ -357,6 +380,8 @@ impl CoordinationStore {
         if let Some(link) = links.iter_mut().find(|l| l.id == card_id) {
             link.manually_archived = true;
             link.column = "all_sessions".to_string();
+            link.pinned_at = None;
+            link.pinned_sort_order = None;
             link.updated_at = Utc::now();
         }
         self.write_links(&links).await
@@ -445,6 +470,8 @@ impl CoordinationStore {
             is_launching: None,
             queued_prompts: None,
             sort_order: None,
+            pinned_at: None,
+            pinned_sort_order: None,
             assistant_id: default_assistant(),
         };
         self.upsert_link(&link).await?;
@@ -473,6 +500,52 @@ impl CoordinationStore {
         for (idx, id) in ordered_ids.iter().enumerate() {
             if let Some(link) = links.iter_mut().find(|l| &l.id == id) {
                 link.sort_order = Some(idx as f64);
+            }
+        }
+        self.write_links(&links).await
+    }
+
+    /// Pin or unpin a card. Pinning stamps `pinned_at = now` and assigns a
+    /// pinned_sort_order one slot above the current first-pinned (so the
+    /// new pin lands at the top, matching macOS). Unpinning clears both
+    /// fields. No-op when the requested state already matches.
+    pub async fn set_card_pinned(&self, card_id: &str, is_pinned: bool) -> Result<()> {
+        let mut links = self.read_links().await?;
+        let first_order = links
+            .iter()
+            .filter_map(|l| l.pinned_sort_order)
+            .min()
+            .unwrap_or(0);
+        if let Some(link) = links.iter_mut().find(|l| l.id == card_id) {
+            if is_pinned {
+                if link.pinned_at.is_some() {
+                    return Ok(());
+                }
+                link.pinned_at = Some(Utc::now());
+                link.pinned_sort_order = Some(first_order - 1);
+            } else {
+                if link.pinned_at.is_none() {
+                    return Ok(());
+                }
+                link.pinned_at = None;
+                link.pinned_sort_order = None;
+            }
+            link.updated_at = Utc::now();
+        }
+        self.write_links(&links).await
+    }
+
+    /// Persist a manual ordering of pinned cards by assigning each its index
+    /// in `ordered_ids` as `pinned_sort_order`. Like reorder_cards, this does
+    /// NOT bump `updated_at` so the sort doesn't ripple into time-based
+    /// presentations elsewhere.
+    pub async fn reorder_pinned_cards(&self, ordered_ids: &[String]) -> Result<()> {
+        let mut links = self.read_links().await?;
+        for (idx, id) in ordered_ids.iter().enumerate() {
+            if let Some(link) = links.iter_mut().find(|l| &l.id == id) {
+                if link.pinned_at.is_some() {
+                    link.pinned_sort_order = Some(idx as i64);
+                }
             }
         }
         self.write_links(&links).await

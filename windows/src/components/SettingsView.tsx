@@ -268,6 +268,59 @@ function GeneralSection({
           style={inputStyle(c)}
         />
       </FieldGroup>
+
+      <SelfCompactBlock settings={settings} onChange={onChange} themeTokens={c} />
+    </div>
+  );
+}
+
+function SelfCompactBlock({
+  settings,
+  onChange,
+  themeTokens: c,
+}: {
+  settings: Settings;
+  onChange: (s: Settings) => void;
+  themeTokens: ThemeTokens;
+}) {
+  // Default the whole struct when the file came from a legacy/macOS build
+  // without the field. The toggle controls `enabled`; the rule defaults
+  // ship from the backend.
+  const sc = settings.selfCompact ?? {
+    enabled: false,
+    pollIntervalSeconds: 30,
+    rules: [],
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <Toggle
+        checked={sc.enabled}
+        onChange={(v) =>
+          onChange({
+            ...settings,
+            selfCompact: { ...sc, enabled: v },
+          })
+        }
+        label="Auto self-compact guard"
+        description="Drop stale compact nudges from the queue once context usage drops below the threshold (compaction worked). Polling/generation is not yet wired on Windows; thresholds will be honored once it lands."
+        themeTokens={c}
+      />
+      {sc.enabled && sc.rules.length > 0 && (
+        <div
+          className="rounded-lg px-3 py-2 text-[12px]"
+          style={{ background: c.bgInput, border: `1px solid ${c.border}`, color: c.textMuted }}
+        >
+          <div className="font-semibold mb-1" style={{ color: c.textSecondary }}>
+            Configured thresholds
+          </div>
+          {sc.rules.map((r) => (
+            <div key={r.id} className="flex items-baseline gap-2">
+              <span className="font-mono">{(r.thresholdTokens / 1000).toFixed(0)}k</span>
+              <span style={{ color: c.textDim }}>{r.action === "compactNow" ? "compact now" : "queue prompt"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

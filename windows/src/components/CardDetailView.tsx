@@ -517,7 +517,7 @@ export default function CardDetailView() {
       if (p.eventName !== "Stop") return;
       const stopAt = Date.now();
       if (pending) clearTimeout(pending);
-      pending = setTimeout(() => {
+      pending = setTimeout(async () => {
         // User typed in the meantime — back off.
         if (Date.now() - lastUserPromptAt.current < 1100) return;
         // Resolve the freshest queue from the store (closure value would be
@@ -531,6 +531,29 @@ export default function CardDetailView() {
             (recentlyAutoSent.current.get(qp.id) ?? 0) + 62_000 < now,
         );
         if (!target || !terminalWriteRef.current) return;
+        // Self-compact drop-guard: a queued compact nudge becomes stale once
+        // the session's context usage drops back under its threshold (i.e.
+        // a compact already happened). Removing it here matches the macOS
+        // BackgroundOrchestrator behavior.
+        let drop = false;
+        if (target.selfCompactThresholdTokens != null) {
+          try {
+            drop = await invoke<boolean>("should_drop_self_compact_prompt", {
+              cardId: card.id,
+              promptId: target.id,
+            });
+          } catch {
+            drop = false;
+          }
+        }
+        if (drop) {
+          removeQueuedPrompt(card.id, target.id)
+            .then(() =>
+              setQueuedPrompts((prev) => prev.filter((p) => p.id !== target.id)),
+            )
+            .catch(() => {});
+          return;
+        }
         terminalWriteRef.current(target.body + "\r");
         recentlyAutoSent.current.set(target.id, now);
         // Garbage-collect dedup entries older than 5 minutes.

@@ -12,7 +12,7 @@ interface Props {
 }
 
 export default function CardView({ card, isDragging = false }: Props) {
-  const { selectCard, selectedCardId, moveCard, deleteCard, archiveCard, mergeTargetId } = useBoardStore();
+  const { selectCard, selectedCardId, moveCard, deleteCard, archiveCard, setCardPinned, mergeTargetId } = useBoardStore();
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
@@ -102,6 +102,17 @@ export default function CardView({ card, isDragging = false }: Props) {
 
         {/* Title */}
         <p className="text-[13px] leading-snug line-clamp-2 pr-5 font-medium" style={{ color: c.textPrimary }}>
+          {card.link.pinnedAt && (
+            <svg
+              className="inline-block w-3 h-3 mr-1 -mt-0.5"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+              style={{ color: "#d29922" }}
+              aria-label="Pinned"
+            >
+              <path d="M12 2l1.5 4.5L18 8l-3.5 3 1 5L12 13.8 8.5 16l1-5L6 8l4.5-1.5L12 2z" />
+            </svg>
+          )}
           {card.displayTitle}
         </p>
 
@@ -133,6 +144,10 @@ export default function CardView({ card, isDragging = false }: Props) {
           x={contextMenu.x} y={contextMenu.y} card={card}
           onClose={() => setContextMenu(null)}
           onMove={(col) => { moveCard(card.id, col); setContextMenu(null); }}
+          onTogglePin={() => {
+            setCardPinned(card.id, !card.link.pinnedAt);
+            setContextMenu(null);
+          }}
           onDelete={async () => {
             setContextMenu(null);
             const title = card.displayTitle || card.link.name || "this card";
@@ -207,14 +222,16 @@ function Badge({ text, color, theme, title }: { text: string; color: string; the
 }
 
 function ContextMenu({
-  x, y, card, onClose, onMove, onDelete, onArchive,
+  x, y, card, onClose, onMove, onTogglePin, onDelete, onArchive,
 }: {
   x: number; y: number; card: CardDto; onClose: () => void;
-  onMove: (col: KanbanColumn) => void; onDelete: () => void; onArchive: () => void;
+  onMove: (col: KanbanColumn) => void; onTogglePin: () => void;
+  onDelete: () => void; onArchive: () => void;
 }) {
   const { theme } = useTheme();
   const c = t(theme);
   const moveTargets = COLUMNS.filter((col) => col !== card.link.column);
+  const isPinned = card.link.pinnedAt != null;
 
   return (
     <>
@@ -223,6 +240,16 @@ function ContextMenu({
         className="fixed z-50 rounded-lg shadow-2xl py-1 min-w-[180px] animate-fade-in"
         style={{ left: x, top: y, background: c.bgContext, border: `1px solid ${c.borderBright}` }}
       >
+        <button
+          onClick={onTogglePin}
+          className="w-full text-left px-3 py-2 text-[13px] transition-colors"
+          style={{ color: c.textSecondary }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+        >
+          {isPinned ? "Unpin from top" : "Pin to top"}
+        </button>
+        <div style={{ borderTop: `1px solid ${c.border}`, margin: "4px 0" }} />
         <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider" style={{ color: c.textDim }}>
           Move to
         </div>

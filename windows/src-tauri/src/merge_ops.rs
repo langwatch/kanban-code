@@ -11,8 +11,8 @@
 //! Deliberate Windows-side omissions:
 //! - macOS has a `tmuxLink` precondition rule; Windows `Link` has no such
 //!   field. The rule is dropped, not stubbed.
-//! - macOS `mergeBlocked` covers `pinned_at` and `discovered_repos`. Neither
-//!   exists on the Windows Link. Dropped.
+//! - macOS `mergeBlocked` covers `discovered_repos`, which Windows doesn't
+//!   carry. Dropped.
 //!
 //! Source `queued_prompts` are intentionally discarded — there is no
 //! macOS precedent and the prompts are tied to the source's session_link,
@@ -85,6 +85,14 @@ pub fn merge_into_target(source: &Link, target: &mut Link) {
         target.issue_link = source.issue_link.clone();
     }
 
+    // Inherit the pin from source iff target wasn't already pinned, matching
+    // the macOS BoardStore.mergeCards rule. pinned_sort_order travels with
+    // pinned_at so the inherited card lands in the same slot.
+    if target.pinned_at.is_none() {
+        target.pinned_at = source.pinned_at;
+        target.pinned_sort_order = source.pinned_sort_order;
+    }
+
     // PR links — union deduped by `number`, target wins on conflict so the
     // user-visible enrichment snapshot stays internally consistent.
     let mut existing_numbers: std::collections::HashSet<i64> =
@@ -155,6 +163,8 @@ mod tests {
             is_launching: None,
             queued_prompts: None,
             sort_order: None,
+            pinned_at: None,
+            pinned_sort_order: None,
             assistant_id: "claude".to_string(),
         }
     }
