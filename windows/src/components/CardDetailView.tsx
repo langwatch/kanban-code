@@ -65,6 +65,14 @@ export default function CardDetailView() {
   // pane scrollback intact. When false, the legacy one-shot PTY is used.
   const [tmuxAvailable, setTmuxAvailable] = useState(false);
 
+  // Multi-tab state: each tab is a tmux window inside the card's session.
+  // Window 1 is the "Claude" tab created by Step 2's session-wrap; extra
+  // windows are bare shells the user adds with the "+" button (e.g. for
+  // git/ls work alongside Claude). Indexes match tmux's 1-based window ids.
+  type TmuxWindow = { index: number; name: string; active: boolean };
+  const [terminalTabs, setTerminalTabs] = useState<TmuxWindow[]>([]);
+  const [activeTermTab, setActiveTermTab] = useState<number>(1);
+
   // Copy / "more" menu
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
@@ -322,13 +330,24 @@ export default function CardDetailView() {
   //
   // Legacy mode: existing behavior — spawn the configured shell, then type
   // the cd + claude line after 800ms via Terminal.tsx's `initialInput`.
+  const tmuxSession = `kanban-${card.id}`;
   const { shellCommand, terminalInput } = (() => {
     if (useTmux) {
-      const session = `kanban-${card.id}`;
+      // Unified wrapper for any tab N:
+      //   1. `new-session -A -d` — idempotently create the session and run
+      //      the inner cd+claude on first call (only — `-A` skips creation
+      //      if it already exists). `-d` returns immediately so the next
+      //      tmux call runs.
+      //   2. `select-window -t session:N` — make tab N the active window
+      //      (silent no-op if it doesn't exist yet).
+      //   3. `exec attach-session` — replace the bash shell with the tmux
+      //      client so PTY death closes the client cleanly.
       const inner = `${innerBashCmd}; exec bash`;
-      // btoa is fine for ASCII; encode UTF-8 first so non-ASCII prompts survive.
       const b64 = btoa(unescape(encodeURIComponent(inner)));
-      const wrapper = `tmux new-session -A -s '${session}' -- bash -lc "$(echo ${b64} | base64 -d)"`;
+      const wrapper =
+        `tmux new-session -A -d -s '${tmuxSession}' -- bash -lc "$(echo ${b64} | base64 -d)" 2>/dev/null; ` +
+        `tmux select-window -t '${tmuxSession}:${activeTermTab}' 2>/dev/null; ` +
+        `exec tmux attach-session -t '${tmuxSession}'`;
       return {
         shellCommand: ["wsl.exe", "--", "bash", "-lc", wrapper],
         terminalInput: "",
@@ -342,6 +361,59 @@ export default function CardDetailView() {
     // Native Windows shell.
     return { shellCommand: baseShell, terminalInput: `${innerCmdShellCmd}\r` };
   })();
+
+  // Pull the current window list whenever the terminal becomes active in
+  // tmux mode. Refreshed manually after add/close — no periodic poll.
+  const refreshTmuxTabs = useCallback(async () => {
+    if (!useTmux) return;
+    try {
+      const wins = await invoke<TmuxWindow[]>("tmux_list_windows", {
+        session: tmuxSession,
+      });
+      setTerminalTabs(wins);
+    } catch {
+      setTerminalTabs([]);
+    }
+  }, [useTmux, tmuxSession]);
+
+  useEffect(() => {
+    if (useTmux && terminalActive) {
+      // Slight delay so the session has time to come up on first launch.
+      const t = setTimeout(refreshTmuxTabs, 800);
+      return () => clearTimeout(t);
+    }
+  }, [useTmux, terminalActive, refreshTmuxTabs, card.id]);
+
+  const handleAddTermTab = async () => {
+    if (!useTmux) return;
+    try {
+      const idx = await invoke<number>("tmux_new_window", {
+        session: tmuxSession,
+        cwdWindows: projectPath ?? null,
+        command: null,
+      });
+      setActiveTermTab(idx);
+      await refreshTmuxTabs();
+    } catch (e) {
+      useBoardStore.setState({ error: String(e) });
+    }
+  };
+
+  const handleCloseTermTab = async (idx: number) => {
+    if (!useTmux) return;
+    // Don't let the user kill the main Claude tab — it's tied to the
+    // session lifecycle and would force a full relaunch.
+    if (idx === 1) return;
+    try {
+      await invoke("tmux_kill_window", {
+        target: `${tmuxSession}:${idx}`,
+      });
+      if (activeTermTab === idx) setActiveTermTab(1);
+      await refreshTmuxTabs();
+    } catch (e) {
+      useBoardStore.setState({ error: String(e) });
+    }
+  };
 
   const handleStartTerminal = () => {
     setTerminalActive(true);
@@ -641,8 +713,55 @@ export default function CardDetailView() {
                 onEdit={handleEditPrompt}
                 onRemove={handleRemovePrompt}
               />
+              {useTmux && terminalTabs.length > 0 && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1 shrink-0"
+                  style={{ background: "#0a0a0c", borderBottom: `1px solid ${c.border}` }}
+                >
+                  {terminalTabs.map((w) => {
+                    const isActive = w.index === activeTermTab;
+                    return (
+                      <div
+                        key={w.index}
+                        className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] cursor-pointer transition-colors"
+                        style={{
+                          background: isActive ? "#1a1a1f" : "transparent",
+                          color: isActive ? "#e4e4e7" : "#6b7280",
+                        }}
+                        onClick={() => setActiveTermTab(w.index)}
+                        title={w.name}
+                      >
+                        <span>
+                          {w.index === 1 ? "Claude" : w.name || `tab ${w.index}`}
+                        </span>
+                        {w.index !== 1 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCloseTermTab(w.index);
+                            }}
+                            className="opacity-60 hover:opacity-100 ml-1"
+                            style={{ color: "#9ca3af" }}
+                            title="Close tab"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={handleAddTermTab}
+                    className="ml-1 rounded px-2 py-0.5 text-[11px] hover:opacity-100"
+                    style={{ color: "#6b7280", background: "transparent" }}
+                    title="New shell tab"
+                  >
+                    +
+                  </button>
+                </div>
+              )}
               <TerminalView
-                ptyId={`term-${card.id}`}
+                ptyId={`term-${card.id}-${activeTermTab}`}
                 command={shellCommand}
                 initialInput={terminalInput}
                 onExit={() => {}}
