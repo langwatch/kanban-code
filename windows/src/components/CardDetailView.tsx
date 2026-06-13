@@ -15,7 +15,9 @@ import {
   removeWorktree,
   forkSession,
   truncateSession,
+  moveCardToProject,
 } from "../store/boardStore";
+import { ASSISTANT_CLI, type Project, type AssistantId } from "../types";
 import { useTheme, t } from "../theme";
 import type { Turn, TranscriptPage, QueuedPrompt } from "../types";
 import TerminalView from "./Terminal";
@@ -57,6 +59,7 @@ export default function CardDetailView() {
   // Settings
   const [terminalFontSize, setTerminalFontSize] = useState(15);
   const [terminalShell, setTerminalShell] = useState<string>("cmd.exe");
+  const [availableProjects, setAvailableProjects] = useState<Project[]>([]);
 
   // Copy / "more" menu
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -104,6 +107,7 @@ export default function CardDetailView() {
       .then((s) => {
         setTerminalFontSize(s.terminalFontSize || 15);
         setTerminalShell((s.terminalShell && s.terminalShell.trim()) || "cmd.exe");
+        setAvailableProjects(s.projects ?? []);
       })
       .catch(() => {});
   }, []);
@@ -275,20 +279,23 @@ export default function CardDetailView() {
   const shellExe = (shellCommand[0] ?? "cmd.exe").toLowerCase();
   const isUnixShell = /(^|[\\/])(wsl|bash|sh|zsh|fish)(\.exe)?$/.test(shellExe);
 
+  const assistantId: AssistantId = (card.link.assistantId ?? "claude") as AssistantId;
+  const cli = ASSISTANT_CLI[assistantId] ?? "claude";
+
   const terminalInput = (() => {
     if (isUnixShell) {
       // bash-style: backslash-escape spaces in path, single-quote the prompt.
       const cdCmd = projectPath ? `cd ${projectPath.replace(/ /g, "\\ ")} && ` : "";
       return sessionId
-        ? `${cdCmd}claude --resume ${sessionId}\r`
-        : `${cdCmd}claude '${(promptBody ?? "").replace(/'/g, "'\\''")}'\r`;
+        ? `${cdCmd}${cli} --resume ${sessionId}\r`
+        : `${cdCmd}${cli} '${(promptBody ?? "").replace(/'/g, "'\\''")}'\r`;
     }
     // cmd.exe / pwsh — double-quote the path; "" escapes a quote inside cmd
     // double-quotes (PowerShell also accepts it).
     const cdCmd = projectPath ? `cd "${projectPath}" && ` : "";
     return sessionId
-      ? `${cdCmd}claude --resume ${sessionId}\r`
-      : `${cdCmd}claude "${(promptBody ?? "").replace(/"/g, '""')}"\r`;
+      ? `${cdCmd}${cli} --resume ${sessionId}\r`
+      : `${cdCmd}${cli} "${(promptBody ?? "").replace(/"/g, '""')}"\r`;
   })();
 
   const handleStartTerminal = () => {
@@ -460,6 +467,17 @@ export default function CardDetailView() {
                 onFork={sessionId ? handleFork : undefined}
                 copiedLabel={copiedLabel}
                 themeTokens={c}
+                cardProjectPath={card.link.projectPath}
+                availableProjects={availableProjects}
+                onMoveToProject={async (targetPath) => {
+                  setMoreMenuOpen(false);
+                  try {
+                    await moveCardToProject(card.id, targetPath);
+                    await useBoardStore.getState().refresh();
+                  } catch (e) {
+                    useBoardStore.setState({ error: String(e) });
+                  }
+                }}
               />
             )}
           </div>
@@ -727,8 +745,11 @@ const CardMoreMenu = forwardRef<HTMLDivElement, {
   onFork?: () => void | Promise<void>;
   copiedLabel: string | null;
   themeTokens: ReturnType<typeof t>;
+  cardProjectPath?: string;
+  availableProjects?: Project[];
+  onMoveToProject?: (targetPath: string) => void | Promise<void>;
 }>(function CardMoreMenu(
-  { anchorRef, onClose, onCopy, cardId, sessionId, projectPath, branch, prUrl, worktreePath, onRemoveWorktree, onFork, copiedLabel, themeTokens: c },
+  { anchorRef, onClose, onCopy, cardId, sessionId, projectPath, branch, prUrl, worktreePath, onRemoveWorktree, onFork, copiedLabel, themeTokens: c, cardProjectPath, availableProjects, onMoveToProject },
   ref
 ) {
   useEffect(() => {
@@ -846,6 +867,44 @@ const CardMoreMenu = forwardRef<HTMLDivElement, {
           </button>
         </>
       )}
+      {availableProjects && availableProjects.length > 0 && onMoveToProject && (() => {
+        const targets = availableProjects.filter((p) => p.path !== cardProjectPath);
+        if (targets.length === 0) return null;
+        return (
+          <>
+            <div className="my-1 mx-2 h-px" style={{ background: c.border }} />
+            <div
+              className="px-3 pt-2 pb-1 text-[10.5px] font-semibold uppercase tracking-wider"
+              style={{ color: c.textDim }}
+            >
+              Move to project
+            </div>
+            {targets.map((p) => (
+              <button
+                key={p.path}
+                onClick={() => onMoveToProject(p.path)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors"
+                onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+              >
+                <span className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center" style={{ color: c.textDim }}>
+                  <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 0 0-1.883 2.542l.857 6a2.25 2.25 0 0 0 2.227 1.932H19.05a2.25 2.25 0 0 0 2.227-1.932l.857-6a2.25 2.25 0 0 0-1.883-2.542m-16.5 0V6A2.25 2.25 0 0 1 6 3.75h3.879a1.5 1.5 0 0 1 1.06.44l2.122 2.12a1.5 1.5 0 0 0 1.06.44H18A2.25 2.25 0 0 1 20.25 9v.776" />
+                  </svg>
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[12.5px]" style={{ color: c.textPrimary, fontWeight: 500 }}>
+                    {p.name || p.path}
+                  </span>
+                  <span className="block text-[10.5px] font-mono truncate" style={{ color: c.textDim }}>
+                    {p.path}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </>
+        );
+      })()}
       {worktreePath && onRemoveWorktree && (
         <>
           <div className="my-1 mx-2 h-px" style={{ background: c.border }} />

@@ -12,10 +12,11 @@ interface Props {
 }
 
 export default function CardView({ card, isDragging = false }: Props) {
-  const { selectCard, selectedCardId, moveCard, deleteCard, archiveCard } = useBoardStore();
+  const { selectCard, selectedCardId, moveCard, deleteCard, archiveCard, mergeTargetId } = useBoardStore();
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
+  const isMergeTarget = mergeTargetId === card.id && !isDragging;
 
   const {
     attributes, listeners, setNodeRef, transform, transition, isDragging: isSortDragging,
@@ -55,6 +56,11 @@ export default function CardView({ card, isDragging = false }: Props) {
           ...style,
           background: isSelected ? c.bgCardSelected : c.bgCard,
           border: `1px solid ${isSelected ? c.borderCardSelected : c.borderCard}`,
+          // Whole-card orange outline so the user knows the drop will
+          // collapse this card into the dragged one. 2px to read on
+          // both bg themes without redrawing layout.
+          outline: isMergeTarget ? "2px solid #f59e0b" : undefined,
+          outlineOffset: isMergeTarget ? "1px" : undefined,
         }}
         {...listeners}
         {...attributes}
@@ -77,6 +83,16 @@ export default function CardView({ card, isDragging = false }: Props) {
         }`}
         title={card.displayTitle}
       >
+        {/* Merge badge — floats above the card during a valid merge hover */}
+        {isMergeTarget && (
+          <div
+            className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase z-10 pointer-events-none"
+            style={{ background: "#f59e0b", color: "#fff" }}
+          >
+            Merge
+          </div>
+        )}
+
         {/* Spinner */}
         {card.showSpinner && (
           <div className="absolute top-2.5 right-2.5">

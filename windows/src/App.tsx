@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import BoardView from "./components/BoardView";
+import ListBoardView from "./components/ListBoardView";
 import CardDetailView from "./components/CardDetailView";
 import NewTaskDialog from "./components/NewTaskDialog";
 import OnboardingWizard from "./components/OnboardingWizard";
@@ -8,6 +9,7 @@ import SearchOverlay from "./components/SearchOverlay";
 import SettingsView from "./components/SettingsView";
 import { getSettings, initBoardEventListener, useBoardStore } from "./store/boardStore";
 import { useTheme, t } from "./theme";
+import { installAppScaleShortcuts } from "./appScale";
 
 const isMac =
   typeof navigator !== "undefined" &&
@@ -27,6 +29,8 @@ export default function App() {
     setNewTaskOpen,
     setSettingsOpen,
     syncStatus,
+    viewMode,
+    setViewMode,
   } = useBoardStore();
 
   const [showOnboarding, setShowOnboarding] = useState<boolean | null>(null);
@@ -76,9 +80,11 @@ export default function App() {
   useEffect(() => {
     refresh();
     initBoardEventListener();
+    const teardownScale = installAppScaleShortcuts();
     getSettings()
       .then((s) => setShowOnboarding(!s.hasCompletedOnboarding))
       .catch(() => setShowOnboarding(false));
+    return teardownScale;
   }, []);
 
   useEffect(() => {
@@ -158,6 +164,30 @@ export default function App() {
               {syncPillLabel(syncStatus.kind, syncStatus.conflictCount)}
             </button>
           )}
+          {/* Board / List view toggle */}
+          <div
+            className="flex items-center rounded-lg p-0.5"
+            style={{ background: c.bgAccent("0.05"), border: `1px solid ${c.border}` }}
+          >
+            {(["board", "list"] as const).map((m) => {
+              const active = viewMode === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => setViewMode(m)}
+                  className="px-2.5 py-1 rounded-md text-[12px] font-medium transition-colors"
+                  style={{
+                    background: active ? c.bgCard : "transparent",
+                    color: active ? c.textPrimary : c.textMuted,
+                    border: active ? `1px solid ${c.borderBright}` : "1px solid transparent",
+                  }}
+                  title={m === "board" ? "Board view" : "List view"}
+                >
+                  {m === "board" ? "Board" : "List"}
+                </button>
+              );
+            })}
+          </div>
           <button
             onClick={() => setSearchOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors"
@@ -231,7 +261,7 @@ export default function App() {
           <SettingsView />
         ) : (
           <>
-            <BoardView />
+            {viewMode === "list" ? <ListBoardView /> : <BoardView />}
             {selectedCardId && <CardDetailView />}
           </>
         )}

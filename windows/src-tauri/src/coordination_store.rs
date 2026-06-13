@@ -123,6 +123,16 @@ pub struct Link {
     /// ordering. Set by drag-to-reorder; persisted so it survives refresh.
     #[serde(default)]
     pub sort_order: Option<f64>,
+    /// Coding assistant that owns this card. Drives which CLI binary is
+    /// invoked in the embedded terminal. Defaults to "claude" so legacy
+    /// links.json files (and files written by macOS without an
+    /// `assistantId`) keep working.
+    #[serde(default = "default_assistant")]
+    pub assistant_id: String,
+}
+
+fn default_assistant() -> String {
+    "claude".to_string()
 }
 
 fn default_source() -> String {
@@ -165,7 +175,12 @@ impl Link {
         self.id.clone()
     }
 
-    fn new_card(prompt: String, title: Option<String>, project: String) -> Self {
+    fn new_card(
+        prompt: String,
+        title: Option<String>,
+        project: String,
+        assistant_id: String,
+    ) -> Self {
         let now = Utc::now();
         // KSUID matches the macOS format (chronologically sortable across the
         // links.json file). Legacy UUID-style ids still parse since `id` is
@@ -192,6 +207,7 @@ impl Link {
             is_launching: None,
             queued_prompts: None,
             sort_order: None,
+            assistant_id,
         }
     }
 }
@@ -323,8 +339,9 @@ impl CoordinationStore {
         prompt: String,
         title: Option<String>,
         project: String,
+        assistant_id: String,
     ) -> Result<Link> {
-        let link = Link::new_card(prompt, title, project);
+        let link = Link::new_card(prompt, title, project, assistant_id);
         self.upsert_link(&link).await?;
         Ok(link)
     }
@@ -428,6 +445,7 @@ impl CoordinationStore {
             is_launching: None,
             queued_prompts: None,
             sort_order: None,
+            assistant_id: default_assistant(),
         };
         self.upsert_link(&link).await?;
         Ok(link)

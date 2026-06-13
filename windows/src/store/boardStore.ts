@@ -15,6 +15,16 @@ import type {
   TranscriptPage,
 } from "../types";
 
+export type BoardViewMode = "board" | "list";
+
+const VIEW_MODE_STORAGE_KEY = "kanban.boardViewMode";
+
+function loadViewMode(): BoardViewMode {
+  if (typeof window === "undefined") return "board";
+  const raw = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+  return raw === "list" ? "list" : "board";
+}
+
 interface BoardStore {
   // State
   cards: CardDto[];
@@ -27,6 +37,10 @@ interface BoardStore {
   error: string | null;
   selectedProjectPath: string | null;
   syncStatus: SyncStatus;
+  viewMode: BoardViewMode;
+  /** Transient UI hint — set by BoardView during DnD to mark the card the
+   *  current drag would merge into. Cleared on drag end. */
+  mergeTargetId: string | null;
 
   // Actions
   refresh: () => Promise<void>;
@@ -40,12 +54,15 @@ interface BoardStore {
     prompt: string,
     title: string | null,
     project: string,
-    launch?: boolean
+    launch?: boolean,
+    assistantId?: string
   ) => Promise<string | null>;
   setSearchOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setNewTaskOpen: (open: boolean) => void;
   setSelectedProject: (path: string | null) => void;
+  setViewMode: (mode: BoardViewMode) => void;
+  setMergeTargetId: (id: string | null) => void;
   clearError: () => void;
 
   // Computed helpers
@@ -64,6 +81,8 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   error: null,
   syncStatus: { kind: "disabled", conflictCount: 0 },
   selectedProjectPath: null,
+  viewMode: loadViewMode(),
+  mergeTargetId: null,
 
   refresh: async () => {
     set({ isLoading: true, error: null });
@@ -159,9 +178,15 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     }
   },
 
-  createCard: async (prompt, title, project, launch = false) => {
+  createCard: async (prompt, title, project, launch = false, assistantId) => {
     try {
-      const link = await invoke<{ id: string }>("create_card", { prompt, title, project, launch });
+      const link = await invoke<{ id: string }>("create_card", {
+        prompt,
+        title,
+        project,
+        launch,
+        assistantId: assistantId ?? null,
+      });
       await get().refresh();
       return link.id;
     } catch (e) {
@@ -174,6 +199,13 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setNewTaskOpen: (open) => set({ newTaskOpen: open }),
   setSelectedProject: (path) => set({ selectedProjectPath: path }),
+  setViewMode: (mode) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    }
+    set({ viewMode: mode });
+  },
+  setMergeTargetId: (id) => set({ mergeTargetId: id }),
   clearError: () => set({ error: null }),
 
   cardsInColumn: (column) => {
@@ -349,6 +381,35 @@ export async function listWorktrees(repoRoot: string): Promise<WorktreeInfo[]> {
 
 export async function createWorktree(repoRoot: string, name: string): Promise<WorktreeInfo> {
   return invoke<WorktreeInfo>("create_worktree", { repoRoot, name });
+}
+
+export async function moveCardToProject(
+  cardId: string,
+  targetProjectPath: string
+): Promise<void> {
+  return invoke("move_card_to_project", { cardId, targetProjectPath });
+}
+
+export async function mergeCards(
+  sourceCardId: string,
+  targetCardId: string
+): Promise<void> {
+  return invoke("merge_cards", { sourceCardId, targetCardId });
+}
+
+/** Pure client-side preview of merge_ops.rs::merge_blocked, so the DnD
+ *  overlay only promises a merge the backend will accept. Keep in sync. */
+export function canMergeCards(source: CardDto, target: CardDto): boolean {
+  if (source.id === target.id) return false;
+  if (source.link.isLaunching || target.link.isLaunching) return false;
+  if (source.link.sessionLink && target.link.sessionLink) return false;
+  const sWt = source.link.worktreeLink;
+  const tWt = target.link.worktreeLink;
+  if (sWt && tWt && sWt.path !== tWt.path) return false;
+  const sIss = source.link.issueLink;
+  const tIss = target.link.issueLink;
+  if (sIss && tIss && sIss.number !== tIss.number) return false;
+  return true;
 }
 
 export async function removeWorktree(
