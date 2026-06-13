@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { forwardRef, useEffect, useState, useRef, useCallback } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   getTranscript,
@@ -51,6 +51,13 @@ export default function CardDetailView() {
   // Settings
   const [terminalFontSize, setTerminalFontSize] = useState(15);
   const [terminalShell, setTerminalShell] = useState<string>("cmd.exe");
+
+  // Copy / "more" menu
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   // Search state
   const [searchText, setSearchText] = useState("");
@@ -188,6 +195,18 @@ export default function CardDetailView() {
       cancelLabel: "Cancel",
     });
     if (ok) deleteCard(card.id);
+  };
+
+  const handleCopy = async (label: string, text: string | undefined | null) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      setCopiedLabel(label);
+      copyTimer.current = setTimeout(() => setCopiedLabel(null), 1400);
+    } catch {
+      // clipboard can fail under flaky focus; user can retry
+    }
   };
 
   // Split the user-configurable shell string into [exe, ...args]. Default is
@@ -337,18 +356,51 @@ export default function CardDetailView() {
               {card.displayTitle}
             </h2>
           )}
-          <button
-            onClick={() => selectCard(null)}
-            className="mt-0.5 shrink-0 rounded-md p-1 transition-all duration-150"
-            style={{ color: c.textDim }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; e.currentTarget.style.color = c.textSecondary; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = c.textDim; }}
-            title="Close"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1 mt-0.5 shrink-0 relative">
+            <button
+              ref={moreButtonRef}
+              onClick={() => setMoreMenuOpen((o) => !o)}
+              className="rounded-md p-1 transition-all duration-150"
+              style={{
+                color: moreMenuOpen ? c.textPrimary : c.textDim,
+                background: moreMenuOpen ? c.hoverBg : "",
+              }}
+              onMouseEnter={(e) => { if (!moreMenuOpen) { e.currentTarget.style.background = c.hoverBg; e.currentTarget.style.color = c.textSecondary; } }}
+              onMouseLeave={(e) => { if (!moreMenuOpen) { e.currentTarget.style.background = ""; e.currentTarget.style.color = c.textDim; } }}
+              title="Copy ID, resume command, paths…"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Zm0 6a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Zm0 6a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => selectCard(null)}
+              className="rounded-md p-1 transition-all duration-150"
+              style={{ color: c.textDim }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; e.currentTarget.style.color = c.textSecondary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = ""; e.currentTarget.style.color = c.textDim; }}
+              title="Close"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+            {moreMenuOpen && (
+              <CardMoreMenu
+                ref={moreMenuRef}
+                anchorRef={moreButtonRef}
+                onClose={() => setMoreMenuOpen(false)}
+                onCopy={handleCopy}
+                cardId={card.id}
+                sessionId={sessionId}
+                projectPath={projectPath}
+                branch={branch}
+                prUrl={pr?.url}
+                copiedLabel={copiedLabel}
+                themeTokens={c}
+              />
+            )}
+          </div>
         </div>
 
         {/* Meta row */}
@@ -567,6 +619,115 @@ export default function CardDetailView() {
 }
 
 /* ── Sub-components ──────────────────────────────────────────────── */
+
+const CardMoreMenu = forwardRef<HTMLDivElement, {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  onCopy: (label: string, text: string | undefined | null) => void | Promise<void>;
+  cardId: string;
+  sessionId?: string;
+  projectPath?: string;
+  branch?: string;
+  prUrl?: string;
+  copiedLabel: string | null;
+  themeTokens: ReturnType<typeof t>;
+}>(function CardMoreMenu(
+  { anchorRef, onClose, onCopy, cardId, sessionId, projectPath, branch, prUrl, copiedLabel, themeTokens: c },
+  ref
+) {
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      // ref is forwarded → can be either object ref or null; only react to outside clicks
+      const menuEl = (ref as React.RefObject<HTMLDivElement | null>)?.current;
+      if (menuEl?.contains(target)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [anchorRef, ref, onClose]);
+
+  type Row = { label: string; subtitle?: string; text: string };
+  const rows: Row[] = [];
+  rows.push({ label: "Card ID", subtitle: cardId, text: cardId });
+  if (sessionId) {
+    rows.push({ label: "Session ID", subtitle: sessionId, text: sessionId });
+    rows.push({
+      label: "Resume command",
+      subtitle: `claude --resume ${sessionId}`,
+      text: `claude --resume ${sessionId}`,
+    });
+  }
+  if (projectPath) rows.push({ label: "Project path", subtitle: projectPath, text: projectPath });
+  if (branch) rows.push({ label: "Branch name", subtitle: branch, text: branch });
+  if (prUrl) rows.push({ label: "PR URL", subtitle: prUrl, text: prUrl });
+
+  return (
+    <div
+      ref={ref}
+      className="absolute right-0 top-full mt-1.5 min-w-[260px] max-w-[360px] z-50 rounded-xl py-1 shadow-2xl animate-fade-in"
+      style={{
+        background: c.bgDialog,
+        border: `1px solid ${c.borderBright}`,
+      }}
+    >
+      <div
+        className="px-3 pt-2 pb-1 text-[10.5px] font-semibold uppercase tracking-wider"
+        style={{ color: c.textDim }}
+      >
+        Copy to clipboard
+      </div>
+      {rows.map((r) => {
+        const justCopied = copiedLabel === r.label;
+        return (
+          <button
+            key={r.label}
+            onClick={() => onCopy(r.label, r.text)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors"
+            onMouseEnter={(e) => { e.currentTarget.style.background = c.hoverBg; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = ""; }}
+          >
+            <span className="w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center" style={{ color: justCopied ? "#3fb950" : c.textDim }}>
+              {justCopied ? (
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+              ) : (
+                <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
+                </svg>
+              )}
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[12.5px]" style={{ color: c.textPrimary, fontWeight: 500 }}>
+                {r.label}
+              </span>
+              {r.subtitle && (
+                <span className="block text-[10.5px] font-mono truncate" style={{ color: c.textDim }}>
+                  {r.subtitle}
+                </span>
+              )}
+            </span>
+            {justCopied && (
+              <span className="text-[10.5px] flex-shrink-0" style={{ color: "#3fb950" }}>Copied!</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+});
 
 function MetaBadge({ label, color, theme, title }: { label: string; color: string; theme: string; title?: string }) {
   return (
