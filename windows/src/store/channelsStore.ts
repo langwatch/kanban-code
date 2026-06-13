@@ -32,7 +32,7 @@ interface ChannelsStore {
   refreshChannels: () => Promise<void>;
   selectChannel: (name: string | null) => Promise<void>;
   loadMessages: (name: string) => Promise<void>;
-  sendMessage: (name: string, body: string) => Promise<void>;
+  sendMessage: (name: string, body: string, imagePaths?: string[]) => Promise<void>;
   createChannel: (name: string) => Promise<Channel | null>;
   deleteChannel: (name: string) => Promise<void>;
   saveDraft: (name: string, body: string) => Promise<void>;
@@ -157,9 +157,10 @@ export const useChannelsStore = create<ChannelsStore>((set, get) => ({
     }
   },
 
-  sendMessage: async (name, body) => {
+  sendMessage: async (name, body, imagePaths) => {
     const trimmed = body.trim();
-    if (!trimmed) return;
+    const images = imagePaths?.filter((p) => p.length > 0) ?? [];
+    if (!trimmed && images.length === 0) return;
     try {
       // Optimistic: append locally; the watcher will trigger a refetch shortly
       // and replace the optimistic entry with the canonical row.
@@ -169,6 +170,7 @@ export const useChannelsStore = create<ChannelsStore>((set, get) => ({
         from: SELF,
         body: trimmed,
         type: "message",
+        imagePaths: images.length > 0 ? images : undefined,
       };
       set((state) => ({
         messagesByChannel: {
@@ -180,7 +182,7 @@ export const useChannelsStore = create<ChannelsStore>((set, get) => ({
         channel: name,
         from: SELF,
         body: trimmed,
-        imagePaths: null,
+        imagePaths: images.length > 0 ? images : null,
       });
       // Clear the draft on successful send.
       const newDrafts = {

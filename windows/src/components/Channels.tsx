@@ -1,8 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openPath } from "@tauri-apps/plugin-shell";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useChannelsStore } from "../store/channelsStore";
 import { useBoardStore } from "../store/boardStore";
 import { useTheme, t } from "../theme";
 import type { Channel, ChannelMessage } from "../types";
+
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+
+/// Caches blob URLs per source path so repeated message renders don't burn
+/// IPC reads — the URL stays valid for the document lifetime.
+const blobUrlCache = new Map<string, string>();
+
+async function getImageBlobUrl(path: string): Promise<string | null> {
+  const cached = blobUrlCache.get(path);
+  if (cached) return cached;
+  try {
+    const bytes = await invoke<number[]>("read_image_bytes", { path });
+    const blob = new Blob([new Uint8Array(bytes)]);
+    const url = URL.createObjectURL(blob);
+    blobUrlCache.set(path, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function useImageBlobUrl(path: string | undefined): string | null {
+  const [url, setUrl] = useState<string | null>(
+    path ? blobUrlCache.get(path) ?? null : null
+  );
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    getImageBlobUrl(path).then((u) => {
+      if (!cancelled) setUrl(u);
+    });
+    return () => { cancelled = true; };
+  }, [path]);
+  return url;
+}
 
 /// Phase-7 channel chat panel. Replaces the BoardView when `chatOpen` is true
 /// (mirrors the SettingsView slot). Wire format matches the macOS app and the
@@ -125,7 +164,7 @@ export default function Channels() {
             channel={selected}
             messages={messages}
             draft={draft}
-            onSend={(body) => sendMessage(selected.name, body)}
+            onSend={(body, imagePaths) => sendMessage(selected.name, body, imagePaths)}
             onDraftChange={(body) => saveDraft(selected.name, body)}
             c={c}
             theme={theme}
@@ -229,13 +268,16 @@ function ChannelPane({
   channel: Channel;
   messages: ChannelMessage[];
   draft: string;
-  onSend: (body: string) => void;
+  onSend: (body: string, imagePaths?: string[]) => void;
   onDraftChange: (body: string) => void;
   c: ReturnType<typeof t>;
   theme: "dark" | "light";
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const composeRef = useRef<HTMLDivElement>(null);
   const lastSeenRef = useRef<number>(0);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [isDragHover, setIsDragHover] = useState(false);
 
   // Auto-scroll to bottom when new messages arrive (only if user was at bottom).
   useEffect(() => {
@@ -250,10 +292,93 @@ function ChannelPane({
     lastSeenRef.current = messages.length;
   }, [messages.length]);
 
+  // Drag-drop: Tauri webview intercepts native OS file drops and emits a
+  // synthetic event with absolute paths — HTML drag-drop events would not
+  // fire here. Only queue when the drop happens over the compose region.
+  useEffect(() => {
+    let unlisten: undefined | (() => void);
+    (async () => {
+      unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+        const composeEl = composeRef.current;
+        if (!composeEl) return;
+        const rect = composeEl.getBoundingClientRect();
+        const inCompose = (pos: { x: number; y: number }) => {
+          const dpr = window.devicePixelRatio || 1;
+          const x = pos.x / dpr;
+          const y = pos.y / dpr;
+          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        };
+        if (event.payload.type === "over") {
+          setIsDragHover(inCompose(event.payload.position));
+        } else if (event.payload.type === "drop") {
+          setIsDragHover(false);
+          if (!inCompose(event.payload.position)) return;
+          const imageOnly = event.payload.paths.filter((p) =>
+            IMAGE_EXTS.some((ext) => p.toLowerCase().endsWith(`.${ext}`))
+          );
+          if (imageOnly.length > 0) {
+            setAttachments((prev) => [...prev, ...imageOnly]);
+          }
+        } else {
+          setIsDragHover(false);
+        }
+      });
+    })();
+    return () => { unlisten?.(); };
+  }, []);
+
+  const handlePickFiles = async () => {
+    try {
+      const picked = await openDialog({
+        multiple: true,
+        filters: [{ name: "Images", extensions: IMAGE_EXTS }],
+      });
+      if (!picked) return;
+      const paths = Array.isArray(picked) ? picked : [picked];
+      setAttachments((prev) => [...prev, ...paths]);
+    } catch {
+      // dialog dismissed
+    }
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter(
+      (it) => it.kind === "file" && it.type.startsWith("image/")
+    );
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    for (const it of imageItems) {
+      const file = it.getAsFile();
+      if (!file) continue;
+      const buf = await file.arrayBuffer();
+      const ext = (it.type.split("/")[1] ?? "png").replace(/[^a-z0-9]/gi, "");
+      try {
+        const path = await invoke<string>("persist_clipboard_image", {
+          bytes: Array.from(new Uint8Array(buf)),
+          ext,
+        });
+        setAttachments((prev) => [...prev, path]);
+      } catch (err) {
+        console.error("paste image persist failed:", err);
+      }
+    }
+  };
+
+  const removeAttachment = (idx: number) =>
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+
+  const canSend = draft.trim().length > 0 || attachments.length > 0;
+
+  const submitSend = () => {
+    if (!canSend) return;
+    onSend(draft, attachments);
+    setAttachments([]);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!draft.trim()) return;
-    onSend(draft);
+    submitSend();
   };
 
   return (
@@ -282,48 +407,131 @@ function ChannelPane({
         )}
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="flex items-end gap-2 px-6 py-3 shrink-0"
+      <div
+        ref={composeRef}
+        className="shrink-0"
         style={{ borderTop: `1px solid ${c.border}` }}
       >
-        <textarea
-          value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (draft.trim()) onSend(draft);
-            }
-          }}
-          placeholder={`Message #${channel.name}`}
-          rows={1}
-          className="flex-1 resize-none rounded-lg px-3 py-2 text-[13px] focus:outline-none"
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-6 pt-3">
+            {attachments.map((p, i) => (
+              <AttachmentThumb
+                key={`${p}-${i}`}
+                path={p}
+                onRemove={() => removeAttachment(i)}
+                c={c}
+              />
+            ))}
+          </div>
+        )}
+        <form
+          onSubmit={handleSubmit}
+          className="flex items-end gap-2 px-6 py-3"
           style={{
-            background: c.bgInput,
-            border: `1px solid ${c.border}`,
-            color: c.text,
-            maxHeight: 160,
-          }}
-        />
-        <button
-          type="submit"
-          disabled={!draft.trim()}
-          className="px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors"
-          style={{
-            background: draft.trim() ? "#4f8ef7" : c.bgInput,
-            color: draft.trim() ? "white" : c.textMuted,
-            cursor: draft.trim() ? "pointer" : "not-allowed",
-            border: `1px solid ${c.border}`,
+            background: isDragHover ? "rgba(79,142,247,0.08)" : "transparent",
+            transition: "background 120ms",
           }}
         >
-          Send
-        </button>
-      </form>
+          <button
+            type="button"
+            onClick={handlePickFiles}
+            className="p-2 rounded-lg transition-colors"
+            style={{ color: c.textMuted, border: `1px solid ${c.border}`, background: c.bgInput }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = c.textPrimary)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = c.textMuted)}
+            title="Attach images"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.122 2.122l7.81-7.81"
+              />
+            </svg>
+          </button>
+          <textarea
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onPaste={handlePaste}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submitSend();
+              }
+            }}
+            placeholder={`Message #${channel.name}`}
+            rows={1}
+            className="flex-1 resize-none rounded-lg px-3 py-2 text-[13px] focus:outline-none"
+            style={{
+              background: c.bgInput,
+              border: `1px solid ${c.border}`,
+              color: c.text,
+              maxHeight: 160,
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!canSend}
+            className="px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors"
+            style={{
+              background: canSend ? "#4f8ef7" : c.bgInput,
+              color: canSend ? "white" : c.textMuted,
+              cursor: canSend ? "pointer" : "not-allowed",
+              border: `1px solid ${c.border}`,
+            }}
+          >
+            Send
+          </button>
+        </form>
+      </div>
       {/* `theme` is currently informational; kept on the signature so we can
           add theme-specific message rendering without changing call sites. */}
       <span style={{ display: "none" }}>{theme}</span>
     </>
+  );
+}
+
+function AttachmentThumb({
+  path,
+  onRemove,
+  c,
+}: {
+  path: string;
+  onRemove: () => void;
+  c: ReturnType<typeof t>;
+}) {
+  const url = useImageBlobUrl(path);
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return (
+    <div
+      className="relative rounded-lg overflow-hidden flex items-center justify-center"
+      style={{
+        width: 64,
+        height: 64,
+        background: c.bgInput,
+        border: `1px solid ${c.border}`,
+      }}
+      title={name}
+    >
+      {url ? (
+        <img src={url} alt={name} className="w-full h-full object-cover" />
+      ) : (
+        <span className="text-[10px]" style={{ color: c.textMuted }}>…</span>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute top-0 right-0 w-5 h-5 flex items-center justify-center text-[11px] leading-none"
+        style={{
+          background: "rgba(0,0,0,0.6)",
+          color: "white",
+          borderBottomLeftRadius: 6,
+        }}
+        title="Remove"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -343,17 +551,55 @@ function MessageRow({ message, c }: { message: ChannelMessage; c: ReturnType<typ
     );
   }
   return (
-    <div className="flex items-baseline gap-2">
-      <span className="text-[13px] font-semibold shrink-0" style={{ color: c.textPrimary }}>
-        @{message.from.handle}
-      </span>
-      <span className="text-[10px] shrink-0" style={{ color: c.textMuted }}>
-        {ts}
-      </span>
-      <span className="text-[13px] whitespace-pre-wrap break-words" style={{ color: c.text }}>
-        {message.body}
-      </span>
+    <div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[13px] font-semibold shrink-0" style={{ color: c.textPrimary }}>
+          @{message.from.handle}
+        </span>
+        <span className="text-[10px] shrink-0" style={{ color: c.textMuted }}>
+          {ts}
+        </span>
+        {message.body && (
+          <span className="text-[13px] whitespace-pre-wrap break-words" style={{ color: c.text }}>
+            {message.body}
+          </span>
+        )}
+      </div>
+      {message.imagePaths && message.imagePaths.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-1 ml-1">
+          {message.imagePaths.map((p, i) => (
+            <MessageImage key={`${p}-${i}`} path={p} c={c} />
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+function MessageImage({ path, c }: { path: string; c: ReturnType<typeof t> }) {
+  const url = useImageBlobUrl(path);
+  return (
+    <button
+      type="button"
+      onClick={() => { void openPath(path); }}
+      className="rounded-lg overflow-hidden block"
+      style={{
+        width: 160,
+        maxHeight: 160,
+        background: c.bgInput,
+        border: `1px solid ${c.border}`,
+        cursor: "zoom-in",
+      }}
+      title={path}
+    >
+      {url ? (
+        <img src={url} alt="" className="block w-full h-auto max-h-[160px] object-contain" />
+      ) : (
+        <div className="w-full h-[80px] flex items-center justify-center text-[10px]" style={{ color: c.textMuted }}>
+          …
+        </div>
+      )}
+    </button>
   );
 }
 

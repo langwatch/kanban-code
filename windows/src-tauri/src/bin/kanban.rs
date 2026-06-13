@@ -9,7 +9,7 @@
 //! markdown export, image paste, and tmux fanout are NOT here — those live in
 //! the TS CLI under `cli/`.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use kanban_code_lib::channels::{normalize_channel_name, ChannelParticipant};
 use kanban_code_lib::channels_store::ChannelsStore;
 use std::process::ExitCode;
@@ -85,6 +85,11 @@ enum ChannelCmd {
         ident: IdentityOpts,
         #[arg(short, long)]
         json: bool,
+        /// Attach an image. Repeat to attach multiple. Missing files print
+        /// a warning and are skipped (matches the persist_images lenient
+        /// behavior).
+        #[arg(short = 'i', long = "image", value_name = "PATH", action = ArgAction::Append)]
+        images: Vec<String>,
         /// Message body — joined with single spaces. Quote multi-word
         /// messages, or put any flags BEFORE the message words.
         #[arg(required = true)]
@@ -122,6 +127,10 @@ enum DmCmd {
         ident: IdentityOpts,
         #[arg(short, long)]
         json: bool,
+        /// Attach an image. Repeat to attach multiple. Missing files print
+        /// a warning and are skipped.
+        #[arg(short = 'i', long = "image", value_name = "PATH", action = ArgAction::Append)]
+        images: Vec<String>,
         /// Message body — joined with single spaces. Quote multi-word
         /// messages, or put any flags BEFORE the message words.
         #[arg(required = true)]
@@ -174,6 +183,22 @@ fn resolve_caller(opts: &IdentityOpts) -> ChannelParticipant {
         .clone()
         .or_else(|| std::env::var("KANBAN_CARD_ID").ok());
     ChannelParticipant { card_id, handle }
+}
+
+/// Pre-validates `--image` paths. Missing files print a warning to stderr
+/// and are dropped from the returned list — matches the lenient persist
+/// behavior so a typo doesn't fail the send.
+fn warn_skipped_images(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|p| {
+            let exists = std::path::Path::new(p).exists();
+            if !exists {
+                eprintln!("kanban: warning: image not found, skipping: {p}");
+            }
+            exists
+        })
+        .collect()
 }
 
 fn parse_target(s: &str) -> ChannelParticipant {
@@ -329,14 +354,15 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
             }
             Ok(())
         }
-        ChannelCmd::Send { name, message, ident, json } => {
+        ChannelCmd::Send { name, message, ident, images, json } => {
             let caller = resolve_caller(&ident);
             let clean = normalize_channel_name(&name);
             // Auto-join on first send so the roster stays in sync.
             let _ = store.join_channel(&clean, caller.clone()).await;
             let body = message.join(" ");
+            let kept = warn_skipped_images(images);
             let msg = store
-                .send_message(&clean, caller.clone(), body.clone(), Vec::new())
+                .send_message(&clean, caller.clone(), body.clone(), kept)
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msg)?);
@@ -410,12 +436,13 @@ async fn run_channel(cmd: ChannelCmd, store: &ChannelsStore) -> anyhow::Result<(
 
 async fn run_dm(cmd: DmCmd, store: &ChannelsStore) -> anyhow::Result<()> {
     match cmd {
-        DmCmd::Send { to, message, ident, json } => {
+        DmCmd::Send { to, message, ident, images, json } => {
             let from = resolve_caller(&ident);
             let target = parse_target(&to);
             let body = message.join(" ");
+            let kept = warn_skipped_images(images);
             let msg = store
-                .send_dm(from.clone(), target.clone(), body.clone(), Vec::new())
+                .send_dm(from.clone(), target.clone(), body.clone(), kept)
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&msg)?);

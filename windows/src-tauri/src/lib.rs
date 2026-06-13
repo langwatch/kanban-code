@@ -884,6 +884,55 @@ async fn save_drafts(
     state.channels_store.save_drafts(&drafts).await.map_err(|e| e.to_string())
 }
 
+/// Reads image bytes for rendering in the chat UI. The frontend wraps the
+/// returned bytes in a Blob URL. Used for both stored message attachments
+/// (paths under the channels images dir) and staged previews (paths from
+/// the file picker / drag-drop). Caps at 25 MB to avoid OOM if a bogus
+/// path is ever requested; #112.
+#[tauri::command]
+async fn read_image_bytes(path: String) -> Result<Vec<u8>, String> {
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let meta = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("stat image: {e}"))?;
+    if meta.len() > MAX_BYTES {
+        return Err(format!(
+            "image too large for preview ({} bytes, limit {MAX_BYTES})",
+            meta.len()
+        ));
+    }
+    tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("read image: {e}"))
+}
+
+/// Writes pasted/dropped clipboard bytes to a uniquely-named file in the
+/// system temp dir and returns its absolute path. The frontend then passes
+/// the path to send_channel_message / send_dm, which copies the file into
+/// the persistent images dir; #112.
+#[tauri::command]
+async fn persist_clipboard_image(
+    bytes: Vec<u8>,
+    ext: String,
+) -> Result<String, String> {
+    let safe_ext: String = ext
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let ext = if safe_ext.is_empty() { "png".to_string() } else { safe_ext };
+    let dir = std::env::temp_dir().join("kanban-code-clipboard");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("create temp dir: {e}"))?;
+    let path = dir.join(format!("{}.{}", uuid::Uuid::new_v4().simple(), ext));
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| format!("write temp image: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 // ── Background polling ───────────────────────────────────────────────────────
 
 fn start_polling(app: tauri::AppHandle) {
@@ -1509,6 +1558,8 @@ pub fn run() {
             save_read_state,
             get_drafts,
             save_drafts,
+            read_image_bytes,
+            persist_clipboard_image,
         ])
         .setup(|app| {
             logging::info(
