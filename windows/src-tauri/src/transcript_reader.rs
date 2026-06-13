@@ -143,6 +143,50 @@ pub async fn search_transcript_turns(file_path: &str, query: &str) -> Result<Vec
     Ok(matches)
 }
 
+/// Return the concatenated `text` content of the most recent `assistant`
+/// turn in the JSONL, trimmed and capped at `max_chars` characters so it fits
+/// in an OS notification body. None if the file is missing, empty, or has no
+/// assistant turn yet. Ignores tool_use/tool_result/thinking blocks.
+pub async fn read_last_assistant_message(file_path: &str, max_chars: usize) -> Option<String> {
+    let path = std::path::Path::new(file_path);
+    if !path.exists() {
+        return None;
+    }
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut last: Option<String> = None;
+    while let Ok(Some(line)) = lines.next_line().await {
+        if line.is_empty() {
+            continue;
+        }
+        let obj: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if obj["type"].as_str() != Some("assistant") {
+            continue;
+        }
+        let text: String = parse_content_blocks(&obj)
+            .into_iter()
+            .filter(|b| b.kind == "text")
+            .map(|b| b.text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            last = Some(trimmed.to_string());
+        }
+    }
+    last.map(|s| {
+        let mut out: String = s.chars().take(max_chars).collect();
+        if s.chars().count() > max_chars {
+            out.push('…');
+        }
+        out
+    })
+}
+
 fn parse_content_blocks(obj: &Value) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
     let content = match obj["message"]["content"].as_array() {

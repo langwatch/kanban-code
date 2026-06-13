@@ -29,12 +29,21 @@ pub struct BoardStateDto {
     pub last_refresh: Option<DateTime<Utc>>,
 }
 
+/// Suppress duplicate notifications for the same card if a previous one
+/// fired within this window. Mirrors NotificationDeduplicator.swift on Mac
+/// (62 s — slightly longer than the activity poll cadence so a flapping
+/// session that ping-pongs activelyWorking↔needsAttention can't spam).
+const NOTIFICATION_DEDUP_SECS: i64 = 62;
+
 #[derive(Debug, Default)]
 pub struct BoardState {
     pub cards: Vec<CardDto>,
     pub last_refresh: Option<DateTime<Utc>>,
     /// Previous activity state per card id, used to detect transitions
     prev_activity: HashMap<String, String>,
+    /// Wall-clock time we last emitted a notification for each card, used to
+    /// suppress repeats within NOTIFICATION_DEDUP_SECS.
+    last_notified_at: HashMap<String, DateTime<Utc>>,
     /// Tracks JSONL mtime changes across polls to detect active vs stopped
     activity_tracker: ActivityTracker,
 }
@@ -160,7 +169,13 @@ impl BoardState {
 
     /// Returns cards that just transitioned to NeedsAttention (Claude finished a turn).
     /// Should be called after `refresh()` to drive OS notifications.
+    ///
+    /// Applies a per-card dedup window: a card that already fired a
+    /// notification within the last `NOTIFICATION_DEDUP_SECS` is skipped.
+    /// This prevents a flapping activity detector from spamming the user
+    /// when the JSONL mtime briefly flips back-and-forth.
     pub fn drain_notification_candidates(&mut self) -> Vec<CardDto> {
+        let now = Utc::now();
         let mut notify = Vec::new();
         let mut new_states: HashMap<String, String> = HashMap::new();
 
@@ -172,7 +187,14 @@ impl BoardState {
 
             // Notify when Claude just stopped working and needs the user's attention
             if current == "needsAttention" && prev == "activelyWorking" {
-                notify.push(card.clone());
+                let last = self.last_notified_at.get(&card.id).copied();
+                let suppressed = last
+                    .map(|t| (now - t).num_seconds() < NOTIFICATION_DEDUP_SECS)
+                    .unwrap_or(false);
+                if !suppressed {
+                    self.last_notified_at.insert(card.id.clone(), now);
+                    notify.push(card.clone());
+                }
             }
         }
 

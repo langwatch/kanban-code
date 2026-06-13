@@ -424,7 +424,24 @@ fn start_polling(app: tauri::AppHandle) {
                         );
                         for card in notify_cards {
                             let title = card.display_title.clone();
-                            let body = "Claude finished — your input is needed.".to_string();
+                            // Prefer the last assistant message as the body so
+                            // the notification actually says something useful
+                            // (matches macOS TranscriptNotificationReader).
+                            // Fall back to a generic prompt when the JSONL
+                            // can't be read or the turn has no text content.
+                            let body = match card
+                                .link
+                                .session_link
+                                .as_ref()
+                                .and_then(|sl| sl.session_path.clone())
+                            {
+                                Some(p) => transcript_reader::read_last_assistant_message(&p, 240)
+                                    .await
+                                    .unwrap_or_else(|| {
+                                        "Claude finished — your input is needed.".to_string()
+                                    }),
+                                None => "Claude finished — your input is needed.".to_string(),
+                            };
                             let _ = app.notification().builder().title(title).body(body).show();
                         }
                     }
