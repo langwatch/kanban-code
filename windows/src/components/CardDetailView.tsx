@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useState, useRef, useCallback } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getTranscript,
   getSettings,
@@ -57,6 +58,12 @@ export default function CardDetailView() {
   // Settings
   const [terminalFontSize, setTerminalFontSize] = useState(15);
   const [terminalShell, setTerminalShell] = useState<string>("cmd.exe");
+  // Whether `tmux -V` succeeds in the user's WSL environment. When true AND
+  // the chosen shell is a Unix shell, terminals are wrapped in
+  // `tmux new-session -A -s <ksuid>` so closing the drawer detaches (the
+  // tmux server keeps Claude running) and reopening reattaches with the
+  // pane scrollback intact. When false, the legacy one-shot PTY is used.
+  const [tmuxAvailable, setTmuxAvailable] = useState(false);
 
   // Copy / "more" menu
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -106,6 +113,9 @@ export default function CardDetailView() {
         setTerminalShell((s.terminalShell && s.terminalShell.trim()) || "cmd.exe");
       })
       .catch(() => {});
+    invoke<boolean>("tmux_available")
+      .then((v) => setTmuxAvailable(!!v))
+      .catch(() => setTmuxAvailable(false));
   }, []);
 
   // Reset state when card changes
@@ -271,24 +281,66 @@ export default function CardDetailView() {
   // Split the user-configurable shell string into [exe, ...args]. Default is
   // cmd.exe so the app is Windows-native out of the box; setting it to
   // "wsl.exe" launches Claude inside WSL instead.
-  const shellCommand = terminalShell.trim().split(/\s+/).filter(Boolean);
-  const shellExe = (shellCommand[0] ?? "cmd.exe").toLowerCase();
+  const baseShell = terminalShell.trim().split(/\s+/).filter(Boolean);
+  const shellExe = (baseShell[0] ?? "cmd.exe").toLowerCase();
   const isUnixShell = /(^|[\\/])(wsl|bash|sh|zsh|fish)(\.exe)?$/.test(shellExe);
+  // tmux requires a Unix shell AND a working `tmux -V` inside it.
+  const useTmux = isUnixShell && tmuxAvailable;
 
-  const terminalInput = (() => {
-    if (isUnixShell) {
-      // bash-style: backslash-escape spaces in path, single-quote the prompt.
-      const cdCmd = projectPath ? `cd ${projectPath.replace(/ /g, "\\ ")} && ` : "";
-      return sessionId
-        ? `${cdCmd}claude --resume ${sessionId}\r`
-        : `${cdCmd}claude '${(promptBody ?? "").replace(/'/g, "'\\''")}'\r`;
-    }
-    // cmd.exe / pwsh — double-quote the path; "" escapes a quote inside cmd
-    // double-quotes (PowerShell also accepts it).
+  // The inner bash command (`cd … && claude …`) — same for tmux + legacy
+  // paths. Inside tmux it's the one-shot session-creation command; outside,
+  // it's typed by Terminal.tsx after 800ms.
+  const innerBashCmd = (() => {
+    const cdCmd = projectPath ? `cd ${projectPath.replace(/ /g, "\\ ")} && ` : "";
+    return sessionId
+      ? `${cdCmd}claude --resume ${sessionId}`
+      : `${cdCmd}claude '${(promptBody ?? "").replace(/'/g, "'\\''")}'`;
+  })();
+
+  // Equivalent for native Windows shells (cmd / pwsh) — paths in double
+  // quotes, prompt double-quoted with `""` escaping.
+  const innerCmdShellCmd = (() => {
     const cdCmd = projectPath ? `cd "${projectPath}" && ` : "";
     return sessionId
-      ? `${cdCmd}claude --resume ${sessionId}\r`
-      : `${cdCmd}claude "${(promptBody ?? "").replace(/"/g, '""')}"\r`;
+      ? `${cdCmd}claude --resume ${sessionId}`
+      : `${cdCmd}claude "${(promptBody ?? "").replace(/"/g, '""')}"`;
+  })();
+
+  // Build the actual argv handed to the PTY + the optional post-spawn
+  // type-this-after-800ms string.
+  //
+  // Tmux mode: PTY runs `wsl bash -lc "tmux new-session -A -s '<ksuid>' …"`.
+  //   * `-A` makes new-session attach if the named session already exists
+  //     and only run the inner shell-command on first create. So a fresh
+  //     PTY on reopen reattaches the existing Claude pane intact.
+  //   * The inner shell-command is encoded as base64 to side-step quoting:
+  //     `bash -lc "$(echo <b64> | base64 -d)"`. Without this, single-quoted
+  //     prompt bodies + multi-level quoting (Windows argv → bash → tmux)
+  //     would break the moment the user types an apostrophe.
+  //   * `; exec bash` keeps the pane alive after Claude exits so the user
+  //     can inspect output / re-run claude without the session dying.
+  //
+  // Legacy mode: existing behavior — spawn the configured shell, then type
+  // the cd + claude line after 800ms via Terminal.tsx's `initialInput`.
+  const { shellCommand, terminalInput } = (() => {
+    if (useTmux) {
+      const session = `kanban-${card.id}`;
+      const inner = `${innerBashCmd}; exec bash`;
+      // btoa is fine for ASCII; encode UTF-8 first so non-ASCII prompts survive.
+      const b64 = btoa(unescape(encodeURIComponent(inner)));
+      const wrapper = `tmux new-session -A -s '${session}' -- bash -lc "$(echo ${b64} | base64 -d)"`;
+      return {
+        shellCommand: ["wsl.exe", "--", "bash", "-lc", wrapper],
+        terminalInput: "",
+      };
+    }
+    if (isUnixShell) {
+      // bash without tmux — fall back to type-after-spawn so non-tmux WSL
+      // users still get a working terminal (just no reattach).
+      return { shellCommand: baseShell, terminalInput: `${innerBashCmd}\r` };
+    }
+    // Native Windows shell.
+    return { shellCommand: baseShell, terminalInput: `${innerCmdShellCmd}\r` };
   })();
 
   const handleStartTerminal = () => {
