@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.30](https://github.com/langwatch/kanban-code/compare/v0.1.29...v0.1.30) (2026-06-13)
+
+
+### Features
+
+* **windows:** add project switcher dropdown to board header ([0dd340b](https://github.com/langwatch/kanban-code/commit/0dd340b5183c0818a459aec527e37a327a1b8c9e))
+* **windows:** add structured logging + verify Phase 0 baseline ([982e412](https://github.com/langwatch/kanban-code/commit/982e412cee1ace0f99dbef14806a5b17a48ccdfb))
+* **windows:** app-wide font scaling (Ctrl+/-/0) and list view mode ([ccbd139](https://github.com/langwatch/kanban-code/commit/ccbd139218af3cc2348f3e0495d1cb90aec35a44))
+* **windows:** BM25 deep transcript search wired into SearchOverlay ([db4a28f](https://github.com/langwatch/kanban-code/commit/db4a28f6c492633f648ecdef32b2925b2dfb9a6b))
+* **windows:** card merge via drop-onto-card ([c8249a6](https://github.com/langwatch/kanban-code/commit/c8249a667650d1d26324adc9064fc197cc43c15d))
+* **windows:** confirm card delete + auto-select neighbor after delete/archive ([b43bc8f](https://github.com/langwatch/kanban-code/commit/b43bc8fd7e011cc7fbcb6c72f84a16d52ed43150))
+* **windows:** copy-to-clipboard menu in card drawer header ([8a3d3fb](https://github.com/langwatch/kanban-code/commit/8a3d3fb571257ff8a84695e1a84a146219922bf4))
+* **windows:** discovered-projects suggestions in Settings → Projects ([926a94d](https://github.com/langwatch/kanban-code/commit/926a94dccd0abe3d78edf6e3a4c09196d6df00fa))
+* **windows:** fork_session + truncate_session — Fork in drawer menu, Checkpoint per turn ([b2827fc](https://github.com/langwatch/kanban-code/commit/b2827fcac072a9b49d9a8fe51c6dfb626b4942e6))
+* **windows:** git_remote.rs + Tauri commands for canonical GitHub URLs ([da2e20a](https://github.com/langwatch/kanban-code/commit/da2e20a9ee5f378bc5d8c0f9adc58ffddd4b6011))
+* **windows:** in-app merge_pr command + Merge pill in PR drawer tab ([406d411](https://github.com/langwatch/kanban-code/commit/406d41130308b9ee833ba5a475af0e64b6fa2925))
+* **windows:** keyboard polish — Ctrl+, opens settings, Esc layer-pop ([f3a367f](https://github.com/langwatch/kanban-code/commit/f3a367f5d9c4a4e63b86cb5e46acc1b9889e9a72))
+* **windows:** launch confirmation dialog + richer command builder ([8cde8e6](https://github.com/langwatch/kanban-code/commit/8cde8e63c35850dc41c5d6037295725173d4cae1))
+* **windows:** log when settings.json appears to originate from macOS ([710c8da](https://github.com/langwatch/kanban-code/commit/710c8da7feb40f86dc2a8b7fe4d6dfdf4b806327))
+* **windows:** make terminal shell configurable; default to native cmd.exe ([73fad21](https://github.com/langwatch/kanban-code/commit/73fad212d63662536e6ecb93b9454340352e760d))
+* **windows:** move card to another project ([2e928b4](https://github.com/langwatch/kanban-code/commit/2e928b48997e53da9499f7c4c577e01c301c2e02))
+* **windows:** multi-assistant abstraction (Claude + Gemini scaffolding) ([8e01c21](https://github.com/langwatch/kanban-code/commit/8e01c21454f86c0fd57afe743fdc51fb601a8e78))
+* **windows:** multi-tab shells per card via tmux windows ([3bf5bf5](https://github.com/langwatch/kanban-code/commit/3bf5bf5ed5dfa79cf3704907f6093d98c9549469))
+* **windows:** notification polish — last-message body + 62s dedup ([2ac5984](https://github.com/langwatch/kanban-code/commit/2ac59847294aea93214520d25083ff403064d418))
+* **windows:** panic hook writes crash-*.log before abort ([d6713fd](https://github.com/langwatch/kanban-code/commit/d6713fd0684a6ce764ff951a2f219bbaafb7c1d5))
+* **windows:** per-project settings — name, repoRoot, githubFilter, promptTemplate ([5718791](https://github.com/langwatch/kanban-code/commit/5718791f51e604a621e2efe37c81f92b489e40fc))
+* **windows:** persist same-column reorder via reorder_cards command ([34e9b8a](https://github.com/langwatch/kanban-code/commit/34e9b8a90821cfc64b22f12a5b22a106babd22d3))
+* **windows:** Phase 5 — Mutagen sync, remote status, bash wrapper deploy ([c0d59ba](https://github.com/langwatch/kanban-code/commit/c0d59ba3fec6eadba9c46fa2a0cc1c6e2fd6da3d)), closes [#96](https://github.com/langwatch/kanban-code/issues/96)
+* **windows:** Phase 7 — channels + kanban CLI ([7ebda6b](https://github.com/langwatch/kanban-code/commit/7ebda6be6b0fe797f2197f48c74f6c82e2b9c6fe))
+* **windows:** port KSUID + add links.json .bkp corruption recovery ([6fd7739](https://github.com/langwatch/kanban-code/commit/6fd7739786d9923555022843b42a8b722db6a2c6))
+* **windows:** Pushover delivery wired into notification path ([f831597](https://github.com/langwatch/kanban-code/commit/f831597ab1b05f36403c13ba308e93a884fcd37d))
+* **windows:** queued-prompt auto-send driven by hook Stop events ([ca66f91](https://github.com/langwatch/kanban-code/commit/ca66f9122e32bc0669aede9685ef040f6b399b12))
+* **windows:** rich PR enrichment — body, CI checks, review decision, approvals ([37deb36](https://github.com/langwatch/kanban-code/commit/37deb362a4846dbd1e2f9530dc74918170ed2856))
+* **windows:** tmux-in-WSL adapter for terminal persistence (Phase 3) ([965a797](https://github.com/langwatch/kanban-code/commit/965a797ef4728c6b58944bec487cab6494b141bf))
+* **windows:** unresolved-thread count + worst-CI dot on card ([06dc71b](https://github.com/langwatch/kanban-code/commit/06dc71b495fde60126f402a0c806a94148674042))
+* **windows:** wire git worktree discovery + add Remove worktree action ([e00f29d](https://github.com/langwatch/kanban-code/commit/e00f29d37c03cd93270815529673aabe1e6f8d18))
+* **windows:** wrap embedded terminal in tmux for reattach across drawer close ([f7e4edb](https://github.com/langwatch/kanban-code/commit/f7e4edb738341547750f024668e4a10fc82af2d1))
+* **windows:** WSL terminal-shell hint in onboarding ClaudeCodeStep ([8659440](https://github.com/langwatch/kanban-code/commit/8659440f6dd49e5ffe43f720e48e014e5ab7b5c6))
+* **windows:** WSL-side hook.sh install + JSONL event tail ([7fff195](https://github.com/langwatch/kanban-code/commit/7fff19502e271d082fd64e98f85c01293c928095))
+
+
+### Bug Fixes
+
+* **cli:** prioritize channel help over low-level send ([3410a9f](https://github.com/langwatch/kanban-code/commit/3410a9fbe726ecec18ff699d8db5a94ef85f278a))
+* **self-compact:** prioritize compact queue prompts ([263caaf](https://github.com/langwatch/kanban-code/commit/263caaf1df0c1dad0ca4ef769700194df41d94a1))
+* **windows:** harden crash handler against recursive panic + cross-PID race ([1c8ea43](https://github.com/langwatch/kanban-code/commit/1c8ea436602dd1158154a3ba048f793fc4c47ba0))
+* **windows:** keyboard shortcuts also match on physical key code ([0145fc5](https://github.com/langwatch/kanban-code/commit/0145fc5e182be47a6ed3d2d4689778ddf7d5a4e4))
+* **windows:** thread theme tokens through dark-hardcoded views ([b2081a8](https://github.com/langwatch/kanban-code/commit/b2081a8088a8703b2b912c7ac11295f74fb159e1))
+
 ## [0.1.29](https://github.com/langwatch/kanban-code/compare/v0.1.28...v0.1.29) (2026-06-07)
 
 
