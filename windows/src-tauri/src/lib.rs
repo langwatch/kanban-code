@@ -1,5 +1,6 @@
 mod activity_detector;
 mod assign_column;
+mod bm25;
 mod board_state;
 mod card_reconciler;
 mod coordination_store;
@@ -208,18 +209,75 @@ async fn search_sessions(
         .await
         .map_err(|e| e.to_string())?;
 
-    let q = query.to_lowercase();
-    let results = sessions
-        .into_iter()
-        .filter(|s| {
-            s.id.to_lowercase().contains(&q)
-                || s.first_prompt.as_deref().unwrap_or("").to_lowercase().contains(&q)
-                || s.project_path.as_deref().unwrap_or("").to_lowercase().contains(&q)
-        })
-        .take(20)
-        .collect();
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(sessions.into_iter().take(20).collect());
+    }
 
-    Ok(results)
+    // Tokenize the query once. If nothing left after dropping <2-char tokens,
+    // fall back to the cheap substring filter so the user still gets *some*
+    // result for queries like "a" or "C++".
+    let terms = bm25::tokenize(q);
+    if terms.is_empty() {
+        let q_lower = q.to_lowercase();
+        return Ok(sessions
+            .into_iter()
+            .filter(|s| {
+                s.id.to_lowercase().contains(&q_lower)
+                    || s.first_prompt.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
+                    || s.project_path.as_deref().unwrap_or("").to_lowercase().contains(&q_lower)
+            })
+            .take(20)
+            .collect());
+    }
+
+    // Read every .jsonl once. Tokenize on the raw text — JSON keys repeat
+    // across every session so their IDF goes to zero and they don't bias
+    // ranking. Much cheaper than properly parsing every line.
+    let mut docs: Vec<(usize, Vec<String>, i64)> = Vec::with_capacity(sessions.len());
+    for (idx, s) in sessions.iter().enumerate() {
+        let Some(path) = s.jsonl_path.as_deref() else { continue };
+        let Ok(content) = tokio::fs::read_to_string(path).await else { continue };
+        let tokens = bm25::tokenize(&content);
+        if tokens.is_empty() {
+            continue;
+        }
+        // Age in seconds from now → recency boost. session.modified_time is
+        // already DateTime<Utc> from the discovery layer.
+        let age_secs = (chrono::Utc::now() - s.modified_time).num_seconds();
+        docs.push((idx, tokens, age_secs));
+    }
+    if docs.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Corpus stats.
+    let doc_count = docs.len();
+    let avg_doc_length =
+        docs.iter().map(|(_, t, _)| t.len() as f64).sum::<f64>() / doc_count as f64;
+    let mut doc_freqs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (_, tokens, _) in &docs {
+        let unique: std::collections::HashSet<&String> = tokens.iter().collect();
+        for t in unique {
+            *doc_freqs.entry(t.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // Score each doc; keep top 20 by descending score.
+    let mut scored: Vec<(f64, &session_discovery::Session)> = docs
+        .iter()
+        .filter_map(|(idx, tokens, age)| {
+            let boost = bm25::recency_boost(*age);
+            let s = bm25::score(&terms, tokens, avg_doc_length, doc_count, &doc_freqs, boost);
+            if s > 0.0 {
+                Some((s, &sessions[*idx]))
+            } else {
+                None
+            }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(scored.into_iter().take(20).map(|(_, s)| s.clone()).collect())
 }
 
 #[tauri::command]
