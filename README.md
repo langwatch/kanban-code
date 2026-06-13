@@ -57,7 +57,9 @@ make run-app
 
 ### Windows
 
-Requires [Node.js](https://nodejs.org/) (v18+), [Rust](https://rustup.rs/), and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. Optionally [GitHub CLI](https://cli.github.com/) for PR/issue features.
+Requires **[WSL](https://learn.microsoft.com/windows/wsl/install)** — the embedded terminal runs inside WSL via `wsl.exe`, and the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI is expected to run there. To build you also need [Node.js](https://nodejs.org/) (v18+) and [Rust](https://rustup.rs/). Optionally [GitHub CLI](https://cli.github.com/) for PR/issue features.
+
+> **Logs:** diagnostics are written to `%APPDATA%\kanban-code\logs\kanban-code.log`. Set `KANBAN_CODE_DEBUG_LOGS=1` for verbose output.
 
 ```bash
 git clone https://github.com/langwatch/kanban-code.git

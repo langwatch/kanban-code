@@ -6,6 +6,7 @@ mod coordination_store;
 mod gh_cli;
 mod git_worktree;
 mod jsonl_parser;
+mod logging;
 mod session_discovery;
 mod settings_store;
 mod shell_command;
@@ -379,14 +380,17 @@ fn start_polling(app: tauri::AppHandle) {
             interval.tick().await;
             let state = app.state::<AppState>();
             let mut bs = state.board_state.lock().await;
-            if let Ok(()) = bs
+            let refresh_result = bs
                 .refresh(
                     &state.session_discovery,
                     &state.coordination_store,
                     &state.settings_store,
                 )
-                .await
-            {
+                .await;
+            if let Err(e) = &refresh_result {
+                logging::warn("poll", &format!("board refresh failed: {e}"));
+            }
+            if refresh_result.is_ok() {
                 let notify_cards = bs.drain_notification_candidates();
                 let dto = bs.to_dto();
                 drop(bs);
@@ -401,6 +405,10 @@ fn start_polling(app: tauri::AppHandle) {
                         .map(|s| s.notifications.notifications_enabled)
                         .unwrap_or(true);
                     if settings_ok {
+                        logging::info(
+                            "notify",
+                            &format!("sending {} notification(s)", notify_cards.len()),
+                        );
                         for card in notify_cards {
                             let title = card.display_title.clone();
                             let body = "Claude finished — your input is needed.".to_string();
@@ -481,7 +489,9 @@ fn start_pr_polling(app: tauri::AppHandle) {
                 }
 
                 if changed {
-                    let _ = state.coordination_store.write_links(&updated_links).await;
+                    if let Err(e) = state.coordination_store.write_links(&updated_links).await {
+                        logging::error("pr-poll", &format!("failed to write links: {e}"));
+                    }
                     // Trigger a board refresh so the UI sees the new PR data
                     let mut bs = state.board_state.lock().await;
                     if let Ok(()) = bs
@@ -620,10 +630,13 @@ fn start_issue_polling(app: tauri::AppHandle) {
                         });
 
                         if links_to_update.len() != before_len {
-                            let _ = state
+                            if let Err(e) = state
                                 .coordination_store
                                 .write_links(&links_to_update)
-                                .await;
+                                .await
+                            {
+                                logging::error("issue-poll", &format!("failed to write links: {e}"));
+                            }
                             changed = true;
                         }
 
@@ -737,6 +750,14 @@ pub fn run() {
             check_dependencies,
         ])
         .setup(|app| {
+            logging::info(
+                "startup",
+                &format!(
+                    "Kanban Code (Windows) v{} starting; data dir: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    coordination_store::kanban_data_dir().display()
+                ),
+            );
             build_tray(app)?;
             start_polling(app.handle().clone());
             start_pr_polling(app.handle().clone());
