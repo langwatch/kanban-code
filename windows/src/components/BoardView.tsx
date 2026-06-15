@@ -5,6 +5,7 @@ import {
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { canMergeCards, mergeCards, useBoardStore } from "../store/boardStore";
 import { COLUMNS, type CardDto, type KanbanColumn } from "../types";
 import { useTheme, t } from "../theme";
@@ -21,7 +22,11 @@ const dropAnimation: DropAnimation = {
 
 export default function BoardView() {
   const { moveCard, reorderCards, reorderPinnedCards, isLoading, cards, setNewTaskOpen, refresh, setMergeTargetId } = useBoardStore();
-  const pinnedCards = useBoardStore((s) => s.pinnedCards());
+  // useShallow keeps the selector's new-array-per-call shape from triggering
+  // an infinite loop under Zustand v5's stricter useSyncExternalStore snapshot
+  // contract. Array element identity is preserved across renders (cards are
+  // memoized in the store), so a shallow compare is all React needs.
+  const pinnedCards = useBoardStore(useShallow((s) => s.pinnedCards()));
   const [draggingCard, setDraggingCard] = useState<CardDto | null>(null);
   const { theme } = useTheme();
   const c = t(theme);
