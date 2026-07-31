@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.31](https://github.com/langwatch/kanban-code/compare/v0.1.30...v0.1.31) (2026-07-31)
+
+
+### Features
+
+* **diagnostics:** attribute memory pressure to tmux session process trees ([a2e7c17](https://github.com/langwatch/kanban-code/commit/a2e7c17d38a96833fb8f6df434edfc58b6d0119f))
+
+
+### Bug Fixes
+
+* accumulated verified fixes from recent sessions ([d01cd10](https://github.com/langwatch/kanban-code/commit/d01cd1076b85ee30a4fb72f37ec8d1edc16ecf2c))
+* **board:** show session ended instead of tmux attach error after reboot ([c52695f](https://github.com/langwatch/kanban-code/commit/c52695fa71286020a9fa9a52fccb256914a0f3b7))
+* **codex:** make restore-to-turn actually truncate ([8102284](https://github.com/langwatch/kanban-code/commit/8102284b07c85eb4d06c262249c22ffe1311a00b))
+* **diagnostics:** survive-the-night defenses after 28GB balloon incident ([bfafaf0](https://github.com/langwatch/kanban-code/commit/bfafaf02f2b6b0d81e132491cd1ac2cc6b905fb2))
+* **migration:** write message.model so claude --resume works ([bdda634](https://github.com/langwatch/kanban-code/commit/bdda634c8890164d7b729c13e2a1be38378e6838))
+* **terminal:** don't glue soft-wrap boundaries in implicit links ([090070d](https://github.com/langwatch/kanban-code/commit/090070d22517b2659e4e3e24d81e12c6806cbbca))
+* **terminal:** trim URL punctuation; parse current codex rollouts ([4442098](https://github.com/langwatch/kanban-code/commit/44420986c94461c43275f40ca8da8962893990b4))
+* **windows:** wrap pinnedCards Zustand selector in useShallow ([#139](https://github.com/langwatch/kanban-code/issues/139)) ([1db691f](https://github.com/langwatch/kanban-code/commit/1db691fd50b2a4af5d738ddc7540c3ca8ec3ca8b))
+
 ## [0.1.30](https://github.com/langwatch/kanban-code/compare/v0.1.29...v0.1.30) (2026-06-16)
 
 
