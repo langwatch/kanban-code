@@ -68,3 +68,10 @@ Feature: Drag and Drop
     Then the card order should update within the column
     And the new order should persist
     And the same order should be shown in both board and list view
+
+  Scenario: A reorder is not undone by a reconcile already in flight
+    Given background reconciliation read the board before the drag
+    When I drag a card to a new position within its column
+    And that reconciliation finishes afterwards
+    Then the card should stay where I dropped it
+    And the same should hold for reordering pinned cards

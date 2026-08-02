@@ -303,6 +303,29 @@ struct CodingAssistantTests {
 
     // MARK: - baseURLEnvKey
 
+    @Test("Native model override does not add a launcher separator")
+    func nativeModelOverride() {
+        #expect(CodingAssistant.claude.launchCommand(
+            skipPermissions: true,
+            worktreeName: nil,
+            modelOverride: "opus"
+        ) == "claude --model opus --dangerously-skip-permissions")
+        #expect(CodingAssistant.codex.resumeCommand(
+            sessionId: "session-1",
+            skipPermissions: true,
+            modelOverride: "gpt-5.4"
+        ) == "codex --model gpt-5.4 resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen session-1")
+    }
+
+    @Test("Model override is escaped as one shell argument")
+    func modelOverrideShellEscaping() {
+        #expect(CodingAssistant.claude.launchCommand(
+            skipPermissions: true,
+            worktreeName: nil,
+            modelOverride: "custom model; echo 'unsafe'"
+        ) == "claude --model 'custom model; echo '\\''unsafe'\\''' --dangerously-skip-permissions")
+    }
+
     @Test("Claude base URL env key is ANTHROPIC_BASE_URL")
     func claudeBaseURLEnvKey() {
         #expect(CodingAssistant.claude.baseURLEnvKey == "ANTHROPIC_BASE_URL")
@@ -316,6 +339,13 @@ struct CodingAssistantTests {
     @Test("Gemini has no base URL env key")
     func geminiBaseURLEnvKey() {
         #expect(CodingAssistant.gemini.baseURLEnvKey == nil)
+    }
+
+    @Test("Only Claude supports per-card context threshold compaction")
+    func contextThresholdSelfCompactSupport() {
+        #expect(CodingAssistant.claude.supportsContextThresholdSelfCompact)
+        #expect(!CodingAssistant.codex.supportsContextThresholdSelfCompact)
+        #expect(!CodingAssistant.gemini.supportsContextThresholdSelfCompact)
     }
 
     // MARK: - Codable

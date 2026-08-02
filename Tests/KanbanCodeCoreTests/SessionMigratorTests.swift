@@ -55,6 +55,52 @@ struct SessionMigratorTests {
         #expect(FileManager.default.fileExists(atPath: result.backupPath))
     }
 
+    @Test("Migration can keep recent turns within a character budget")
+    func migrateRecentTurnsWithinCharacterBudget() async throws {
+        let sourcePath = try writeSourceFile()
+        defer {
+            try? FileManager.default.removeItem(atPath: sourcePath)
+            try? FileManager.default.removeItem(atPath: sourcePath + ".bak")
+        }
+        let source = MockMigrationStore(turns: sampleTurns)
+        let target = MockMigrationStore()
+
+        let result = try await SessionMigrator.migrate(
+            sourceSessionPath: sourcePath,
+            sourceStore: source,
+            targetStore: target,
+            projectPath: "/tmp/project",
+            recentCharacterLimit: 18
+        )
+        defer { try? FileManager.default.removeItem(atPath: result.newSessionPath) }
+
+        #expect(target.writtenTurns.map(\.textPreview) == ["message 4", "message 5"])
+        #expect(result.sourceTurnCount == 5)
+        #expect(result.migratedTurnCount == 2)
+    }
+
+    @Test("Character budget always retains the newest turn")
+    func characterBudgetRetainsNewestTurn() async throws {
+        let sourcePath = try writeSourceFile()
+        defer {
+            try? FileManager.default.removeItem(atPath: sourcePath)
+            try? FileManager.default.removeItem(atPath: sourcePath + ".bak")
+        }
+        let source = MockMigrationStore(turns: sampleTurns)
+        let target = MockMigrationStore()
+
+        let result = try await SessionMigrator.migrate(
+            sourceSessionPath: sourcePath,
+            sourceStore: source,
+            targetStore: target,
+            projectPath: "/tmp/project",
+            recentCharacterLimit: 1
+        )
+        defer { try? FileManager.default.removeItem(atPath: result.newSessionPath) }
+
+        #expect(target.writtenTurns.map(\.textPreview) == ["message 5"])
+    }
+
     private var sampleTurns: [ConversationTurn] {
         (1...5).map { index in
             ConversationTurn(

@@ -141,6 +141,12 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
         return owner != self
     }
 
+    /// Whether Kanban Code can read this assistant's live context usage and
+    /// enforce per-card compaction thresholds.
+    public var supportsContextThresholdSelfCompact: Bool {
+        self == .claude
+    }
+
     /// Symbol used to mark user turns in conversation history UI.
     public var historyPromptSymbol: String {
         switch self {
@@ -172,11 +178,18 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
     ///
     /// Without service: `claude --dangerously-skip-permissions --worktree foo`
     /// With service:    `ollama launch claude --model qwen3 -- --dangerously-skip-permissions --worktree foo`
-    public func launchCommand(skipPermissions: Bool, worktreeName: String?, service: APIService? = nil) -> String {
+    public func launchCommand(
+        skipPermissions: Bool,
+        worktreeName: String?,
+        service: APIService? = nil,
+        modelOverride: String? = nil
+    ) -> String {
         var prefix: [String] = []
         if let launcher = service?.launcherPrefix { prefix.append(contentsOf: launcher.split(separator: " ").map(String.init)) }
         prefix.append(cliCommand)
-        if let model = service?.modelFlag { prefix += ["--model", model] }
+        if let model = modelOverride ?? service?.modelFlag {
+            prefix += ["--model", shellEscapeCommandArgument(model)]
+        }
 
         var flags: [String] = []
         if skipPermissions { flags.append(autoApproveFlag) }
@@ -185,7 +198,9 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
             flags += worktreeName.isEmpty ? ["--worktree"] : ["--worktree", worktreeName]
         }
 
-        let sep: [String] = service?.needsSeparator == true ? ["--"] : []
+        let needsServiceSeparator = service?.launcherPrefix != nil
+            || (service?.modelFlag != nil && modelOverride == nil)
+        let sep: [String] = needsServiceSeparator ? ["--"] : []
         return (prefix + sep + flags).joined(separator: " ")
     }
 
@@ -193,12 +208,21 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
     ///
     /// Without service: `claude --dangerously-skip-permissions --resume <id>`
     /// With service:    `ollama launch claude --model qwen3 -- --dangerously-skip-permissions --resume <id>`
-    public func resumeCommand(sessionId: String, skipPermissions: Bool, service: APIService? = nil) -> String {
+    public func resumeCommand(
+        sessionId: String,
+        skipPermissions: Bool,
+        service: APIService? = nil,
+        modelOverride: String? = nil
+    ) -> String {
         var prefix: [String] = []
         if let launcher = service?.launcherPrefix { prefix.append(contentsOf: launcher.split(separator: " ").map(String.init)) }
         prefix.append(cliCommand)
-        if let model = service?.modelFlag { prefix += ["--model", model] }
-        let sep: [String] = service?.needsSeparator == true ? ["--"] : []
+        if let model = modelOverride ?? service?.modelFlag {
+            prefix += ["--model", shellEscapeCommandArgument(model)]
+        }
+        let needsServiceSeparator = service?.launcherPrefix != nil
+            || (service?.modelFlag != nil && modelOverride == nil)
+        let sep: [String] = needsServiceSeparator ? ["--"] : []
 
         switch self {
         case .codex:
@@ -215,5 +239,14 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
             flags.append(sessionId)
             return (prefix + sep + flags).joined(separator: " ")
         }
+    }
+
+    private func shellEscapeCommandArgument(_ value: String) -> String {
+        let safeCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._:/@+-"))
+        guard !value.isEmpty,
+              value.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) else {
+            return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        return value
     }
 }

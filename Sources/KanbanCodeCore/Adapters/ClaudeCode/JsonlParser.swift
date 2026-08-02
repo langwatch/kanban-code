@@ -42,7 +42,7 @@ public enum JsonlParser {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             guard !line.isEmpty else { continue }
 
             // Quick pre-filter before JSON parsing
@@ -149,7 +149,7 @@ public enum JsonlParser {
         let cdRegex = /cd\s+([^\s;&]+)\s*&&/
         var branches = Set<DiscoveredBranch>()
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             guard !line.isEmpty else { continue }
 
             // Only parse lines that might contain tool_use (Bash commands)

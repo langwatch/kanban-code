@@ -1,11 +1,13 @@
 import SwiftUI
 import KanbanCodeCore
+import struct KanbanCodeCore.Link
 
 struct BoardView: View {
     var store: BoardStore
     @State private var dragState = DragState()
     @State private var sidebarReorderState = SidebarReorderState()
     @State private var renamingPinnedCardId: String?
+    @State private var collapsedPinnedSubagentParents: Set<String> = []
     var onOpenChannel: (String) -> Void = { _ in }
     var onNewChannel: () -> Void = {}
     var onDeleteChannel: (String) -> Void = { _ in }
@@ -17,6 +19,7 @@ struct BoardView: View {
     var onForkCard: (String, Bool) -> Void = { _, _ in }
     var onCopyResumeCmd: (String) -> Void = { _ in }
     var onCopyConversationMarkdown: (String) -> Void = { _ in }
+    let onShowSubagents: (String) -> Void
     var onTrimSession: (String) -> Void = { _ in }
     var onDiscoverCard: (String) -> Void = { _ in }
     var onCleanupWorktree: (String) -> Void = { _ in }
@@ -24,6 +27,7 @@ struct BoardView: View {
     var onArchiveCard: (String) -> Void = { _ in }
     var onDeleteCard: (String) -> Void = { _ in }
     let onSetCardPinned: (String, Bool) -> Void
+    let onSetSelfCompactContextThreshold: (String, Int?) -> Void
     var availableProjects: [(name: String, path: String)] = []
     var onMoveToProject: (String, String) -> Void = { _, _ in }
     var onMoveToFolder: (String) -> Void = { _ in }
@@ -42,10 +46,32 @@ struct BoardView: View {
         boardContent
     }
 
+    private var activeSubagentsByParent: [String: [KanbanCodeCard]] {
+        Dictionary(grouping: store.state.filteredCards.filter {
+            $0.link.parentCardId != nil && !$0.link.manuallyArchived
+        }) { $0.link.parentCardId! }
+        .mapValues { cards in
+            cards.sorted {
+                let left = $0.link.lastActivity ?? $0.link.updatedAt
+                let right = $1.link.lastActivity ?? $1.link.updatedAt
+                return left == right ? $0.id < $1.id : left > right
+            }
+        }
+    }
+
+    private var activeSubagentCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: activeSubagentsByParent.values.flatMap { $0 }.map { ($0.id, $0) })
+    }
+
+    private var activeSubagentLinks: [String: Link] {
+        Dictionary(uniqueKeysWithValues: activeSubagentCardsById.values.map { ($0.id, $0.link) })
+    }
+
     @ViewBuilder
     private var channelsPseudoColumn: some View {
         let channels = store.state.channels
         let pinnedCards = store.state.pinnedCards
+        let descendantCounts = SubagentHierarchy.descendantCounts(in: store.state.links)
         if !channels.isEmpty || !pinnedCards.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 if !channels.isEmpty {
@@ -116,7 +142,13 @@ struct BoardView: View {
                             reorderState: sidebarReorderState,
                             onMove: reorderPinnedCard
                         ) {
-                            pinnedCardView(for: card)
+                            pinnedCardView(for: card, descendantCounts: descendantCounts)
+                        }
+                        ForEach(visiblePinnedSubagents(for: card.id)) { row in
+                            if let child = activeSubagentCardsById[row.cardId] {
+                                pinnedCardView(for: child, descendantCounts: descendantCounts)
+                                    .padding(.leading, CGFloat(row.depth * 16))
+                            }
                         }
                     }
                     if pinnedCards.count > 1 {
@@ -142,7 +174,8 @@ struct BoardView: View {
     }
 
     private var boardContent: some View {
-        ScrollViewReader { proxy in
+        let descendantCounts = SubagentHierarchy.descendantCounts(in: store.state.links)
+        return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: true) {
                 HStack(alignment: .top, spacing: 6) {
                     channelsPseudoColumn
@@ -178,8 +211,12 @@ struct BoardView: View {
                             onForkCard: onForkCard,
                             onCopyResumeCmd: onCopyResumeCmd,
                             onCopyConversationMarkdown: onCopyConversationMarkdown,
+                            onShowSubagents: onShowSubagents,
+                            subagentsByParent: activeSubagentsByParent,
+                            descendantCounts: descendantCounts,
                             onTrimSession: onTrimSession,
                             onSetCardPinned: onSetCardPinned,
+                            onSetSelfCompactContextThreshold: onSetSelfCompactContextThreshold,
                             onDiscoverCard: onDiscoverCard,
                             onCleanupWorktree: onCleanupWorktree,
                             canCleanupWorktree: canCleanupWorktree,
@@ -203,14 +240,15 @@ struct BoardView: View {
             .onChange(of: store.state.selectedCardId) {
                 // Scroll to the column containing the selected card
                 guard let selectedId = store.state.selectedCardId else { return }
-                if store.state.pinnedCards.contains(where: { $0.id == selectedId }) {
+                let rootId = SubagentHierarchy.rootId(of: selectedId, in: store.state.links)
+                if store.state.pinnedCards.contains(where: { $0.id == rootId }) {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         proxy.scrollTo("channels", anchor: .leading)
                     }
                     return
                 }
                 for col in store.state.visibleColumns {
-                    if store.state.cards(in: col).contains(where: { $0.id == selectedId }) {
+                    if store.state.cards(in: col).contains(where: { $0.id == rootId }) {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             proxy.scrollTo(col, anchor: .center)
                         }
@@ -278,7 +316,7 @@ struct BoardView: View {
             set: { if !$0 { renamingPinnedCardId = nil } }
         )) {
             if let cardId = renamingPinnedCardId,
-               let card = store.state.pinnedCards.first(where: { $0.id == cardId }) {
+               let card = store.state.filteredCards.first(where: { $0.id == cardId }) {
                 RenameSessionDialog(
                     currentName: card.link.name ?? card.displayTitle,
                     isPresented: Binding(
@@ -291,12 +329,23 @@ struct BoardView: View {
         }
     }
 
-    private func pinnedCardView(for card: KanbanCodeCard) -> CardView {
+    private func pinnedCardView(
+        for card: KanbanCodeCard,
+        descendantCounts: [String: Int]
+    ) -> CardView {
         CardView(
             card: card,
             isSelected: card.id == store.state.selectedCardId,
             onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
+            subagentCount: descendantCounts[card.id] ?? 0,
+            activeDirectSubagentCount: activeSubagentsByParent[card.id]?.count ?? 0,
+            onShowSubagents: { onShowSubagents(card.id) },
+            subagentsExpanded: !collapsedPinnedSubagentParents.contains(card.id),
+            onToggleSubagents: { togglePinnedSubagents(card.id) },
             onSetPinned: { isPinned in onSetCardPinned(card.id, isPinned) },
+            onSetSelfCompactContextThreshold: { threshold in
+                onSetSelfCompactContextThreshold(card.id, threshold)
+            },
             onSelect: {
                 let newId = store.state.selectedCardId == card.id ? nil : card.id
                 store.dispatch(.selectCard(cardId: newId))
@@ -319,5 +368,21 @@ struct BoardView: View {
             enabledAssistants: enabledAssistants,
             onMigrateAssistant: { target in onMigrateAssistant(card.id, target) }
         )
+    }
+
+    private func visiblePinnedSubagents(for parentId: String) -> [SubagentHierarchyRow] {
+        SubagentHierarchy.visibleDescendants(
+            of: parentId,
+            in: activeSubagentLinks,
+            collapsedParentIds: collapsedPinnedSubagentParents
+        )
+    }
+
+    private func togglePinnedSubagents(_ cardId: String) {
+        if collapsedPinnedSubagentParents.contains(cardId) {
+            collapsedPinnedSubagentParents.remove(cardId)
+        } else {
+            collapsedPinnedSubagentParents.insert(cardId)
+        }
     }
 }

@@ -48,13 +48,36 @@ public enum ShellCommand {
     /// Background queue for blocking process I/O — never touches the main thread.
     private static let processQueue = DispatchQueue(label: "kanban.shell", qos: .userInitiated, attributes: .concurrent)
 
+    /// Separate from `processQueue` so pipe readers can never be starved by the
+    /// waiters they are supposed to release.
+    private static let drainQueue = DispatchQueue(label: "kanban.shell.drain", qos: .userInitiated, attributes: .concurrent)
+
+    /// Collects a pipe's bytes from a reader thread for the waiter to pick up.
+    private final class OutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func store(_ bytes: Data) {
+            lock.lock()
+            data = bytes
+            lock.unlock()
+        }
+
+        var value: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return data
+        }
+    }
+
     /// Run a command and capture its output. All blocking I/O runs on a background
     /// dispatch queue so the Swift cooperative thread pool (and main thread) stays free.
     public static func run(
         _ executable: String,
         arguments: [String] = [],
         currentDirectory: String? = nil,
-        stdin: String? = nil
+        stdin: String? = nil,
+        timeout: TimeInterval = 300
     ) async throws -> Result {
         let env = userEnvironment
         return try await withCheckedThrowingContinuation { continuation in
@@ -87,17 +110,40 @@ public enum ShellCommand {
                     return
                 }
 
-                // Read pipe data BEFORE waitUntilExit to avoid deadlock when output
-                // exceeds the pipe buffer (~64KB).
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                // Drain both pipes before waiting, and drain them concurrently:
+                // reading stdout to EOF first deadlocks whenever the child fills
+                // the ~64KB stderr buffer, because it then blocks writing and
+                // never closes stdout.
+                let stdoutBuffer = OutputBuffer()
+                let stderrBuffer = OutputBuffer()
+                let drained = DispatchGroup()
+                for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
+                    drained.enter()
+                    drainQueue.async {
+                        buffer.store(pipe.fileHandleForReading.readDataToEndOfFile())
+                        drained.leave()
+                    }
+                }
+
+                // A child that never exits would otherwise strand this call, and
+                // with it whatever the app was doing: a launch whose prompt never
+                // gets submitted, a pane that never refreshes.
+                if drained.wait(timeout: .now() + timeout) == .timedOut {
+                    process.terminate()
+                    _ = drained.wait(timeout: .now() + 5)
+                    continuation.resume(throwing: ShellCommandError.timedOut(
+                        command: ([executable] + arguments).joined(separator: " "),
+                        seconds: timeout
+                    ))
+                    return
+                }
 
                 process.waitUntilExit()
 
                 let result = Result(
                     exitCode: process.terminationStatus,
-                    stdout: String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                    stderr: String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    stdout: String(data: stdoutBuffer.value, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                    stderr: String(data: stderrBuffer.value, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 )
                 continuation.resume(returning: result)
             }
@@ -142,5 +188,16 @@ public enum ShellCommand {
             }
         }
         return nil
+    }
+}
+
+public enum ShellCommandError: Error, LocalizedError {
+    case timedOut(command: String, seconds: TimeInterval)
+
+    public var errorDescription: String? {
+        switch self {
+        case .timedOut(let command, let seconds):
+            "`\(command)` did not finish within \(Int(seconds))s and was terminated"
+        }
     }
 }

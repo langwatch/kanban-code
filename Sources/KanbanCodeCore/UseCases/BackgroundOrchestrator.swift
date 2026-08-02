@@ -385,18 +385,39 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
         }
 
         let settings = (try? await SettingsStore().read()) ?? Settings()
-        guard settings.selfCompact.enabled else { return false }
-
-        let queueRules = settings.selfCompact.rules.filter { $0.action == .queuePrompt }
+        if !link.effectiveAssistant.supportsContextThresholdSelfCompact {
+            let knownWarningBodies = Set(
+                (settings.selfCompact.rules + SelfCompactRule.defaults)
+                    .filter { $0.action == .queuePrompt }
+                    .map { $0.message.trimmingCharacters(in: .whitespacesAndNewlines) }
+            )
+            return prompt.selfCompactThresholdTokens != nil || knownWarningBodies.contains(body)
+        }
+        let queueRules = SelfCompactPolicy.rules(
+            cardThresholdTokens: link.selfCompactContextThresholdTokens,
+            globalSettings: settings.selfCompact
+        ).filter { $0.action == .queuePrompt }
         let threshold: Int?
         if let promptThreshold = prompt.selfCompactThresholdTokens {
-            threshold = queueRules.first(where: { $0.thresholdTokens == promptThreshold })?.thresholdTokens
-                ?? promptThreshold
+            guard queueRules.contains(where: { $0.thresholdTokens == promptThreshold }) else {
+                return true
+            }
+            threshold = promptThreshold
         } else {
             guard !body.isEmpty else { return false }
             threshold = queueRules
                 .first(where: { $0.message.trimmingCharacters(in: .whitespacesAndNewlines) == body })?
                 .thresholdTokens
+            if threshold == nil {
+                let knownWarningBodies = Set(
+                    (settings.selfCompact.rules + SelfCompactRule.defaults)
+                        .filter { $0.action == .queuePrompt }
+                        .map { $0.message.trimmingCharacters(in: .whitespacesAndNewlines) }
+                )
+                if knownWarningBodies.contains(body) {
+                    return true
+                }
+            }
         }
 
         guard let threshold else {

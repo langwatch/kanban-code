@@ -70,6 +70,26 @@ struct ContextUsageReaderTests {
         #expect(usage?.model == nil)
     }
 
+    @Test("Statusline display names reduce to a --model alias")
+    func modelAliasFromDisplayName() {
+        func usage(_ model: String?) -> ContextUsage {
+            ContextUsage(
+                usedPercentage: 10,
+                contextWindowSize: 1_000_000,
+                totalInputTokens: 0,
+                totalOutputTokens: 0,
+                model: model
+            )
+        }
+
+        #expect(usage("Opus 5 (1M context)").modelAlias == "opus")
+        #expect(usage("Fable 5").modelAlias == "fable")
+        #expect(usage("Claude Sonnet 4.5").modelAlias == "sonnet")
+        #expect(usage("claude-opus-4-5-20251101").modelAlias == "opus")
+        #expect(usage(nil).modelAlias == nil)
+        #expect(usage("5").modelAlias == nil)
+    }
+
     @Test("Returns nil when required fields are missing")
     func missingRequired() throws {
         let dir = try makeTempDir()

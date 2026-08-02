@@ -193,6 +193,40 @@ struct LinkAssistantCodableTests {
         #expect(decoded.isPinned)
     }
 
+    @Test("Subagent relationship and model override round-trip through JSON")
+    func subagentFieldsRoundTrip() throws {
+        let link = Link(
+            id: "card_child",
+            parentCardId: "card_parent",
+            modelOverride: "opus",
+            selfCompactContextThresholdTokens: 250_000,
+            assistant: .claude
+        )
+        let data = try JSONEncoder().encode(link)
+        let decoded = try JSONDecoder().decode(Link.self, from: data)
+        #expect(decoded.parentCardId == "card_parent")
+        #expect(decoded.modelOverride == "opus")
+        #expect(decoded.selfCompactContextThresholdTokens == 250_000)
+    }
+
+    @Test("Legacy cards decode without a parent or model override")
+    func legacyCardHasNoSubagentFields() throws {
+        let json = """
+        {
+            "id": "card_legacy",
+            "column": "backlog",
+            "manualOverrides": {},
+            "manuallyArchived": false,
+            "source": "manual",
+            "isRemote": false
+        }
+        """
+        let decoded = try JSONDecoder().decode(Link.self, from: Data(json.utf8))
+        #expect(decoded.parentCardId == nil)
+        #expect(decoded.modelOverride == nil)
+        #expect(decoded.selfCompactContextThresholdTokens == nil)
+    }
+
     @Test("Link without pinnedAt decodes as unpinned")
     func backwardCompatNoPinnedAt() throws {
         let json = """

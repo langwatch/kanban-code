@@ -121,6 +121,9 @@ struct SettingsView: View {
             SelfCompactSettingsView()
                 .tabItem { Label("Self-Compact", systemImage: "arrow.triangle.2.circlepath") }
 
+            SubagentSettingsView()
+                .tabItem { Label("Subagents", systemImage: "point.3.connected.trianglepath.dotted") }
+
             NotificationSettingsView()
                 .tabItem { Label("Notifications", systemImage: "bell") }
 
@@ -150,6 +153,68 @@ struct SettingsView: View {
         }
         ghAvailable = await GhCliAdapter().isAvailable()
         tmuxAvailable = await TmuxAdapter().isAvailable()
+    }
+}
+
+// MARK: - Subagents
+
+struct SubagentSettingsView: View {
+    @State private var maximumDepth = 1
+    @State private var loaded = false
+    private let settingsStore = SettingsStore()
+
+    var body: some View {
+        Form {
+            Section("Hierarchy") {
+                Stepper(value: $maximumDepth, in: 0...SubagentSettings.maximumSupportedDepth) {
+                    HStack {
+                        Text("Maximum subagent depth")
+                        Spacer()
+                        Text(maximumDepth == 0 ? "Disabled" : "\(maximumDepth)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: maximumDepth) { save() }
+
+                Text(maximumDepthDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("CLI") {
+                Text("Create a child from an agent's primary tmux session with `kanban subagent spawn`. Use `kanban subagent --help` for fork, reporting, archive, resume, transcript, and capture commands.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task {
+            maximumDepth = (try? await settingsStore.read().subagents.maximumDepth) ?? 1
+            loaded = true
+        }
+    }
+
+    private var maximumDepthDescription: String {
+        switch maximumDepth {
+        case 0:
+            "Agents cannot create subagents."
+        case 1:
+            "Top-level cards can create children, but those children cannot create more agents."
+        default:
+            "Top-level cards can create subagent hierarchies up to \(maximumDepth) levels deep."
+        }
+    }
+
+    private func save() {
+        guard loaded else { return }
+        Task {
+            guard var settings = try? await settingsStore.read() else { return }
+            settings.subagents.maximumDepth = maximumDepth
+            try? await settingsStore.write(settings)
+            NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
+        }
     }
 }
 
@@ -486,7 +551,7 @@ struct SelfCompactSettingsView: View {
                     .labelsHidden()
                 }
 
-                Text("Kanban Code reads Claude's statusline context usage for live cards. Prompt rules are queued for the agent and auto-sent when it finishes; compact rules paste `/compact` directly into tmux.")
+                Text("Kanban Code reads Claude's statusline context usage for live cards. Queued messages wait for the agent to go idle, steered messages are pasted straight away and read between turns, and interrupts stop the current turn with Escape first.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -508,6 +573,7 @@ struct SelfCompactSettingsView: View {
                             }
                             .labelsHidden()
                             .frame(width: 150)
+                            .help(rule.action.detail)
                             .onChange(of: rule.action) { scheduleSave() }
 
                             Spacer()
@@ -540,7 +606,7 @@ struct SelfCompactSettingsView: View {
                         config.rules.append(SelfCompactRule(
                             id: UUID().uuidString,
                             thresholdTokens: 800_000,
-                            action: .compactNow,
+                            action: .interrupt,
                             message: "/compact"
                         ))
                         config.rules.sort { $0.thresholdTokens < $1.thresholdTokens }

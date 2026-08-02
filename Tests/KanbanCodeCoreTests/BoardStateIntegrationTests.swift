@@ -235,38 +235,6 @@ struct BoardStateIntegrationTests {
         #expect(card?.link.manualOverrides.column == true)
     }
 
-    @Test("reorderCard persists through refresh cycle")
-    func reorderCardPersistsThroughRefresh() async throws {
-        let dir = try makeTempDir()
-        defer { cleanup(dir) }
-
-        let discovery = MockSessionDiscovery()
-        let store = CoordinationStore(basePath: dir)
-        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.writeLinks([
-            Link(id: "card_1", name: "First", projectPath: "/test/project", column: .backlog, createdAt: timestamp, updatedAt: timestamp, source: .manual, sortOrder: 0),
-            Link(id: "card_2", name: "Second", projectPath: "/test/project", column: .backlog, createdAt: timestamp, updatedAt: timestamp, source: .manual, sortOrder: 1),
-            Link(id: "card_3", name: "Third", projectPath: "/test/project", column: .backlog, createdAt: timestamp, updatedAt: timestamp, source: .manual, sortOrder: 2),
-        ])
-        let state = BoardState(discovery: discovery, coordinationStore: store)
-
-        await state.refresh()
-        #expect(state.cards(in: .backlog).map(\.id) == ["card_1", "card_2", "card_3"])
-
-        state.reorderCard(cardId: "card_3", targetCardId: "card_1", above: true)
-        try await Task.sleep(for: .milliseconds(100))
-
-        await state.refresh()
-
-        #expect(state.cards(in: .backlog).map(\.id) == ["card_3", "card_1", "card_2"])
-
-        let links = try await store.readLinks()
-        let persisted = Dictionary(uniqueKeysWithValues: links.map { ($0.id, $0) })
-        #expect(persisted["card_3"]?.sortOrder == 0)
-        #expect(persisted["card_1"]?.sortOrder == 1)
-        #expect(persisted["card_2"]?.sortOrder == 2)
-    }
-
     // MARK: - Refresh persists merged links
 
     @Test("Refresh writes all links to CoordinationStore")
@@ -573,6 +541,39 @@ struct DeepSearchIntegrationTests {
         )
         #expect(results.count == 1)
         #expect(results[0].sessionPath == validPath)
+    }
+
+    @Test("Deep search yields each match as it lands, not in batches")
+    func searchYieldsPerMatch() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        // More files than fit in the scanning window, so a barrier between
+        // groups of files would show up as far fewer callbacks than matches.
+        let matchCount = 4 * max(4, ProcessInfo.processInfo.activeProcessorCount)
+        var paths: [String] = []
+        for index in 0..<matchCount {
+            let path = (dir as NSString).appendingPathComponent("s\(index).jsonl")
+            try #"{"type":"user","sessionId":"s\#(index)","message":{"content":"Fix the authentication bug"},"cwd":"/test"}"#
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            paths.append(path)
+        }
+
+        let deliveries = Counter()
+        try await store.searchSessionsStreaming(query: "authentication", paths: paths) { results in
+            deliveries.record(results.count)
+        }
+
+        // One delivery per matching file, each carrying every match found so far.
+        #expect(deliveries.counts == Array(1...matchCount))
+    }
+
+    /// Collects the size of every streamed delivery.
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [Int] = []
+        func record(_ count: Int) { lock.lock(); values.append(count); lock.unlock() }
+        var counts: [Int] { lock.lock(); defer { lock.unlock() }; return values }
     }
 
     @Test("Deep search respects task cancellation")

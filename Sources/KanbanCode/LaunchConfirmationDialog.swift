@@ -16,6 +16,7 @@ struct LaunchConfirmationDialog: View {
     let sessionId: String?
     let assistant: CodingAssistant
     let initialServiceId: String?
+    let modelOverride: String?
     @Binding var isPresented: Bool
     var onLaunch: (String, Bool, String?, Bool, Bool, String?, [ImageAttachment], String?) -> Void = { _, _, _, _, _, _, _, _ in } // (editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, apiServiceId)
 
@@ -45,6 +46,7 @@ struct LaunchConfirmationDialog: View {
         promptImagePaths: [String] = [],
         assistant: CodingAssistant = .claude,
         initialServiceId: String? = nil,
+        modelOverride: String? = nil,
         isPresented: Binding<Bool>,
         onLaunch: @escaping (String, Bool, String?, Bool, Bool, String?, [ImageAttachment], String?) -> Void = { _, _, _, _, _, _, _, _ in }
     ) {
@@ -60,6 +62,7 @@ struct LaunchConfirmationDialog: View {
         self.sessionId = sessionId
         self.assistant = assistant
         self.initialServiceId = initialServiceId
+        self.modelOverride = modelOverride
         self._isPresented = isPresented
         self.onLaunch = onLaunch
         self._selectedServiceId = State(initialValue: initialServiceId)
@@ -293,7 +296,8 @@ struct LaunchConfirmationDialog: View {
             let resumeCmd = assistant.resumeCommand(
                 sessionId: sid,
                 skipPermissions: dangerouslySkipPermissions,
-                service: service
+                service: service,
+                modelOverride: modelOverride
             )
             parts.append("cd \(projectPath) && \(resumeCmd)")
         } else {
@@ -307,7 +311,8 @@ struct LaunchConfirmationDialog: View {
             parts.append(assistant.launchCommand(
                 skipPermissions: dangerouslySkipPermissions,
                 worktreeName: effectiveWorktreeName,
-                service: service
+                service: service,
+                modelOverride: modelOverride
             ))
         }
 

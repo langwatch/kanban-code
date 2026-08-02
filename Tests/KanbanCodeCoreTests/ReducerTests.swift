@@ -360,6 +360,62 @@ struct ReducerTests {
         #expect(effects.count == 3)
     }
 
+    @Test("A drag survives a reconcile that snapshotted the old order")
+    func reorderSurvivesStaleReconcile() {
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = makeLink(id: "card_1", column: .backlog, updatedAt: timestamp)
+        let second = makeLink(id: "card_2", column: .backlog, updatedAt: timestamp)
+        var state = stateWith([first, second])
+
+        let _ = Reducer.reduce(
+            state: &state,
+            action: .reorderCard(cardId: "card_2", targetCardId: "card_1", above: true)
+        )
+        state.rebuildCards()
+
+        // Reconciliation read links.json before the drag was persisted, so it
+        // echoes back the pre-drag order under a timestamp the drag never bumped.
+        let _ = Reducer.reduce(state: &state, action: .reconciled(ReconciliationResult(
+            links: [first, second],
+            sessions: [],
+            activityMap: [:],
+            tmuxSessions: []
+        )))
+        state.rebuildCards()
+
+        #expect(state.cards(in: .backlog).map(\.id) == ["card_2", "card_1"])
+        #expect(state.links["card_2"]?.sortOrder == 0)
+        #expect(state.links["card_1"]?.sortOrder == 1)
+    }
+
+    @Test("A pinned drag survives a reconcile that snapshotted the old order")
+    func reorderPinnedSurvivesStaleReconcile() {
+        let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+        var first = makeLink(id: "card_pin_first", column: .waiting, updatedAt: timestamp)
+        first.pinnedAt = Date(timeIntervalSince1970: 100)
+        first.pinnedSortOrder = 0
+        var second = makeLink(id: "card_pin_second", column: .waiting, updatedAt: timestamp)
+        second.pinnedAt = Date(timeIntervalSince1970: 200)
+        second.pinnedSortOrder = 1
+        var state = stateWith([first, second])
+
+        let _ = Reducer.reduce(
+            state: &state,
+            action: .reorderPinnedCard(cardId: "card_pin_second", targetCardId: "card_pin_first", above: true)
+        )
+        state.rebuildCards()
+
+        let _ = Reducer.reduce(state: &state, action: .reconciled(ReconciliationResult(
+            links: [first, second],
+            sessions: [],
+            activityMap: [:],
+            tmuxSessions: []
+        )))
+        state.rebuildCards()
+
+        #expect(state.pinnedCards.map(\.id) == ["card_pin_second", "card_pin_first"])
+    }
+
     // MARK: - Delete Card
 
     @Test("deleteCard removes link and returns cleanup effects")
@@ -381,6 +437,36 @@ struct ReducerTests {
         #expect(effects.contains(where: { if case .killTmuxSessions = $0 { return true }; return false }))
         #expect(effects.contains(where: { if case .deleteSessionFile = $0 { return true }; return false }))
         #expect(effects.contains(where: { if case .cleanupTerminalCache = $0 { return true }; return false }))
+    }
+
+    @Test("Deleting a parent cascades through its subagent hierarchy")
+    func deleteParentCascadesToSubagents() {
+        let parent = Link(id: "card_parent", name: "Parent")
+        let child = Link(
+            id: "card_child",
+            name: "Child",
+            parentCardId: parent.id,
+            sessionLink: SessionLink(sessionId: "child-session", sessionPath: "/child.jsonl"),
+            tmuxLink: TmuxLink(sessionName: "child-tmux")
+        )
+        let grandchild = Link(id: "card_grandchild", parentCardId: child.id)
+        var state = stateWith([parent, child, grandchild])
+        state.selectedCardId = child.id
+
+        let effects = Reducer.reduce(state: &state, action: .deleteCard(cardId: parent.id))
+
+        #expect(state.links.isEmpty)
+        #expect(state.selectedCardId == nil)
+        #expect(state.deletedCardIds == [parent.id, child.id, grandchild.id])
+        #expect(effects.filter { if case .removeLink = $0 { return true }; return false }.count == 3)
+        #expect(effects.contains(where: {
+            if case .killTmuxSessions(let names) = $0 { return names == ["child-tmux"] }
+            return false
+        }))
+        #expect(effects.contains(where: {
+            if case .deleteSessionFile(let path) = $0 { return path == "/child.jsonl" }
+            return false
+        }))
     }
 
     // MARK: - Rename Card
@@ -420,6 +506,79 @@ struct ReducerTests {
         #expect(state.pinnedCards.isEmpty)
         #expect(state.unpinnedCards(in: .waiting).map(\.id) == ["card_pin1"])
         #expect(unpinEffects.contains(where: { if case .upsertLink = $0 { return true }; return false }))
+    }
+
+    @Test("Per-card compact threshold replaces only queued compact warnings")
+    func setSelfCompactContextThresholdClearsCompactWarnings() {
+        var link = Link(id: "card_compact", name: "Compact")
+        link.selfCompactContextThresholdTokens = 250_000
+        link.queuedPrompts = [
+            QueuedPrompt(body: "old warning", sendAutomatically: true, selfCompactThresholdTokens: 250_000),
+            QueuedPrompt(body: "user work", sendAutomatically: true),
+        ]
+        var state = stateWith([link])
+
+        let effects = Reducer.reduce(
+            state: &state,
+            action: .setSelfCompactContextThreshold(cardId: link.id, thresholdTokens: 300_000)
+        )
+
+        #expect(state.links[link.id]?.selfCompactContextThresholdTokens == 300_000)
+        #expect(state.links[link.id]?.queuedPrompts?.map(\.body) == ["user work"])
+        #expect(effects.count == 1)
+    }
+
+    @Test("Clearing per-card compact threshold restores global policy selection")
+    func clearSelfCompactContextThreshold() {
+        var link = Link(id: "card_compact", selfCompactContextThresholdTokens: 250_000)
+        var state = stateWith([link])
+
+        let effects = Reducer.reduce(
+            state: &state,
+            action: .setSelfCompactContextThreshold(cardId: link.id, thresholdTokens: nil)
+        )
+
+        #expect(state.links[link.id]?.selfCompactContextThresholdTokens == nil)
+        #expect(effects.count == 1)
+    }
+
+    @Test("Invalid per-card compact threshold is rejected")
+    func invalidSelfCompactContextThreshold() {
+        let link = Link(id: "card_compact")
+        var state = stateWith([link])
+
+        let effects = Reducer.reduce(
+            state: &state,
+            action: .setSelfCompactContextThreshold(cardId: link.id, thresholdTokens: 0)
+        )
+
+        #expect(state.links[link.id]?.selfCompactContextThresholdTokens == nil)
+        #expect(effects.isEmpty)
+    }
+
+    @Test("Subagents stay out of lanes and cannot be pinned")
+    func subagentsStayNested() {
+        let parent = makeLink(id: "card_nested_parent", column: .inProgress)
+        let child = Link(
+            id: "card_nested_child",
+            name: "Child",
+            projectPath: parent.projectPath,
+            column: .inProgress,
+            source: .manual,
+            parentCardId: parent.id
+        )
+        var state = stateWith([parent, child])
+
+        let effects = Reducer.reduce(
+            state: &state,
+            action: .setCardPinned(cardId: child.id, isPinned: true)
+        )
+        state.rebuildCards()
+
+        #expect(effects.isEmpty)
+        #expect(state.cards(in: .inProgress).map(\.id) == [parent.id])
+        #expect(state.filteredCards.contains(where: { $0.id == child.id }))
+        #expect(state.pinnedCards.isEmpty)
     }
 
     @Test("archiving a pinned card clears its pin")
@@ -855,6 +1014,79 @@ struct ReducerTests {
         #expect(state.links["card_main"] != nil, "Should keep the card with sessionLink")
         #expect(state.links["card_main"]?.sessionLink?.sessionId == "s1")
         #expect(state.links["card_main"]?.worktreeLink?.branch == "feat-x")
+    }
+
+    @Test("Reconciliation preserves subagent ownership and model override")
+    func reconciliationPreservesSubagentMetadata() {
+        let parent = Link(id: "card_reconcile_parent", name: "Parent")
+        let existingChild = Link(
+            id: "card_reconcile_child",
+            name: "Child",
+            updatedAt: Date(timeIntervalSince1970: 100),
+            parentCardId: parent.id,
+            modelOverride: "opus",
+            selfCompactContextThresholdTokens: 250_000,
+            sessionLink: SessionLink(sessionId: "child-session", sessionPath: "/child.jsonl")
+        )
+        let discoveredChild = Link(
+            id: existingChild.id,
+            name: existingChild.name,
+            updatedAt: Date(timeIntervalSince1970: 200),
+            source: .discovered,
+            sessionLink: existingChild.sessionLink,
+            tmuxLink: TmuxLink(sessionName: "child-tmux")
+        )
+        var state = stateWith([parent, existingChild])
+        let result = ReconciliationResult(
+            links: [parent, discoveredChild],
+            sessions: [],
+            activityMap: [:],
+            tmuxSessions: ["child-tmux"]
+        )
+
+        let _ = Reducer.reduce(state: &state, action: .reconciled(result))
+        state.rebuildCards()
+
+        #expect(state.links[existingChild.id]?.parentCardId == parent.id)
+        #expect(state.links[existingChild.id]?.modelOverride == "opus")
+        #expect(state.links[existingChild.id]?.selfCompactContextThresholdTokens == 250_000)
+        #expect(state.cards(in: state.links[existingChild.id]!.column).contains(where: { $0.id == existingChild.id }) == false)
+    }
+
+    @Test("Cross-assistant migration preserves ownership but clears assistant-specific launch settings")
+    func migrationPreservesOwnershipAndClearsLaunchSettings() {
+        let parent = Link(id: "card_migration_parent")
+        var child = Link(
+            id: "card_migration_child",
+            parentCardId: parent.id,
+            modelOverride: "sonnet",
+            selfCompactContextThresholdTokens: 250_000,
+            sessionLink: SessionLink(sessionId: "old", sessionPath: "/old.jsonl"),
+            assistant: .claude
+        )
+        child.apiServiceId = "anthropic-service"
+        child.queuedPrompts = [
+            QueuedPrompt(body: "compact warning", sendAutomatically: true, selfCompactThresholdTokens: 250_000),
+            QueuedPrompt(body: "user work", sendAutomatically: true),
+        ]
+        var state = stateWith([parent, child])
+
+        let _ = Reducer.reduce(
+            state: &state,
+            action: .migrateSession(
+                cardId: child.id,
+                newAssistant: .codex,
+                newSessionId: "new",
+                newSessionPath: "/new.jsonl"
+            )
+        )
+
+        #expect(state.links[child.id]?.parentCardId == parent.id)
+        #expect(state.links[child.id]?.assistant == .codex)
+        #expect(state.links[child.id]?.modelOverride == nil)
+        #expect(state.links[child.id]?.apiServiceId == nil)
+        #expect(state.links[child.id]?.selfCompactContextThresholdTokens == 250_000)
+        #expect(state.links[child.id]?.queuedPrompts?.map(\.body) == ["user work"])
     }
 
     @Test("Reconciled dedup absorbs bare orphans into manual card")

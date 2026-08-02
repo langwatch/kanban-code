@@ -20,7 +20,8 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
         skipPermissions: Bool = false,
         preamble: String? = nil,
         assistant: CodingAssistant = .claude,
-        service: APIService? = nil
+        service: APIService? = nil,
+        modelOverride: String? = nil
     ) async throws -> String {
 
         let cmd: String
@@ -32,7 +33,8 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
             var built = assistant.launchCommand(
                 skipPermissions: skipPermissions,
                 worktreeName: worktreeName,
-                service: service
+                service: service,
+                modelOverride: modelOverride
             )
 
             // Prepend environment variables (SHELL override + KANBAN_CODE_* vars)
@@ -67,7 +69,8 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
         skipPermissions: Bool = false,
         preamble: String? = nil,
         assistant: CodingAssistant = .claude,
-        service: APIService? = nil
+        service: APIService? = nil,
+        modelOverride: String? = nil
     ) async throws -> String {
         // Kill stale tmux session if one exists — we always want a fresh resume
         let existing = try await tmux.listSessions()
@@ -84,7 +87,8 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
             var built = assistant.resumeCommand(
                 sessionId: sessionId,
                 skipPermissions: skipPermissions,
-                service: service
+                service: service,
+                modelOverride: modelOverride
             )
             let envPrefix = buildEnvPrefix(shellOverride: shellOverride, extraEnv: extraEnv)
             if !envPrefix.isEmpty {

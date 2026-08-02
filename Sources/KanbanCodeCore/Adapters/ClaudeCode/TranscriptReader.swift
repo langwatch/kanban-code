@@ -170,7 +170,7 @@ public enum TranscriptReader {
                     var turnIndex = 0
                     var pendingAssistant: ConversationTurn?
 
-                    for try await line in handle.bytes.lines {
+                    for try await line in handle.blockLines {
                         if Task.isCancelled { break }
                         lineNumber += 1
                         guard !line.isEmpty, line.contains("\"type\"") else { continue }
@@ -281,7 +281,7 @@ public enum TranscriptReader {
                     var turnIndex = 0
                     let queryLower = query.lowercased()
 
-                    for try await line in handle.bytes.lines {
+                    for try await line in handle.blockLines {
                         if Task.isCancelled { break }
                         guard !line.isEmpty, line.contains("\"type\"") else { continue }
 
@@ -331,7 +331,7 @@ public enum TranscriptReader {
         var lineNumber = 0
         var turnIndex = 0
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             lineNumber += 1
             guard !line.isEmpty, line.contains("\"type\"") else { continue }
 

@@ -20,6 +20,8 @@ public struct Settings: Codable, Sendable {
     public var defaultAPIServiceIds: [String: String]
     /// Automatic context-limit guard for Claude sessions.
     public var selfCompact: SelfCompactSettings
+    /// First-class subagent hierarchy limits.
+    public var subagents: SubagentSettings
 
     public init(
         projects: [Project] = [],
@@ -36,7 +38,8 @@ public struct Settings: Codable, Sendable {
         enabledAssistants: [CodingAssistant] = CodingAssistant.allCases,
         apiServices: [APIService] = [],
         defaultAPIServiceIds: [String: String] = [:],
-        selfCompact: SelfCompactSettings = SelfCompactSettings()
+        selfCompact: SelfCompactSettings = SelfCompactSettings(),
+        subagents: SubagentSettings = SubagentSettings()
     ) {
         self.projects = projects
         self.globalView = globalView
@@ -53,6 +56,7 @@ public struct Settings: Codable, Sendable {
         self.apiServices = apiServices
         self.defaultAPIServiceIds = defaultAPIServiceIds
         self.selfCompact = selfCompact
+        self.subagents = subagents
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -60,7 +64,7 @@ public struct Settings: Codable, Sendable {
         case promptTemplate, githubIssuePromptTemplate, columnOrder, hasCompletedOnboarding, defaultAssistant
         case enabledAssistants
         case apiServices, defaultAPIServiceIds
-        case selfCompact
+        case selfCompact, subagents
         case skill // backward-compat: old name for promptTemplate
     }
 
@@ -100,6 +104,7 @@ public struct Settings: Codable, Sendable {
         apiServices = (try? container.decodeIfPresent([APIService].self, forKey: .apiServices)) ?? []
         defaultAPIServiceIds = (try? container.decodeIfPresent([String: String].self, forKey: .defaultAPIServiceIds)) ?? [:]
         selfCompact = (try? container.decodeIfPresent(SelfCompactSettings.self, forKey: .selfCompact)) ?? SelfCompactSettings()
+        subagents = (try? container.decodeIfPresent(SubagentSettings.self, forKey: .subagents)) ?? SubagentSettings()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -119,6 +124,7 @@ public struct Settings: Codable, Sendable {
         try container.encode(apiServices, forKey: .apiServices)
         try container.encode(defaultAPIServiceIds, forKey: .defaultAPIServiceIds)
         try container.encode(selfCompact, forKey: .selfCompact)
+        try container.encode(subagents, forKey: .subagents)
         // Note: "skill" is NOT encoded — only read for backward-compat
     }
 }
@@ -223,89 +229,29 @@ public struct SessionTimeoutSettings: Codable, Sendable {
     }
 }
 
-public enum SelfCompactAction: String, Codable, Sendable, CaseIterable {
-    case queuePrompt
-    case compactNow
+public struct SubagentSettings: Codable, Sendable, Equatable {
+    public static let maximumSupportedDepth = 5
 
-    public var displayName: String {
-        switch self {
-        case .queuePrompt: "Queue prompt"
-        case .compactNow: "Compact now"
+    public var maximumDepth: Int {
+        didSet {
+            maximumDepth = min(Self.maximumSupportedDepth, max(0, maximumDepth))
         }
     }
-}
 
-public struct SelfCompactRule: Identifiable, Codable, Sendable, Equatable {
-    public var id: String
-    public var thresholdTokens: Int
-    public var action: SelfCompactAction
-    public var message: String
-
-    public init(
-        id: String,
-        thresholdTokens: Int,
-        action: SelfCompactAction,
-        message: String
-    ) {
-        self.id = id
-        self.thresholdTokens = thresholdTokens
-        self.action = action
-        self.message = message
-    }
-
-    public static let defaults: [SelfCompactRule] = [
-        SelfCompactRule(
-            id: "ctx-500k",
-            thresholdTokens: 500_000,
-            action: .queuePrompt,
-            message: "You are above the 500k context limit. Whenever it is convenient, use the kanban CLI to send yourself a self-compact."
-        ),
-        SelfCompactRule(
-            id: "ctx-600k",
-            thresholdTokens: 600_000,
-            action: .queuePrompt,
-            message: "You are above the 600k context limit. Please compact yourself soon using the kanban CLI self-compact command."
-        ),
-        SelfCompactRule(
-            id: "ctx-700k",
-            thresholdTokens: 700_000,
-            action: .queuePrompt,
-            message: "You are above the 700k context limit. Compact yourself IMMEDIATELY using the kanban CLI self-compact command."
-        ),
-        SelfCompactRule(
-            id: "ctx-750k",
-            thresholdTokens: 750_000,
-            action: .compactNow,
-            message: "/compact"
-        ),
-    ]
-}
-
-public struct SelfCompactSettings: Codable, Sendable, Equatable {
-    public var enabled: Bool
-    public var pollIntervalSeconds: Int
-    public var rules: [SelfCompactRule]
-
-    public init(
-        enabled: Bool = false,
-        pollIntervalSeconds: Int = 30,
-        rules: [SelfCompactRule] = SelfCompactRule.defaults
-    ) {
-        self.enabled = enabled
-        self.pollIntervalSeconds = pollIntervalSeconds
-        self.rules = rules
+    public init(maximumDepth: Int = 1) {
+        self.maximumDepth = min(Self.maximumSupportedDepth, max(0, maximumDepth))
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        pollIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pollIntervalSeconds) ?? 30
-        let decodedRules = (try? c.decodeIfPresent([SelfCompactRule].self, forKey: .rules)) ?? SelfCompactRule.defaults
-        rules = decodedRules.isEmpty ? SelfCompactRule.defaults : decodedRules
+        maximumDepth = min(
+            Self.maximumSupportedDepth,
+            max(0, try c.decodeIfPresent(Int.self, forKey: .maximumDepth) ?? 1)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, pollIntervalSeconds, rules
+        case maximumDepth
     }
 }
 

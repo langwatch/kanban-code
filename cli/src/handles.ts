@@ -8,26 +8,32 @@
 
 const MAX_HANDLE_LEN = 24;
 
-/** Slugify into `@lower_snake_case`. No leading @. Empty string if nothing usable. */
+/**
+ * Slugify into `@lower_snake_case`. No leading @. Empty string if nothing usable.
+ * Dashes survive, so a card deliberately named `parser-bug` keeps reading as
+ * `@parser-bug` instead of being snake-cased into something clunkier.
+ */
 export function slugifyDisplay(display: string): string {
-  const lowered = display.toLowerCase();
-  // Replace any non [a-z0-9] run with a single underscore
-  const withUnderscores = lowered.replace(/[^a-z0-9]+/g, "_");
-  const trimmed = withUnderscores.replace(/^_+|_+$/g, "");
-  if (!trimmed) return "";
-  return trimmed;
+  const separated = display
+    .toLowerCase()
+    // Any run of characters that cannot appear in a handle becomes one underscore
+    .replace(/[^a-z0-9-]+/g, "_")
+    // A run the author put a dash in stays a dash, so "cache path - v2" reads
+    // as cache_path-v2 rather than cache_path_-_v2
+    .replace(/[_-]*-[_-]*/g, "-");
+  return separated.replace(/^[_-]+|[_-]+$/g, "");
 }
 
-/** Truncate to MAX_HANDLE_LEN, prefer ending on an underscore boundary. */
+/** Truncate to MAX_HANDLE_LEN, prefer ending on a word boundary. */
 export function truncateSlug(slug: string, maxLen: number = MAX_HANDLE_LEN): string {
   if (slug.length <= maxLen) return slug;
   const cut = slug.slice(0, maxLen);
-  // Prefer cutting at the last underscore if within the last 8 chars.
-  const lastUnderscore = cut.lastIndexOf("_");
-  if (lastUnderscore >= Math.floor(maxLen * 0.6)) {
-    return cut.slice(0, lastUnderscore);
+  // Prefer cutting at the last separator if it falls in the tail of the cut.
+  const lastSeparator = Math.max(cut.lastIndexOf("_"), cut.lastIndexOf("-"));
+  if (lastSeparator >= Math.floor(maxLen * 0.6)) {
+    return cut.slice(0, lastSeparator);
   }
-  return cut.replace(/_+$/, "");
+  return cut.replace(/[_-]+$/, "");
 }
 
 /**

@@ -1,27 +1,21 @@
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { hookEventsPath } from "../paths.js";
-import { readLinks, readSessionContext, pasteTmuxPrompt } from "../data.js";
+import { readLinks, readSessionContext, pasteTmuxPrompt, interruptTmuxPrompt } from "../data.js";
 import { upsertCard, isoNow } from "../cards.js";
 import { installHooks } from "../hooks.js";
 import { announceSuppressPath, ANNOUNCE_SUPPRESS_TTL_MS } from "../slack/announce-suppress.js";
 import { Link, QueuedPrompt, SessionContext } from "../types.js";
+import {
+  DEFAULT_SELF_COMPACT_RULES,
+  effectiveSelfCompactRules,
+  normalizeSelfCompactRules,
+  selfCompactPolicySignature,
+  type SelfCompactAction,
+  type SelfCompactRule,
+} from "../self-compact.js";
 
-export type SelfCompactAction = "queuePrompt" | "compactNow";
-export interface SelfCompactRule {
-  thresholdTokens: number;
-  action: SelfCompactAction;
-  message: string;
-}
-
-/// Thresholds + messages mirror the Swift SelfCompactRule.defaults so queued
-/// warnings match (drop-stale compares prompt body against rule.message).
-export const DEFAULT_SELF_COMPACT_RULES: SelfCompactRule[] = [
-  { thresholdTokens: 500_000, action: "queuePrompt", message: "You are above the 500k context limit. Whenever it is convenient, use the kanban CLI to send yourself a self-compact." },
-  { thresholdTokens: 600_000, action: "queuePrompt", message: "You are above the 600k context limit. Please compact yourself soon using the kanban CLI self-compact command." },
-  { thresholdTokens: 700_000, action: "queuePrompt", message: "You are above the 700k context limit. Compact yourself IMMEDIATELY using the kanban CLI self-compact command." },
-  { thresholdTokens: 750_000, action: "compactNow", message: "/compact" },
-];
+export { DEFAULT_SELF_COMPACT_RULES } from "../self-compact.js";
 
 export interface HookEvent {
   sessionId: string;
@@ -41,6 +35,8 @@ export interface DaemonOptions {
   selfCompact?: { enabled: boolean; rules?: SelfCompactRule[] };
   /// Side effect for sending text to a tmux session. Injectable for tests.
   paste?: (sessionName: string, text: string) => void;
+  /// Same, but stops the current turn with Escape first. Injectable for tests.
+  interrupt?: (sessionName: string, text: string) => void;
   /// Optional: mirror a confirmed-received prompt to the agent's Slack channel.
   /// Called on UserPromptSubmit (real receipt), never on mere paste, and never
   /// for relayed Slack-human messages. Fire-and-forget; not used in tests.
@@ -64,12 +60,16 @@ export class Daemon {
   private readonly selfCompactEnabled: boolean;
   private readonly rules: SelfCompactRule[];
   private readonly paste: (sessionName: string, text: string) => void;
+  private readonly interrupt: (sessionName: string, text: string) => void;
   private readonly announce: (slug: string, text: string) => void;
 
   /// Last time we saw a user/relay prompt per session (ms). Pauses auto-send.
   private lastPromptAt = new Map<string, number>();
   /// Highest self-compact threshold already actioned per session.
   private lastTriggered = new Map<string, number>();
+  /// Effective policy identity per session, used to avoid replaying thresholds
+  /// that were already crossed when a card setting changes.
+  private policySignatures = new Map<string, string>();
   /// Byte offset into hook-events.jsonl already consumed.
   private offset = 0;
   /// Byte offset into announce-suppress.jsonl already consumed.
@@ -84,10 +84,10 @@ export class Daemon {
     this.pollIntervalMs = opts.pollIntervalMs ?? 30_000;
     this.autoSendDelayMs = opts.autoSendDelayMs ?? 1_000;
     this.selfCompactEnabled = opts.selfCompact?.enabled ?? true;
-    this.rules = (opts.selfCompact?.rules ?? DEFAULT_SELF_COMPACT_RULES)
-      .slice()
+    this.rules = normalizeSelfCompactRules(opts.selfCompact?.rules ?? DEFAULT_SELF_COMPACT_RULES)
       .sort((a, b) => a.thresholdTokens - b.thresholdTokens);
     this.paste = opts.paste ?? ((s, t) => pasteTmuxPrompt(s, t));
+    this.interrupt = opts.interrupt ?? ((s, t) => interruptTmuxPrompt(s, t));
     this.announce = opts.announce ?? (() => {});
   }
 
@@ -250,7 +250,7 @@ export class Daemon {
     const first = card.queuedPrompts?.[0];
     if (!first || !first.sendAutomatically) return { sent: false, reason: "no-eligible" };
 
-    if (this.shouldDropStaleSelfCompact(first, sessionId)) {
+    if (this.shouldDropStaleSelfCompact(first, card)) {
       this.dequeue(card.id, first.id);
       return { sent: false, reason: "dropped-stale" };
     }
@@ -267,29 +267,63 @@ export class Daemon {
   /// Poll context usage and act on the highest newly-crossed self-compact rule.
   /// Returns a description of actions taken (handy for tests/logging).
   evaluateAutoCompact(): { sessionId: string; action: SelfCompactAction; thresholdTokens: number }[] {
-    if (!this.selfCompactEnabled) return [];
     const acted: { sessionId: string; action: SelfCompactAction; thresholdTokens: number }[] = [];
 
     for (const card of readLinks()) {
       const sessionId = card.sessionLink?.sessionId;
       const sessionName = card.tmuxLink?.sessionName;
+      const assistant = card.assistant ?? "claude";
       if (!sessionId || !sessionName || card.manuallyArchived) continue;
+      if (assistant !== "claude") {
+        this.lastTriggered.delete(sessionId);
+        this.policySignatures.delete(sessionId);
+        this.removeQueuedSelfCompactWarnings(card.id);
+        continue;
+      }
+      const rules = effectiveSelfCompactRules(
+        card.selfCompactContextThresholdTokens,
+        this.selfCompactEnabled,
+        this.rules
+      );
+      if (rules.length === 0) {
+        this.lastTriggered.delete(sessionId);
+        this.policySignatures.delete(sessionId);
+        this.removeQueuedSelfCompactWarnings(card.id);
+        continue;
+      }
       const ctx = readSessionContext(sessionId);
       if (!ctx) continue;
       const tokens = currentContextTokens(ctx);
 
-      const rule = [...this.rules].reverse().find((r) => tokens >= r.thresholdTokens);
+      const signature = selfCompactPolicySignature(rules);
+      const priorSignature = this.policySignatures.get(sessionId);
+      this.policySignatures.set(sessionId, signature);
+      if (priorSignature !== undefined && priorSignature !== signature) {
+        this.removeQueuedSelfCompactWarnings(card.id);
+        const highestAlreadyCrossed = [...rules].reverse().find((candidate) => tokens >= candidate.thresholdTokens);
+        if (highestAlreadyCrossed) this.lastTriggered.set(sessionId, highestAlreadyCrossed.thresholdTokens);
+        else this.lastTriggered.delete(sessionId);
+        continue;
+      }
+
+      const rule = [...rules].reverse().find((candidate) => tokens >= candidate.thresholdTokens);
       if (!rule) {
         this.lastTriggered.delete(sessionId); // dropped below all thresholds; allow re-trigger
+        this.removeQueuedSelfCompactWarnings(card.id);
         continue;
       }
       if (rule.thresholdTokens <= (this.lastTriggered.get(sessionId) ?? 0)) continue;
 
       if (rule.action === "queuePrompt") {
-        this.enqueueOnce(card.id, rule.message);
+        this.enqueueOnce(card.id, rule);
       } else {
-        this.paste(sessionName, "/compact");
-        this.announce(card.name ?? "", `🧹 context over ${Math.round(rule.thresholdTokens / 1000)}k - sending /compact`);
+        const body = rule.message.trim() || "/compact";
+        if (rule.action === "interrupt") {
+          this.interrupt(sessionName, body);
+        } else {
+          this.paste(sessionName, body);
+        }
+        this.announce(card.name ?? "", `🧹 context over ${Math.round(rule.thresholdTokens / 1000)}k - sending ${body.split("\n")[0]}`);
       }
       this.lastTriggered.set(sessionId, rule.thresholdTokens);
       acted.push({ sessionId, action: rule.action, thresholdTokens: rule.thresholdTokens });
@@ -297,11 +331,25 @@ export class Daemon {
     return acted;
   }
 
-  private shouldDropStaleSelfCompact(prompt: QueuedPrompt, sessionId: string): boolean {
-    if (!this.selfCompactEnabled) return false;
+  private shouldDropStaleSelfCompact(prompt: QueuedPrompt, card: Link): boolean {
+    const sessionId = card.sessionLink?.sessionId;
+    if (!sessionId) return true;
     const body = prompt.body.trim();
-    const rule = this.rules.find((r) => r.action === "queuePrompt" && r.message.trim() === body);
-    if (!rule) return false;
+    if ((card.assistant ?? "claude") !== "claude") {
+      const configuredWarningBodies = new Set(
+        this.rules.filter((rule) => rule.action === "queuePrompt").map((rule) => rule.message.trim())
+      );
+      return prompt.selfCompactThresholdTokens !== undefined || configuredWarningBodies.has(body);
+    }
+    const rules = effectiveSelfCompactRules(
+      card.selfCompactContextThresholdTokens,
+      this.selfCompactEnabled,
+      this.rules
+    );
+    const rule = prompt.selfCompactThresholdTokens !== undefined
+      ? rules.find((candidate) => candidate.action === "queuePrompt" && candidate.thresholdTokens === prompt.selfCompactThresholdTokens)
+      : rules.find((candidate) => candidate.action === "queuePrompt" && candidate.message.trim() === body);
+    if (!rule) return prompt.selfCompactThresholdTokens !== undefined;
     const ctx = readSessionContext(sessionId);
     if (!ctx) return true; // no usage data -> warning is stale
     return currentContextTokens(ctx) < rule.thresholdTokens;
@@ -318,12 +366,35 @@ export class Daemon {
     upsertCard(next);
   }
 
-  private enqueueOnce(cardId: string, body: string): void {
+  private removeQueuedSelfCompactWarnings(cardId: string): void {
+    const card = readLinks().find((candidate) => candidate.id === cardId);
+    if (!card) return;
+    const warningBodies = new Set(
+      this.rules.filter((rule) => rule.action === "queuePrompt").map((rule) => rule.message.trim())
+    );
+    const queue = card.queuedPrompts ?? [];
+    const retained = queue.filter((prompt) =>
+      prompt.selfCompactThresholdTokens === undefined && !warningBodies.has(prompt.body.trim())
+    );
+    if (retained.length !== queue.length) {
+      upsertCard({ ...card, queuedPrompts: retained, updatedAt: isoNow() });
+    }
+  }
+
+  private enqueueOnce(cardId: string, rule: SelfCompactRule): void {
     const card = readLinks().find((c) => c.id === cardId);
     if (!card) return;
     const queue = card.queuedPrompts ?? [];
-    if (queue.some((p) => p.body.trim() === body.trim())) return; // already queued
-    const prompt: QueuedPrompt = { id: randomUUID(), body, sendAutomatically: true };
-    upsertCard({ ...card, queuedPrompts: [...queue, prompt], updatedAt: isoNow() });
+    if (queue.some((prompt) => prompt.selfCompactThresholdTokens === rule.thresholdTokens)) return;
+    const retained = queue.filter((prompt) =>
+      prompt.selfCompactThresholdTokens === undefined || prompt.selfCompactThresholdTokens > rule.thresholdTokens
+    );
+    const prompt: QueuedPrompt = {
+      id: randomUUID(),
+      body: rule.message,
+      sendAutomatically: true,
+      selfCompactThresholdTokens: rule.thresholdTokens,
+    };
+    upsertCard({ ...card, queuedPrompts: [prompt, ...retained], updatedAt: isoNow() });
   }
 }

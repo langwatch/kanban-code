@@ -15,6 +15,16 @@ public struct ContextUsage: Sendable, Equatable {
     /// total and can stay high after compaction. The percentage/window pair is
     /// what backs Claude Code's visible context meter, so automation that acts
     /// on "current context" should use this value.
+    /// `--model` takes an alias such as `opus`, while the statusline reports a
+    /// display name such as "Opus 5 (1M context)". The leading family word is
+    /// the alias, which is what launching a card on the same model needs.
+    public var modelAlias: String? {
+        guard let model else { return nil }
+        let words = model.split(whereSeparator: { !$0.isLetter })
+        guard let family = words.first(where: { $0.lowercased() != "claude" }) else { return nil }
+        return family.lowercased()
+    }
+
     public var currentContextTokens: Int {
         guard contextWindowSize > 0, usedPercentage > 0 else {
             return totalInputTokens + totalOutputTokens

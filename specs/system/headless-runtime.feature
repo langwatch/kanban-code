@@ -29,8 +29,10 @@ Feature: Headless runtime engine (no macOS app)
     Given an agent has been running for a long time
     When its current context usage crosses 500k tokens
     Then a prompt instructing it to self-compact is queued
+    When usage crosses the steer threshold (700k)
+    Then the nudge is pasted straight into the session so it is read between turns
     When usage crosses the hard threshold (750k)
-    Then "/compact" is sent to the agent automatically
+    Then the current turn is interrupted with Escape and "/compact" is sent
     And a stale self-compact warning is dropped if context already dropped back below its threshold
 
   Scenario: The session runs forever across compactions

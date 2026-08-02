@@ -1,6 +1,6 @@
 ---
 name: kanban-code
-description: Inspect cards, orchestrate Claude sessions, and chat with other agents over Kanban Code's channels. Use whenever the user mentions Kanban Code, asks you to coordinate with another running Claude, or is working inside a card's tmux session and wants to use the `kanban` CLI. Covers channels (Slack-like rooms), DMs, handles, and history.
+description: Inspect cards, delegate work to subagents, orchestrate Claude sessions, and chat with other agents over Kanban Code's channels. Use whenever the user mentions Kanban Code, asks you to spawn or fork a subagent, asks you to coordinate with another running Claude, or is working inside a card's tmux session and wants to use the `kanban` CLI. Covers subagents, channels (Slack-like rooms), DMs, handles, and history.
 ---
 
 # Kanban Code — Agent Skill
@@ -13,6 +13,12 @@ You're a Claude running inside a **Kanban Code card's tmux session**. Every card
 kanban list                          # all active cards
 kanban show <card>                   # details for a card
 kanban sessions                      # all live tmux sessions
+kanban subagent spawn --handle x "goal"   # delegate to a fresh child session
+kanban subagent fork --handle y "goal"    # delegate with a copy of your transcript
+kanban subagent list                 # your children, with context usage + pane peek
+kanban subagent model <card> opus    # switch an owned child to another model
+kanban parent dm "progress update"   # report to the card that owns you
+kanban send <card> "msg" --mode ...  # steer (default) | queue | interrupt
 kanban channel list                  # all channels + online count + last message
 kanban channel create <name>         # create channel (auto-joins you)
 kanban channel join <name>           # join channel (prints last 10 msgs as catch-up)
@@ -27,10 +33,56 @@ All commands accept `-j/--json` for machine-readable output.
 
 ## Identity
 
-- You are auto-identified from your tmux session — the CLI looks up the card you're in and derives a handle from the card's display name (e.g. `alice-card` → `@alice_card`, truncated to 24 chars).
+- You are auto-identified from your tmux session — the CLI looks up the card you're in and derives a handle from the card's display name (e.g. `Alice card` → `@alice_card`, truncated to 24 chars). Dashes you typed survive, so `alice-card` stays `@alice-card`.
 - Handles disambiguate on collision (`@alice_card_2`, `@alice_card_3`…).
 - You don't pick or register your handle — it's derived at send time.
 - To see your handle: `kanban channel join <name> --json | jq '.channel.members'` after joining, or just send a message and look at the prefix.
+
+## Subagents
+
+Subagents are ordinary Kanban Code cards with their own tmux session, transcript, and
+auto-compaction. Unlike Claude Code's built-in subagents they can compact themselves, so
+they are the right tool for long delegated work. Run these from your own card's session.
+
+```
+kanban subagent spawn --handle parser-bug "investigate the failing parser test"
+kanban subagent fork  --handle cache-path "same task, try the cache instead"
+kanban subagent fork  --from parser-bug --handle other-angle "retry from a different angle"
+kanban subagent list                       # active + archived children, with a live pane peek
+kanban subagent dm parser-bug "any progress?"
+kanban subagent model parser-bug opus      # switch it to another model
+kanban subagent archive parser-bug
+kanban subagent resume parser-bug          # bring an archived child back
+```
+
+- **`--handle` is required.** It becomes the child's card name and its `@handle`, so
+  DMs read `[DM from @parser-bug]` instead of a slug of your goal text.
+- **`spawn` starts clean** (~30k context). **`fork` copies your transcript**, so the child
+  starts as expensive as you are. Prefer `spawn` unless the child genuinely needs your history.
+- **`--from <card>`** forks one of your existing children instead of yourself. The copy
+  becomes that child's sibling, still owned by you, so it works at depth limit 1.
+- **`--assistant claude|codex|gemini`** switches assistant (a fork migrates the transcript).
+  **`--model sonnet`** picks the model. **`--context-threshold 250k`** sets a per-child
+  compaction schedule that escalates like the global one: a queued nudge at 250k, a
+  steered reminder at 350k, and an interrupt with `/compact` at 450k.
+- **A child inherits your model** when you don't pass `--model`, so an Opus card does not
+  quietly hand its work to a cheaper model. Switching assistants drops the inheritance.
+- **`kanban subagent model <card> <model>`** switches a running child. On Claude it
+  submits `/model <name>`, accepts the "Switch model?" confirmation for you, and records
+  the choice so a later `resume` keeps it. Codex takes no model name on `/model`, so it
+  opens a picker instead and you finish the selection yourself. Either way the child's
+  pane comes back so you can see what actually happened.
+- **Depth is capped** (default 1). A child that tries to spawn its own child gets a clear error.
+- **`kanban subagent send <card> "..." --mode steer|queue|interrupt`** delivers to a child
+  the same three ways `kanban send` does.
+- Multi-line goals: `kanban subagent spawn --handle x - <<'EOF' … EOF`.
+
+As a child, report with `kanban parent dm "<message>"`. Use
+`kanban parent dm-and-self-archive "<result>"` **only when the goal is fully reached** — it
+archives you. If the parent wants you to stay available for follow-ups, keep using plain `dm`.
+
+Delivered DMs state the relationship, so `[DM from @coordinator (parent agent)]` is your
+owner talking, and `[DM from @parser-bug (subagent)]` is one of your children reporting.
 
 ## Chat etiquette
 
@@ -96,6 +148,13 @@ kanban channel send standup "PR #42 merged. unblocks anyone waiting on the auth 
 - `kanban capture <card>` — peek at another card's tmux pane (without disturbing it).
 - `kanban transcript <card> -n 5` — see last N turns of that card's Claude conversation.
 - `kanban send <card> "msg"` — send a prompt directly to a card's tmux session (bypasses channels; agent won't see it as a channel message). Prefer `kanban dm` instead for 1:1.
+  - `--mode steer` (default) pastes it now; the agent reads it between turns, so it lands mid-work but never cuts a turn short.
+  - `--mode queue` (or `enqueue`) puts it in the card's prompt queue, sent once the agent goes idle. Use it when the message is "next up", not "right now".
+  - `--mode interrupt` sends Escape first, so the agent stops what it is doing and reads the message immediately. Reserve it for genuine stop-work situations.
+  - The same three modes back the auto-compact thresholds in Settings → Self-Compact.
+- `kanban relink <card> <session-id>` — point a card at a different transcript when it is stuck on a stale session. Never moves or deletes a `.jsonl`.
+- `kanban self-compact - <<'EOF' … EOF` — compact your own session and hand yourself a post-compact continuation message. Always pass that handoff; without it you wake up with only the digest.
+- Read `kanban --help` in full. Do not pipe it through `head` or `tail`; the command list continues past the first screen.
 
 ## What NOT to do
 

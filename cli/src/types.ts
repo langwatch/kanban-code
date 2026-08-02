@@ -78,6 +78,7 @@ export interface QueuedPrompt {
   body: string;
   sendAutomatically: boolean;
   imagePaths?: string[];
+  selfCompactThresholdTokens?: number;
 }
 
 export interface BrowserTabInfo {
@@ -111,6 +112,9 @@ export interface Link {
   source: LinkSource;
   promptBody?: string;
   promptImagePaths?: string[];
+  parentCardId?: string;
+  modelOverride?: string;
+  selfCompactContextThresholdTokens?: number;
   sessionLink?: SessionLink;
   tmuxLink?: TmuxLink;
   worktreeLink?: WorktreeLink;
@@ -154,6 +158,7 @@ export interface Settings {
   hasCompletedOnboarding?: boolean;
   defaultAssistant?: CodingAssistant;
   enabledAssistants?: CodingAssistant[];
+  subagents?: { maximumDepth?: number };
 }
 
 export interface SessionContext {
@@ -173,6 +178,9 @@ export interface CardSummary {
   column: KanbanColumn;
   project?: string;
   assistant?: CodingAssistant;
+  modelOverride?: string;
+  selfCompactContextThresholdTokens?: number;
+  subagentDepth?: number;
   sessionId?: string;
   tmuxSession?: string;
   tmuxAlive: boolean;

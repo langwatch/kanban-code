@@ -1,12 +1,14 @@
 import SwiftUI
 import AppKit
 import KanbanCodeCore
+import struct KanbanCodeCore.Link
 
 struct ListBoardView: View {
     var store: BoardStore
     @State private var dragState = DragState()
     @State private var sidebarReorderState = SidebarReorderState()
     @State private var renamingPinnedCardId: String?
+    @State private var collapsedPinnedSubagentParents: Set<String> = []
     var onOpenChannel: (String) -> Void = { _ in }
     var onNewChannel: () -> Void = {}
     var onDeleteChannel: (String) -> Void = { _ in }
@@ -18,8 +20,10 @@ struct ListBoardView: View {
     var onForkCard: (String, Bool) -> Void = { _, _ in }
     var onCopyResumeCmd: (String) -> Void = { _ in }
     var onCopyConversationMarkdown: (String) -> Void = { _ in }
+    let onShowSubagents: (String) -> Void
     var onTrimSession: (String) -> Void = { _ in }
     let onSetCardPinned: (String, Bool) -> Void
+    let onSetSelfCompactContextThreshold: (String, Int?) -> Void
     var onDiscoverCard: (String) -> Void = { _ in }
     var onCleanupWorktree: (String) -> Void = { _ in }
     var canCleanupWorktree: (String) -> Bool = { _ in true }
@@ -46,6 +50,27 @@ struct ListBoardView: View {
         }
     }
 
+    private var activeSubagentCardsByParent: [String: [KanbanCodeCard]] {
+        Dictionary(grouping: store.state.filteredCards.filter {
+            $0.link.parentCardId != nil && !$0.link.manuallyArchived
+        }) { $0.link.parentCardId! }
+        .mapValues { cards in
+            cards.sorted {
+                let left = $0.link.lastActivity ?? $0.link.updatedAt
+                let right = $1.link.lastActivity ?? $1.link.updatedAt
+                return left == right ? $0.id < $1.id : left > right
+            }
+        }
+    }
+
+    private var activeSubagentCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: activeSubagentCardsByParent.values.flatMap { $0 }.map { ($0.id, $0) })
+    }
+
+    private var activeSubagentLinks: [String: Link] {
+        Dictionary(uniqueKeysWithValues: activeSubagentCardsById.values.map { ($0.id, $0.link) })
+    }
+
     private var collapsedColumns: Set<KanbanCodeColumn> {
         get { ListSectionCollapseState.decode(collapsedColumnsRaw) }
         nonmutating set { collapsedColumnsRaw = ListSectionCollapseState.encode(newValue) }
@@ -61,7 +86,7 @@ struct ListBoardView: View {
             set: { if !$0 { renamingPinnedCardId = nil } }
         )) {
             if let cardId = renamingPinnedCardId,
-               let card = store.state.pinnedCards.first(where: { $0.id == cardId }) {
+               let card = store.state.filteredCards.first(where: { $0.id == cardId }) {
                 RenameSessionDialog(
                     currentName: card.link.name ?? card.displayTitle,
                     isPresented: Binding(
@@ -98,6 +123,7 @@ struct ListBoardView: View {
     @ViewBuilder
     private var pinnedCardsSection: some View {
         let cards = store.state.pinnedCards
+        let descendantCounts = SubagentHierarchy.descendantCounts(in: store.state.links)
         if !cards.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -121,10 +147,18 @@ struct ListBoardView: View {
                         reorderState: sidebarReorderState,
                         onMove: reorderPinnedCard
                     ) {
-                        pinnedCardRow(for: card)
+                        pinnedCardRow(for: card, descendantCounts: descendantCounts)
                             .padding(.horizontal, 8)
                     }
-                        .id(ListBoardRowIdentity.pinned(card.id))
+                    .id(ListBoardRowIdentity.pinned(card.id))
+                    ForEach(visiblePinnedSubagents(for: card.id)) { row in
+                        if let child = activeSubagentCardsById[row.cardId] {
+                            pinnedCardRow(for: child, descendantCounts: descendantCounts)
+                                .padding(.horizontal, 8)
+                                .padding(.leading, CGFloat(row.depth * 16))
+                                .id(ListBoardRowIdentity.pinned(child.id))
+                        }
+                    }
                 }
                 if cards.count > 1 {
                     SidebarReorderEndTarget(
@@ -138,12 +172,23 @@ struct ListBoardView: View {
         }
     }
 
-    private func pinnedCardRow(for card: KanbanCodeCard) -> ListCardRowView {
+    private func pinnedCardRow(
+        for card: KanbanCodeCard,
+        descendantCounts: [String: Int]
+    ) -> ListCardRowView {
         ListCardRowView(
             card: card,
             isSelected: card.id == store.state.selectedCardId,
             onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
+            subagentCount: descendantCounts[card.id] ?? 0,
+            activeDirectSubagentCount: activeSubagentCardsByParent[card.id]?.count ?? 0,
+            onShowSubagents: { onShowSubagents(card.id) },
+            subagentsExpanded: !collapsedPinnedSubagentParents.contains(card.id),
+            onToggleSubagents: { togglePinnedSubagents(card.id) },
             onSetPinned: { isPinned in onSetCardPinned(card.id, isPinned) },
+            onSetSelfCompactContextThreshold: { threshold in
+                onSetSelfCompactContextThreshold(card.id, threshold)
+            },
             onSelect: { handleCardSelection(card.id) },
             onStart: { onStartCard(card.id) },
             onResume: { onResumeCard(card.id) },
@@ -235,6 +280,9 @@ struct ListBoardView: View {
             isRefreshingBacklog: store.state.isRefreshingBacklog,
             availableProjects: availableProjects,
             dragState: dragState,
+            descendantCounts: SubagentHierarchy.descendantCounts(in: store.state.links),
+            subagentsByParent: activeSubagentCardsByParent,
+            onShowSubagents: onShowSubagents,
             onSelectCard: handleCardSelection,
             onStartCard: onStartCard,
             onResumeCard: onResumeCard,
@@ -243,6 +291,7 @@ struct ListBoardView: View {
             onCopyConversationMarkdown: onCopyConversationMarkdown,
             onTrimSession: onTrimSession,
             onSetCardPinned: onSetCardPinned,
+            onSetSelfCompactContextThreshold: onSetSelfCompactContextThreshold,
             onDiscoverCard: onDiscoverCard,
             onCleanupWorktree: onCleanupWorktree,
             canCleanupWorktree: canCleanupWorktree,
@@ -262,6 +311,22 @@ struct ListBoardView: View {
             onRenameCard: onRenameCard,
             onToggleCollapse: { toggleCollapse(for: section.column) }
         )
+    }
+
+    private func visiblePinnedSubagents(for parentId: String) -> [SubagentHierarchyRow] {
+        SubagentHierarchy.visibleDescendants(
+            of: parentId,
+            in: activeSubagentLinks,
+            collapsedParentIds: collapsedPinnedSubagentParents
+        )
+    }
+
+    private func togglePinnedSubagents(_ cardId: String) {
+        if collapsedPinnedSubagentParents.contains(cardId) {
+            collapsedPinnedSubagentParents.remove(cardId)
+        } else {
+            collapsedPinnedSubagentParents.insert(cardId)
+        }
     }
 
     private func handleCardSelection(_ cardId: String) {
@@ -345,6 +410,9 @@ private struct ListBoardSectionView: View {
     let isRefreshingBacklog: Bool
     let availableProjects: [(name: String, path: String)]
     let dragState: DragState
+    let descendantCounts: [String: Int]
+    let subagentsByParent: [String: [KanbanCodeCard]]
+    let onShowSubagents: (String) -> Void
     let onSelectCard: (String) -> Void
     let onStartCard: (String) -> Void
     let onResumeCard: (String) -> Void
@@ -353,6 +421,7 @@ private struct ListBoardSectionView: View {
     let onCopyConversationMarkdown: (String) -> Void
     let onTrimSession: (String) -> Void
     let onSetCardPinned: (String, Bool) -> Void
+    let onSetSelfCompactContextThreshold: (String, Int?) -> Void
     let onDiscoverCard: (String) -> Void
     let onCleanupWorktree: (String) -> Void
     let canCleanupWorktree: (String) -> Bool
@@ -373,6 +442,19 @@ private struct ListBoardSectionView: View {
 
     @State private var isTargeted = false
     @State private var cardFrames: [String: CGRect] = [:]
+    @State private var collapsedSubagentParents: Set<String> = []
+
+    private var subagentCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: subagentsByParent.values.flatMap { $0 }.map { ($0.id, $0) })
+    }
+
+    private var activeSubagentLinks: [String: Link] {
+        Dictionary(uniqueKeysWithValues: subagentCardsById.values.map { ($0.id, $0.link) })
+    }
+
+    private var displayedCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: (section.cards + Array(subagentCardsById.values)).map { ($0.id, $0) })
+    }
 
     private var isCollectingCardFrames: Bool {
         dragState.draggingCard != nil
@@ -469,29 +551,7 @@ private struct ListBoardSectionView: View {
                     if dragState.reorderTargetId == card.id && dragState.reorderAbove {
                         ReorderIndicator()
                     }
-                    ListCardRowView(
-                        card: card,
-                        isSelected: card.id == selectedCardId,
-                        onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
-                        onSetPinned: { isPinned in onSetCardPinned(card.id, isPinned) },
-                        onSelect: { onSelectCard(card.id) },
-                        onStart: { onStartCard(card.id) },
-                        onResume: { onResumeCard(card.id) },
-                        onFork: { keepWorktree in onForkCard(card.id, keepWorktree) },
-                        onCopyResumeCmd: { onCopyResumeCmd(card.id) },
-                        onTrimSession: { onTrimSession(card.id) },
-                        onDiscover: { onDiscoverCard(card.id) },
-                        onCleanupWorktree: { onCleanupWorktree(card.id) },
-                        canCleanupWorktree: canCleanupWorktree(card.id),
-                        onArchive: { onArchiveCard(card.id) },
-                        onDelete: { onDeleteCard(card.id) },
-                        availableProjects: availableProjects,
-                        onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) },
-                        onMoveToFolder: { onMoveToFolder(card.id) },
-                        enabledAssistants: enabledAssistants,
-                        onMigrateAssistant: { target in onMigrateAssistant(card.id, target) },
-                        onRenameRequest: { renamingCardId = card.id }
-                    )
+                    listCardRow(for: card)
                     .opacity(dragState.draggingCard?.id == card.id ? 0.65 : 1)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
@@ -518,6 +578,13 @@ private struct ListBoardSectionView: View {
                         return NSItemProvider(object: card.id as NSString)
                     }
                     .id(ListBoardRowIdentity.column(section.column, card.id))
+                    ForEach(visibleSubagents(for: card.id)) { row in
+                        if let child = subagentCardsById[row.cardId] {
+                            listCardRow(for: child)
+                                .padding(.leading, CGFloat(row.depth * 16))
+                                .id(ListBoardRowIdentity.column(section.column, child.id))
+                        }
+                    }
                     if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
                         ReorderIndicator()
                     }
@@ -547,7 +614,7 @@ private struct ListBoardSectionView: View {
                 get: { renamingCardId != nil },
                 set: { if !$0 { renamingCardId = nil } }
             )) {
-                if let cardId = renamingCardId, let card = section.cards.first(where: { $0.id == cardId }) {
+                if let cardId = renamingCardId, let card = displayedCardsById[cardId] {
                     RenameSessionDialog(
                         currentName: card.link.name ?? card.displayTitle,
                         isPresented: Binding(get: { renamingCardId != nil }, set: { if !$0 { renamingCardId = nil } }),
@@ -555,6 +622,56 @@ private struct ListBoardSectionView: View {
                     )
                 }
             }
+        }
+    }
+
+    private func listCardRow(for card: KanbanCodeCard) -> ListCardRowView {
+        ListCardRowView(
+            card: card,
+            isSelected: card.id == selectedCardId,
+            onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
+            subagentCount: descendantCounts[card.id] ?? 0,
+            activeDirectSubagentCount: subagentsByParent[card.id]?.count ?? 0,
+            onShowSubagents: { onShowSubagents(card.id) },
+            subagentsExpanded: !collapsedSubagentParents.contains(card.id),
+            onToggleSubagents: { toggleSubagents(card.id) },
+            onSetPinned: { isPinned in onSetCardPinned(card.id, isPinned) },
+            onSetSelfCompactContextThreshold: { threshold in
+                onSetSelfCompactContextThreshold(card.id, threshold)
+            },
+            onSelect: { onSelectCard(card.id) },
+            onStart: { onStartCard(card.id) },
+            onResume: { onResumeCard(card.id) },
+            onFork: { keepWorktree in onForkCard(card.id, keepWorktree) },
+            onCopyResumeCmd: { onCopyResumeCmd(card.id) },
+            onTrimSession: { onTrimSession(card.id) },
+            onDiscover: { onDiscoverCard(card.id) },
+            onCleanupWorktree: { onCleanupWorktree(card.id) },
+            canCleanupWorktree: canCleanupWorktree(card.id),
+            onArchive: { onArchiveCard(card.id) },
+            onDelete: { onDeleteCard(card.id) },
+            availableProjects: availableProjects,
+            onMoveToProject: { projectPath in onMoveToProject(card.id, projectPath) },
+            onMoveToFolder: { onMoveToFolder(card.id) },
+            enabledAssistants: enabledAssistants,
+            onMigrateAssistant: { target in onMigrateAssistant(card.id, target) },
+            onRenameRequest: { renamingCardId = card.id }
+        )
+    }
+
+    private func visibleSubagents(for parentId: String) -> [SubagentHierarchyRow] {
+        SubagentHierarchy.visibleDescendants(
+            of: parentId,
+            in: activeSubagentLinks,
+            collapsedParentIds: collapsedSubagentParents
+        )
+    }
+
+    private func toggleSubagents(_ cardId: String) {
+        if collapsedSubagentParents.contains(cardId) {
+            collapsedSubagentParents.remove(cardId)
+        } else {
+            collapsedSubagentParents.insert(cardId)
         }
     }
 
@@ -738,7 +855,13 @@ private struct ListCardRowView: View {
     let card: KanbanCodeCard
     let isSelected: Bool
     let onCopyConversationMarkdown: () -> Void
+    let subagentCount: Int
+    let activeDirectSubagentCount: Int
+    let onShowSubagents: () -> Void
+    var subagentsExpanded = true
+    var onToggleSubagents: () -> Void = {}
     let onSetPinned: (_ isPinned: Bool) -> Void
+    let onSetSelfCompactContextThreshold: (_ thresholdTokens: Int?) -> Void
     var onSelect: () -> Void = {}
     var onStart: () -> Void = {}
     var onResume: () -> Void = {}
@@ -811,6 +934,14 @@ private struct ListCardRowView: View {
                 .buttonStyle(.borderless)
                 .help("Start task")
             }
+
+            if activeDirectSubagentCount > 0 {
+                SubagentDisclosureCaret(
+                    isExpanded: subagentsExpanded,
+                    childCount: activeDirectSubagentCount,
+                    action: onToggleSubagents
+                )
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -830,8 +961,11 @@ private struct ListCardRowView: View {
                     onFork: onFork,
                     onRenameRequest: onRenameRequest,
                     onSetPinned: onSetPinned,
+                    onSetSelfCompactContextThreshold: onSetSelfCompactContextThreshold,
                     onCopyResumeCmd: onCopyResumeCmd,
                     onCopyConversationMarkdown: onCopyConversationMarkdown,
+                    subagentCount: subagentCount,
+                    onShowSubagents: onShowSubagents,
                     onTrimSession: onTrimSession,
                     onCheckpoint: nil,
                     onAddLink: nil,

@@ -86,4 +86,30 @@ struct TmuxMatchingTests {
         )
         #expect(match?.name == "by-path")
     }
+
+    @Test("A prompt left in the composer is detected as unsent")
+    func detectsUnsentPrompt() {
+        let pastedChip = """
+        ❯ [Pasted text #1 +9 lines]
+          ⏵⏵ bypass permissions on (shift+tab to cycle)
+        """
+        let typedText = "❯ investigate the parser bug"
+
+        #expect(TmuxAdapter.paneHasUnsentPrompt(pastedChip))
+        #expect(TmuxAdapter.paneHasUnsentPrompt(typedText))
+    }
+
+    @Test("An empty composer reads as sent")
+    func detectsSubmittedPrompt() {
+        let working = """
+        ⏺ I'll say hi to my parent as instructed.
+
+        ✶ Newspapering… (7s · ↓ 157 tokens)
+        ❯
+          ⏵⏵ bypass permissions on (shift+tab to cycle)
+        """
+
+        #expect(!TmuxAdapter.paneHasUnsentPrompt(working))
+        #expect(!TmuxAdapter.paneHasUnsentPrompt("rchaves@host project %"))
+    }
 }

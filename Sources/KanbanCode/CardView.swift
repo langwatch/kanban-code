@@ -6,7 +6,13 @@ struct CardView: View {
     let card: KanbanCodeCard
     let isSelected: Bool
     let onCopyConversationMarkdown: () -> Void
+    let subagentCount: Int
+    let activeDirectSubagentCount: Int
+    let onShowSubagents: () -> Void
+    var subagentsExpanded = true
+    var onToggleSubagents: () -> Void = {}
     let onSetPinned: (_ isPinned: Bool) -> Void
+    let onSetSelfCompactContextThreshold: (_ thresholdTokens: Int?) -> Void
     var onSelect: () -> Void = {}
     var onStart: () -> Void = {}
     var onResume: () -> Void = {}
@@ -72,25 +78,34 @@ struct CardView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .topTrailing) {
-            if card.showSpinner {
-                ProgressView()
-                    .controlSize(.small)
-                    .padding(6)
-            } else if card.column == .backlog {
-                Button(action: onStart) {
-                    Image(systemName: "play.fill")
-                        .font(.app(size: 10))
-                        .foregroundStyle(Color.green.opacity(0.8))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 6)
-                        .background(Color.green.opacity(0.08), in: Capsule())
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+            HStack(spacing: 4) {
+                if card.showSpinner {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if card.column == .backlog {
+                    Button(action: onStart) {
+                        Image(systemName: "play.fill")
+                            .font(.app(size: 10))
+                            .foregroundStyle(Color.green.opacity(0.8))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(Color.green.opacity(0.08), in: Capsule())
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Start task")
                 }
-                .buttonStyle(.borderless)
-                .help("Start task")
-                .padding(8)
+
+                if activeDirectSubagentCount > 0 {
+                    SubagentDisclosureCaret(
+                        isExpanded: subagentsExpanded,
+                        childCount: activeDirectSubagentCount,
+                        action: onToggleSubagents
+                    )
+                }
             }
+            .padding(6)
         }
         .background(
             isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04),
@@ -107,8 +122,11 @@ struct CardView: View {
                     onFork: onFork,
                     onRenameRequest: onRenameRequest,
                     onSetPinned: onSetPinned,
+                    onSetSelfCompactContextThreshold: onSetSelfCompactContextThreshold,
                     onCopyResumeCmd: onCopyResumeCmd,
                     onCopyConversationMarkdown: onCopyConversationMarkdown,
+                    subagentCount: subagentCount,
+                    onShowSubagents: onShowSubagents,
                     onTrimSession: onTrimSession,
                     onCheckpoint: nil,
                     onAddLink: nil,
@@ -353,17 +371,32 @@ struct CardBadgesRow: View {
     let card: KanbanCodeCard
 
     var body: some View {
-        // Tmux indicator (green when attached, shows count for 2+)
+        // Session indicator. A lone assistant session is the normal case, so it
+        // shows the assistant's own icon; the green terminal is reserved for
+        // extra terminals the user opened alongside it.
         if let tmux = card.link.tmuxLink {
-            HStack(spacing: 2) {
-                Image(systemName: "terminal")
-                    .font(.app(.caption2))
-                    .foregroundStyle(.green)
-                if tmux.terminalCount > 1 {
+            if tmux.terminalCount > 1 {
+                HStack(spacing: 2) {
+                    Image(systemName: "terminal")
+                        .font(.app(.caption2))
+                        .foregroundStyle(.green)
                     Text(verbatim: "\(tmux.terminalCount)")
                         .font(.app(size: 9, weight: .bold))
                         .foregroundStyle(.green)
                 }
+                .help("\(tmux.terminalCount) terminals open")
+            } else {
+                HStack(spacing: 3) {
+                    AssistantIcon(assistant: card.link.effectiveAssistant)
+                        .frame(width: CGFloat(11).scaled, height: CGFloat(11).scaled)
+                    if let model = card.liveModel {
+                        Text(model)
+                            .font(.app(size: 9, weight: .medium))
+                    }
+                }
+                .foregroundStyle(Color.primary.opacity(0.45))
+                .help(card.liveModel.map { "\(card.link.effectiveAssistant.displayName) session on \($0)" }
+                    ?? "\(card.link.effectiveAssistant.displayName) session")
             }
         }
 
@@ -407,5 +440,26 @@ struct CardBadgesRow: View {
                 .font(.app(.caption2))
                 .foregroundStyle(.teal)
         }
+    }
+}
+
+/// Trailing disclosure control for a card's nested subagents. Points down when
+/// collapsed to promise more rows below, and up when expanded to close them.
+struct SubagentDisclosureCaret: View {
+    let isExpanded: Bool
+    let childCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.app(.caption2, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded
+            ? "Hide \(childCount) subagent\(childCount == 1 ? "" : "s")"
+            : "Show \(childCount) subagent\(childCount == 1 ? "" : "s")")
     }
 }

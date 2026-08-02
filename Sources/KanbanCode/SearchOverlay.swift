@@ -33,6 +33,7 @@ struct SearchOverlay: View {
     @State private var isDeepSearching = false
     @State private var selectedId: String?
     @State private var searchTask: Task<Void, Never>?
+    @State private var searchGeneration = 0
     @State private var focusRequestToken = 0
     @FocusState private var isSearchFocused: Bool
 
@@ -58,7 +59,12 @@ struct SearchOverlay: View {
     private var resultsSection: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
+                // Lazy, because a query can produce 80 quick results or a deep
+                // search a screenful of snippet rows. An eager stack rebuilds
+                // every one of them on each incremental scroll update, which is
+                // what made trackpad scrolling crawl while dragging the scroller
+                // (far fewer, larger updates) stayed smooth.
+                LazyVStack(alignment: .leading, spacing: 4) {
                     Color.clear.frame(height: 0).id(Self.scrollTopId)
                     if isCommandMode {
                         commandsView
@@ -531,9 +537,12 @@ struct SearchOverlay: View {
     }
 
     private func updateFilter(_ query: String) {
-        // Cancel any in-progress deep search when query changes
+        // Cancel any in-progress deep search when query changes, but keep the
+        // handle. Cancellation is cooperative, so the scan is still winding
+        // down through its open files; dropping the reference here lets the
+        // next keystroke start a second full-corpus scan beside the first, and
+        // the two then compete for the same disk.
         searchTask?.cancel()
-        searchTask = nil
         searchResults = []
         isDeepSearching = false
     }
@@ -541,10 +550,16 @@ struct SearchOverlay: View {
     private func deepSearch() async {
         guard !query.isEmpty else { return }
 
-        // Cancel previous search and wait for it to stop
+        // Cancel previous search and wait for it to stop. Waiting is a suspension
+        // point, so a third keystroke can start its own search meanwhile; without
+        // the generation check both would run and the older one would no longer
+        // be tracked in searchTask, making it impossible to cancel.
+        searchGeneration += 1
+        let generation = searchGeneration
         if let old = searchTask {
             old.cancel()
             _ = await old.value
+            guard generation == searchGeneration else { return }
             searchTask = nil
         }
 

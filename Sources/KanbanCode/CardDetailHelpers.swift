@@ -17,8 +17,11 @@ struct CardActionsMenuActions {
     let onFork: (_ keepWorktree: Bool) -> Void
     let onRenameRequest: () -> Void
     let onSetPinned: (_ isPinned: Bool) -> Void
+    let onSetSelfCompactContextThreshold: (_ thresholdTokens: Int?) -> Void
     let onCopyResumeCmd: () -> Void
     let onCopyConversationMarkdown: () -> Void
+    let subagentCount: Int
+    let onShowSubagents: () -> Void
     let onTrimSession: () -> Void
     let onCheckpoint: (() -> Void)?
     let onAddLink: (() -> Void)?
@@ -38,8 +41,11 @@ struct CardActionsMenuActions {
         onFork: @escaping (_ keepWorktree: Bool) -> Void,
         onRenameRequest: @escaping () -> Void,
         onSetPinned: @escaping (_ isPinned: Bool) -> Void,
+        onSetSelfCompactContextThreshold: @escaping (_ thresholdTokens: Int?) -> Void,
         onCopyResumeCmd: @escaping () -> Void,
         onCopyConversationMarkdown: @escaping () -> Void,
+        subagentCount: Int,
+        onShowSubagents: @escaping () -> Void,
         onTrimSession: @escaping () -> Void,
         onCheckpoint: (() -> Void)?,
         onAddLink: (() -> Void)?,
@@ -58,8 +64,11 @@ struct CardActionsMenuActions {
         self.onFork = onFork
         self.onRenameRequest = onRenameRequest
         self.onSetPinned = onSetPinned
+        self.onSetSelfCompactContextThreshold = onSetSelfCompactContextThreshold
         self.onCopyResumeCmd = onCopyResumeCmd
         self.onCopyConversationMarkdown = onCopyConversationMarkdown
+        self.subagentCount = subagentCount
+        self.onShowSubagents = onShowSubagents
         self.onTrimSession = onTrimSession
         self.onCheckpoint = onCheckpoint
         self.onAddLink = onAddLink
@@ -213,11 +222,21 @@ struct CardActionsMenu: View {
             Label("Rename", systemImage: "pencil")
         }
 
-        Button(action: { actions.onSetPinned(!card.link.isPinned) }) {
-            Label(
-                card.link.isPinned ? "Unpin Card" : "Pin Card",
-                systemImage: card.link.isPinned ? "pin.slash" : "pin"
-            )
+        if card.link.parentCardId == nil {
+            Button(action: { actions.onSetPinned(!card.link.isPinned) }) {
+                Label(
+                    card.link.isPinned ? "Unpin Card" : "Pin Card",
+                    systemImage: card.link.isPinned ? "pin.slash" : "pin"
+                )
+            }
+        }
+
+        compactSettingsMenu
+
+        if actions.subagentCount > 0 {
+            Button(action: actions.onShowSubagents) {
+                Label("See All Subagents (\(actions.subagentCount))", systemImage: "point.3.connected.trianglepath.dotted")
+            }
         }
 
         if let onCheckpoint = actions.onCheckpoint {
@@ -226,6 +245,61 @@ struct CardActionsMenu: View {
             }
             .disabled(card.link.sessionLink?.sessionPath == nil)
         }
+    }
+
+    @ViewBuilder
+    private var compactSettingsMenu: some View {
+        let assistant = card.link.effectiveAssistant
+        let selectedThreshold = card.link.selfCompactContextThresholdTokens
+        Menu {
+            if assistant.supportsContextThresholdSelfCompact {
+                Button {
+                    actions.onSetSelfCompactContextThreshold(nil)
+                } label: {
+                    HStack {
+                        Text("Use Global Settings")
+                        if selectedThreshold == nil {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+
+                Divider()
+
+                ForEach(compactThresholdOptions, id: \.self) { threshold in
+                    Button {
+                        actions.onSetSelfCompactContextThreshold(threshold)
+                    } label: {
+                        HStack {
+                            Text("\(SelfCompactPolicy.tokenLabel(threshold)) tokens")
+                            if selectedThreshold == threshold {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } else {
+                Button("Per-card context thresholds are currently available for Claude sessions.") {}
+                    .disabled(true)
+            }
+        } label: {
+            Label(compactSettingsLabel, systemImage: "arrow.triangle.2.circlepath")
+        }
+    }
+
+    private var compactThresholdOptions: [Int] {
+        let selected = card.link.selfCompactContextThresholdTokens
+        return Array(Set(SelfCompactPolicy.cardThresholdOptions + [selected].compactMap { $0 })).sorted()
+    }
+
+    private var compactSettingsLabel: String {
+        guard card.link.effectiveAssistant.supportsContextThresholdSelfCompact else {
+            return "Compact Settings · Unavailable"
+        }
+        guard let threshold = card.link.selfCompactContextThresholdTokens else {
+            return "Compact Settings · Global"
+        }
+        return "Compact Settings · \(SelfCompactPolicy.tokenLabel(threshold))"
     }
 
     @ViewBuilder

@@ -28,6 +28,9 @@ struct CardDetailView: View {
     var onResume: () -> Void = {}
     var onRename: (String) -> Void = { _ in }
     let onSetPinned: (_ isPinned: Bool) -> Void
+    let onSetSelfCompactContextThreshold: (_ thresholdTokens: Int?) -> Void
+    let subagentCount: Int
+    let onShowSubagents: () -> Void
     var onFork: (_ keepWorktree: Bool) -> Void = { _ in }
     var onDismiss: () -> Void = {}
     var onUnlink: (Action.LinkType) -> Void = { _ in }
@@ -182,12 +185,15 @@ struct CardDetailView: View {
 
     let sessionStore: SessionStore
 
-    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), selectedTab: Binding<DetailTab>, pendingTerminalSession: Binding<String?> = .constant(nil), onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onSetPinned: @escaping (_ isPinned: Bool) -> Void, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onRenameTerminal: @escaping (String, String) -> Void = { _, _ in }, onReorderTerminal: @escaping (String, String?) -> Void = { _, _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onReorderQueuedPrompts: @escaping ([String]) -> Void = { _ in }, onEditingQueuedPrompt: @escaping (String?) -> Void = { _ in }, onAddBrowserTab: @escaping (String, String) -> Void = { _, _ in }, onRemoveBrowserTab: @escaping (String) -> Void = { _ in }, onUpdateBrowserTab: @escaping (String, String?, String?) -> Void = { _, _, _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, onMoveToFolder: @escaping () -> Void = {}, enabledAssistants: [CodingAssistant] = [], onMigrateAssistant: @escaping (CodingAssistant) -> Void = { _ in }, onTrimSession: @escaping () -> Void = {}, actionsMenuProvider: ActionsMenuProvider? = nil, focusTerminal: Binding<Bool> = .constant(false), isExpanded: Binding<Bool> = .constant(false), isDroppingImage: Binding<Bool> = .constant(false)) {
+    init(card: KanbanCodeCard, sessionStore: SessionStore = ClaudeCodeSessionStore(), selectedTab: Binding<DetailTab>, pendingTerminalSession: Binding<String?> = .constant(nil), onResume: @escaping () -> Void = {}, onRename: @escaping (String) -> Void = { _ in }, onSetPinned: @escaping (_ isPinned: Bool) -> Void, onSetSelfCompactContextThreshold: @escaping (_ thresholdTokens: Int?) -> Void, subagentCount: Int, onShowSubagents: @escaping () -> Void, onFork: @escaping (_ keepWorktree: Bool) -> Void = { _ in }, onDismiss: @escaping () -> Void = {}, onUnlink: @escaping (Action.LinkType) -> Void = { _ in }, onAddBranch: @escaping (String) -> Void = { _ in }, onAddIssue: @escaping (Int) -> Void = { _ in }, onAddPR: @escaping (Int) -> Void = { _ in }, onCleanupWorktree: @escaping () -> Void = {}, canCleanupWorktree: Bool = true, onDeleteCard: @escaping () -> Void = {}, onCreateTerminal: @escaping () -> Void = {}, onKillTerminal: @escaping (String) -> Void = { _ in }, onRenameTerminal: @escaping (String, String) -> Void = { _, _ in }, onReorderTerminal: @escaping (String, String?) -> Void = { _, _ in }, onPRMerged: @escaping (Int) -> Void = { _ in }, onCancelLaunch: @escaping () -> Void = {}, onAddQueuedPrompt: @escaping (QueuedPrompt) -> Void = { _ in }, onUpdateQueuedPrompt: @escaping (String, String, Bool) -> Void = { _, _, _ in }, onRemoveQueuedPrompt: @escaping (String) -> Void = { _ in }, onSendQueuedPrompt: @escaping (String) -> Void = { _ in }, onReorderQueuedPrompts: @escaping ([String]) -> Void = { _ in }, onEditingQueuedPrompt: @escaping (String?) -> Void = { _ in }, onAddBrowserTab: @escaping (String, String) -> Void = { _, _ in }, onRemoveBrowserTab: @escaping (String) -> Void = { _ in }, onUpdateBrowserTab: @escaping (String, String?, String?) -> Void = { _, _, _ in }, onDiscover: @escaping () -> Void = {}, onUpdatePrompt: @escaping (String, [String]?) -> Void = { _, _ in }, availableProjects: [(name: String, path: String)] = [], onMoveToProject: @escaping (String) -> Void = { _ in }, onMoveToFolder: @escaping () -> Void = {}, enabledAssistants: [CodingAssistant] = [], onMigrateAssistant: @escaping (CodingAssistant) -> Void = { _ in }, onTrimSession: @escaping () -> Void = {}, actionsMenuProvider: ActionsMenuProvider? = nil, focusTerminal: Binding<Bool> = .constant(false), isExpanded: Binding<Bool> = .constant(false), isDroppingImage: Binding<Bool> = .constant(false)) {
         self.card = card
         self.sessionStore = sessionStore
         self.onResume = onResume
         self.onRename = onRename
         self.onSetPinned = onSetPinned
+        self.onSetSelfCompactContextThreshold = onSetSelfCompactContextThreshold
+        self.subagentCount = subagentCount
+        self.onShowSubagents = onShowSubagents
         self.onFork = onFork
         self.onDismiss = onDismiss
         self.onUnlink = onUnlink
@@ -1601,10 +1607,13 @@ struct CardDetailView: View {
                     onFork: onFork,
                     onRenameRequest: { showRenameSheet = true },
                     onSetPinned: onSetPinned,
+                    onSetSelfCompactContextThreshold: onSetSelfCompactContextThreshold,
                     onCopyResumeCmd: { copyResumeCommand() },
                     onCopyConversationMarkdown: {
                         Task { await copyConversationMarkdown() }
                     },
+                    subagentCount: subagentCount,
+                    onShowSubagents: onShowSubagents,
                     onTrimSession: onTrimSession,
                     onCheckpoint: {
                         checkpointMode = true
@@ -1981,7 +1990,11 @@ struct CardDetailView: View {
             cmd += "cd \(projectPath) && "
         }
         if let sessionId = card.link.sessionLink?.sessionId {
-            cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
+            cmd += card.link.effectiveAssistant.resumeCommand(
+                sessionId: sessionId,
+                skipPermissions: false,
+                modelOverride: card.link.modelOverride
+            )
         } else {
             cmd += "# no session yet"
         }

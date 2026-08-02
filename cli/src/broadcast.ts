@@ -18,6 +18,11 @@ import {
   sendMessage,
 } from "./channels.js";
 import { formatHandle } from "./handles.js";
+import {
+  relationshipLabel,
+  subagentRelationship,
+  type SubagentRelationship,
+} from "./hierarchy.js";
 
 // ── Types / injectables ───────────────────────────────────────────────
 
@@ -115,9 +120,11 @@ export function formatChannelBroadcast(
 export function formatDirectMessage(
   handle: string,
   body: string,
-  imagePaths?: string[]
+  imagePaths?: string[],
+  relationship?: SubagentRelationship
 ): string {
-  return `[DM from ${formatHandle(handle)}]: ${body}${renderImageRefs(imagePaths)}`;
+  const role = relationshipLabel(relationship);
+  return `[DM from ${formatHandle(handle)}${role}]: ${body}${renderImageRefs(imagePaths)}`;
 }
 
 // ── Fan-out ───────────────────────────────────────────────────────────
@@ -234,7 +241,12 @@ export function sendDirectMessage(
   const session = link?.tmuxLink?.sessionName;
   if (!session) return { msg, delivered: false, error: "recipient has no tmux session" };
   if (!probe(session)) return { msg, delivered: false, error: "recipient offline" };
-  const text = formatDirectMessage(from.handle, body, persisted.length > 0 ? persisted : undefined);
+  const text = formatDirectMessage(
+    from.handle,
+    body,
+    persisted.length > 0 ? persisted : undefined,
+    subagentRelationship(from.cardId, to.cardId, links)
+  );
   const r = sender(session, text);
   return { msg, delivered: r.ok, error: r.error };
 }

@@ -23,6 +23,14 @@ export function hookEventsPath(): string {
   return join(kanbanHome(), "hook-events.jsonl");
 }
 
+export function commandInboxDir(): string {
+  return join(kanbanHome(), "commands", "inbox");
+}
+
+export function commandResponsesDir(): string {
+  return join(kanbanHome(), "commands", "responses");
+}
+
 /// Claude Code's config dir. Honors CLAUDE_CONFIG_DIR so a sandboxed test can
 /// point it elsewhere.
 export function claudeConfigDir(): string {

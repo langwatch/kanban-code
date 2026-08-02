@@ -38,7 +38,7 @@ public enum CodexSessionParser {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: filePath))
         defer { try? handle.close() }
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             guard let obj = parseJSONLine(line),
                   let type = obj["type"] as? String else { continue }
 
@@ -104,7 +104,7 @@ public enum CodexSessionParser {
         defer { try? handle.close() }
 
         do {
-            for try await line in handle.bytes.lines {
+            for try await line in handle.blockLines {
                 guard let obj = parseJSONLine(line),
                       obj["type"] as? String == "session_meta",
                       let payload = obj["payload"] as? [String: Any],
@@ -134,7 +134,7 @@ public enum CodexSessionParser {
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: filePath))
         defer { try? handle.close() }
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             let lineByteOffset = byteOffset
             byteOffset += line.utf8.count + 1
             guard let obj = parseJSONLine(line),
@@ -329,7 +329,7 @@ public enum CodexSessionParser {
         let worktreeAddRegex = /git\s+worktree\s+add\s+(?:[^\s;|&]+\s+)*?-b\s+(\S+)/
         var branches = Set<JsonlParser.DiscoveredBranch>()
 
-        for try await line in handle.bytes.lines {
+        for try await line in handle.blockLines {
             // Cheap prefilter: only shell-call records that mention git at all.
             guard line.contains("git"),
                   line.contains("\"function_call\"") || line.contains("\"custom_tool_call\""),

@@ -58,6 +58,10 @@ public final class AppState: @unchecked Sendable {
     public var links: [String: Link] = [:]                     // cardId → Link
     public var sessions: [String: Session] = [:]               // sessionId → Session
     public var activityMap: [String: ActivityState] = [:]       // sessionId → activity
+    /// sessionId → model the session is running now, e.g. "opus". Polled from
+    /// Claude's statusline rather than derived from the card, so an in-session
+    /// `/model` switch shows up.
+    public var sessionModels: [String: String] = [:]
     public var tmuxSessions: Set<String> = []                  // live tmux names
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
@@ -233,7 +237,14 @@ public final class AppState: @unchecked Sendable {
             let session = link.sessionLink.flatMap { sessions[$0.sessionId] }
             let activity = link.sessionLink.flatMap { activityMap[$0.sessionId] }
             let rateLimited = link.projectPath.map { rateLimitedRepos.contains($0) } ?? false
-            return KanbanCodeCard(link: link, session: session, activityState: activity, isBusy: busyCards.contains(link.id), isRateLimited: rateLimited)
+            return KanbanCodeCard(
+                link: link,
+                session: session,
+                activityState: activity,
+                isBusy: busyCards.contains(link.id),
+                isRateLimited: rateLimited,
+                liveModel: link.sessionLink.flatMap { sessionModels[$0.sessionId] }
+            )
         }
         if newCards != cards { cards = newCards }
 
@@ -243,7 +254,7 @@ public final class AppState: @unchecked Sendable {
         let newFiltered = cards.filter { cardMatchesProjectFilter($0) }
         if newFiltered != filteredCards { filteredCards = newFiltered }
 
-        let newPinned = newFiltered.filter(\.link.isPinned).sorted {
+        let newPinned = newFiltered.filter { $0.link.isPinned && $0.link.parentCardId == nil }.sorted {
             switch ($0.link.pinnedSortOrder, $1.link.pinnedSortOrder) {
             case (let a?, let b?) where a != b: return a < b
             case (_?, nil): return true
@@ -260,7 +271,7 @@ public final class AppState: @unchecked Sendable {
         // Per-column sorted arrays
         var newByColumn: [KanbanCodeColumn: [KanbanCodeCard]] = [:]
         for column in KanbanCodeColumn.allCases {
-            newByColumn[column] = newFiltered.filter { $0.column == column }
+            newByColumn[column] = newFiltered.filter { $0.column == column && $0.link.parentCardId == nil }
                 .sorted {
                     switch ($0.link.sortOrder, $1.link.sortOrder) {
                     case (let a?, let b?): return a < b
@@ -360,6 +371,10 @@ public enum Action: Sendable {
     case moveCard(cardId: String, to: KanbanCodeColumn)
     case renameCard(cardId: String, name: String)
     case setCardPinned(cardId: String, isPinned: Bool)
+    case setSelfCompactContextThreshold(cardId: String, thresholdTokens: Int?)
+    case relinkSession(cardId: String, sessionLink: SessionLink)
+    case sessionModelsScanned([String: String])
+    case setCardModel(cardId: String, model: String?)
     case archiveCard(cardId: String)
     case deleteCard(cardId: String)
     case selectCard(cardId: String?)
@@ -753,6 +768,7 @@ public enum Reducer {
 
         case .setCardPinned(let cardId, let isPinned):
             guard var link = state.links[cardId] else { return [] }
+            guard link.parentCardId == nil else { return [] }
             if isPinned {
                 if link.pinnedAt != nil { return [] }
                 link.pinnedAt = .now
@@ -763,6 +779,20 @@ public enum Reducer {
                 link.pinnedAt = nil
                 link.pinnedSortOrder = nil
             }
+            link.updatedAt = .now
+            state.links[cardId] = link
+            return [.upsertLink(link)]
+
+        case .setSelfCompactContextThreshold(let cardId, let thresholdTokens):
+            guard var link = state.links[cardId] else { return [] }
+            if let thresholdTokens {
+                guard thresholdTokens > 0,
+                      thresholdTokens <= Int.max - SelfCompactPolicy.forcedCompactOffsetTokens
+                else { return [] }
+            }
+            guard link.selfCompactContextThresholdTokens != thresholdTokens else { return [] }
+            link.selfCompactContextThresholdTokens = thresholdTokens
+            link.queuedPrompts?.removeAll { $0.selfCompactThresholdTokens != nil }
             link.updatedAt = .now
             state.links[cardId] = link
             return [.upsertLink(link)]
@@ -802,6 +832,36 @@ public enum Reducer {
             }
             return effects
 
+        case .relinkSession(let cardId, let sessionLink):
+            guard var link = state.links[cardId] else { return [] }
+            guard link.sessionLink?.sessionId != sessionLink.sessionId else { return [] }
+            KanbanCodeLog.info(
+                "store",
+                "Relink: card=\(cardId.prefix(12)) session=\(sessionLink.sessionId.prefix(8))"
+            )
+            link.sessionLink = sessionLink
+            link.updatedAt = .now
+            state.links[cardId] = link
+            return [.upsertLink(link)]
+
+        case .sessionModelsScanned(let models):
+            // Polled every few seconds, so rebuild only on a real change rather
+            // than walking every card each time the scan comes back identical.
+            guard state.sessionModels != models else { return [] }
+            state.sessionModels = models
+            state.rebuildCards()
+            return []
+
+        case .setCardModel(let cardId, let model):
+            guard var link = state.links[cardId] else { return [] }
+            let normalized = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolved = (normalized?.isEmpty ?? true) ? nil : normalized
+            guard link.modelOverride != resolved else { return [] }
+            link.modelOverride = resolved
+            link.updatedAt = .now
+            state.links[cardId] = link
+            return [.upsertLink(link)]
+
         case .archiveCard(let cardId):
             guard var link = state.links[cardId] else { return [] }
             link.manuallyArchived = true
@@ -825,29 +885,35 @@ public enum Reducer {
             return effects
 
         case .deleteCard(let cardId):
-            guard let link = state.links.removeValue(forKey: cardId) else { return [] }
-            if state.selectedCardId == cardId { state.selectedCardId = nil }
-            // Remember deleted IDs so in-flight reconciliation doesn't re-add them
-            state.deletedCardIds.insert(cardId)
-            if let sessionId = link.sessionLink?.sessionId {
-                state.deletedSessionIds.insert(sessionId)
+            guard state.links[cardId] != nil else { return [] }
+            let descendants = SubagentHierarchy.descendantIds(of: cardId, in: state.links)
+            let idsToDelete = [cardId] + descendants.sorted()
+            if let selected = state.selectedCardId, idsToDelete.contains(selected) {
+                state.selectedCardId = nil
             }
-            var effects: [Effect] = [.removeLink(cardId)]
-            if let tmux = link.tmuxLink {
-                effects.append(.killTmuxSessions(tmux.allSessionNames))
-                effects.append(.cleanupTerminalCache(sessionNames: tmux.allSessionNames))
-            }
-            if link.browserTabs != nil {
-                effects.append(.cleanupBrowserCache(cardId: cardId))
-            }
-            if let sessionPath = link.sessionLink?.sessionPath {
-                effects.append(.deleteSessionFile(sessionPath))
-            }
-            // Clean up prompt and queued prompt images
-            var imagesToDelete = link.promptImagePaths ?? []
-            imagesToDelete += (link.queuedPrompts ?? []).flatMap { $0.imagePaths ?? [] }
-            if !imagesToDelete.isEmpty {
-                effects.append(.deleteFiles(imagesToDelete))
+            var effects: [Effect] = []
+            for id in idsToDelete {
+                guard let link = state.links.removeValue(forKey: id) else { continue }
+                state.deletedCardIds.insert(id)
+                if let sessionId = link.sessionLink?.sessionId {
+                    state.deletedSessionIds.insert(sessionId)
+                }
+                effects.append(.removeLink(id))
+                if let tmux = link.tmuxLink {
+                    effects.append(.killTmuxSessions(tmux.allSessionNames))
+                    effects.append(.cleanupTerminalCache(sessionNames: tmux.allSessionNames))
+                }
+                if link.browserTabs != nil {
+                    effects.append(.cleanupBrowserCache(cardId: id))
+                }
+                if let sessionPath = link.sessionLink?.sessionPath {
+                    effects.append(.deleteSessionFile(sessionPath))
+                }
+                var imagesToDelete = link.promptImagePaths ?? []
+                imagesToDelete += (link.queuedPrompts ?? []).flatMap { $0.imagePaths ?? [] }
+                if !imagesToDelete.isEmpty {
+                    effects.append(.deleteFiles(imagesToDelete))
+                }
             }
             return effects
 
@@ -1555,6 +1621,13 @@ public enum Reducer {
             if let oldSessionId = link.sessionLink?.sessionId {
                 state.deletedSessionIds.insert(oldSessionId)
             }
+            if link.effectiveAssistant != newAssistant {
+                link.apiServiceId = nil
+                link.modelOverride = nil
+                if !newAssistant.supportsContextThresholdSelfCompact {
+                    link.queuedPrompts?.removeAll { $0.selfCompactThresholdTokens != nil }
+                }
+            }
             link.assistant = newAssistant
             link.sessionLink = SessionLink(sessionId: newSessionId, sessionPath: newSessionPath)
             // Kill tmux sessions — the old assistant process must stop
@@ -1825,7 +1898,8 @@ public enum Reducer {
             // newer updatedAt than the stale snapshot the reconciler used.
             var mergedLinks = state.links
             var preservedIds: Set<String> = []
-            for link in result.links {
+            for reconciledLink in result.links {
+                var link = reconciledLink
                 // Skip cards deliberately deleted during this reconciliation cycle
                 if state.deletedCardIds.contains(link.id) {
                     continue
@@ -1835,6 +1909,16 @@ public enum Reducer {
                     continue
                 }
                 if let existing = mergedLinks[link.id] {
+                    link.parentCardId = existing.parentCardId
+                    link.modelOverride = existing.modelOverride
+                    link.selfCompactContextThresholdTokens = existing.selfCompactContextThresholdTokens
+                    // Manual ordering is UI-owned: the reconciler only ever echoes
+                    // back whatever links.json held when it took its snapshot. A
+                    // drag that lands mid-cycle carries no updatedAt bump (it would
+                    // reset every "x ago" label in the column), so last-writer-wins
+                    // cannot protect it and the card would visibly jump back.
+                    link.sortOrder = existing.sortOrder
+                    link.pinnedSortOrder = existing.pinnedSortOrder
                     if existing.isLaunching == true {
                         // Check if activity hook has confirmed the session is running
                         let activity = result.activityMap[existing.sessionLink?.sessionId ?? ""]
@@ -2173,7 +2257,7 @@ public final class BoardStore: @unchecked Sendable {
     /// Actions that only toggle UI state and don't affect card data — skip rebuildCards().
     private static func needsRebuild(_ action: Action) -> Bool {
         switch action {
-        case .reconciled, .setRateLimitedRepos, .tmuxLivenessScanned:
+        case .reconciled, .setRateLimitedRepos, .tmuxLivenessScanned, .sessionModelsScanned:
             // These reducers diff their card inputs and rebuild only when the
             // derived card snapshots can actually change. A periodic PR/status
             // pass that produces the same links must not relayout the board.

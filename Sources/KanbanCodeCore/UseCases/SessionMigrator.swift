@@ -4,6 +4,11 @@ import Foundation
 /// Reads the source transcript, writes to the target format, and creates a backup.
 public enum SessionMigrator {
 
+    /// Keeps cross-assistant resumes comfortably below a 1M-token context window.
+    /// Text is a conservative proxy because transcript formats do not expose a
+    /// tokenizer shared by every assistant.
+    public static let defaultCrossAssistantCharacterLimit = 1_000_000
+
     public struct MigrationResult: Sendable {
         public let newSessionId: String
         public let newSessionPath: String
@@ -24,18 +29,25 @@ public enum SessionMigrator {
         sourceStore: SessionStore,
         targetStore: SessionStore,
         projectPath: String?,
-        recentTurnLimit: Int? = nil
+        recentTurnLimit: Int? = nil,
+        recentCharacterLimit: Int? = nil
     ) async throws -> MigrationResult {
         // 1. Read transcript from source
         let turns = try await sourceStore.readTranscript(sessionPath: sourceSessionPath)
         guard !turns.isEmpty else {
             throw MigrationError.emptySession
         }
-        let turnsToMigrate: [ConversationTurn]
+        var turnsToMigrate: [ConversationTurn]
         if let recentTurnLimit, recentTurnLimit > 0, turns.count > recentTurnLimit {
             turnsToMigrate = Array(turns.suffix(recentTurnLimit))
         } else {
             turnsToMigrate = turns
+        }
+        if let recentCharacterLimit, recentCharacterLimit > 0 {
+            turnsToMigrate = recentTurns(
+                from: turnsToMigrate,
+                fittingCharacterLimit: recentCharacterLimit
+            )
         }
 
         // 2. Generate new session ID
@@ -65,6 +77,29 @@ public enum SessionMigrator {
             sourceTurnCount: turns.count,
             migratedTurnCount: turnsToMigrate.count
         )
+    }
+
+    static func recentTurns(
+        from turns: [ConversationTurn],
+        fittingCharacterLimit limit: Int
+    ) -> [ConversationTurn] {
+        guard limit > 0, !turns.isEmpty else { return turns }
+        var selected: [ConversationTurn] = []
+        var total = 0
+        for turn in turns.reversed() {
+            let size = estimatedCharacterCount(of: turn)
+            if !selected.isEmpty, total + size > limit { break }
+            selected.append(turn)
+            total += size
+        }
+        return selected.reversed()
+    }
+
+    private static func estimatedCharacterCount(of turn: ConversationTurn) -> Int {
+        guard !turn.contentBlocks.isEmpty else { return turn.textPreview.utf8.count }
+        return turn.contentBlocks.reduce(0) { total, block in
+            total + block.text.utf8.count + (block.rawInputJSON?.count ?? 0)
+        }
     }
 }
 

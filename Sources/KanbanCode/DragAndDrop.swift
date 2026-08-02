@@ -1,5 +1,6 @@
 import SwiftUI
 import KanbanCodeCore
+import struct KanbanCodeCore.Link
 
 /// Shared drag state so source and target columns can communicate.
 @Observable
@@ -40,8 +41,12 @@ struct DroppableColumnView: View {
     var onForkCard: (String, Bool) -> Void = { _, _ in }
     var onCopyResumeCmd: (String) -> Void = { _ in }
     var onCopyConversationMarkdown: (String) -> Void = { _ in }
+    let onShowSubagents: (String) -> Void
+    let subagentsByParent: [String: [KanbanCodeCard]]
+    let descendantCounts: [String: Int]
     var onTrimSession: (String) -> Void = { _ in }
     let onSetCardPinned: (String, Bool) -> Void
+    let onSetSelfCompactContextThreshold: (String, Int?) -> Void
     var onDiscoverCard: (String) -> Void = { _ in }
     var onCleanupWorktree: (String) -> Void = { _ in }
     var canCleanupWorktree: (String) -> Bool = { _ in true }
@@ -58,6 +63,7 @@ struct DroppableColumnView: View {
     @State private var isTargeted = false
     @State private var renamingCardId: String?
     @State private var cardFrames: [String: CGRect] = [:]
+    @State private var collapsedSubagentParents: Set<String> = []
 
     private var isCollectingCardFrames: Bool {
         dragState.draggingCard != nil
@@ -112,6 +118,18 @@ struct DroppableColumnView: View {
                         dragState.draggingCard = card
                         dragState.sourceColumn = column
                         return NSItemProvider(object: card.id as NSString)
+                    }
+                    ForEach(visibleSubagentRows(for: card.id)) { row in
+                        if let child = subagentCardsById[row.cardId] {
+                            cardView(for: child)
+                                .padding(.leading, CGFloat(row.depth * 18))
+                                .overlay(alignment: .leading) {
+                                    Rectangle()
+                                        .fill(Color.secondary.opacity(0.2))
+                                        .frame(width: 1)
+                                        .padding(.leading, CGFloat(row.depth * 9))
+                                }
+                        }
                     }
                     // Drop indicator below this card
                     if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
@@ -224,10 +242,10 @@ struct DroppableColumnView: View {
         .animation(.easeInOut(duration: 0.15), value: dragState.mergeTargetId)
         .animation(.easeInOut(duration: 0.15), value: dragState.reorderTargetId)
         .sheet(isPresented: Binding(
-            get: { renamingCardId != nil && cards.contains(where: { $0.id == renamingCardId }) },
+            get: { renamingCardId.flatMap { displayedCardsById[$0] } != nil },
             set: { if !$0 { renamingCardId = nil } }
         )) {
-            if let cardId = renamingCardId, let card = cards.first(where: { $0.id == cardId }) {
+            if let cardId = renamingCardId, let card = displayedCardsById[cardId] {
                 RenameSessionDialog(
                     currentName: card.link.name ?? card.displayTitle,
                     isPresented: Binding(get: { renamingCardId != nil }, set: { if !$0 { renamingCardId = nil } }),
@@ -263,11 +281,19 @@ struct DroppableColumnView: View {
     }
 
     private func cardView(for card: KanbanCodeCard) -> CardView {
-        CardView(
+        return CardView(
             card: card,
             isSelected: card.id == selectedCardId,
             onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
+            subagentCount: descendantCounts[card.id] ?? 0,
+            activeDirectSubagentCount: subagentsByParent[card.id]?.count ?? 0,
+            onShowSubagents: { onShowSubagents(card.id) },
+            subagentsExpanded: !collapsedSubagentParents.contains(card.id),
+            onToggleSubagents: { toggleSubagents(card.id) },
             onSetPinned: { isPinned in onSetCardPinned(card.id, isPinned) },
+            onSetSelfCompactContextThreshold: { threshold in
+                onSetSelfCompactContextThreshold(card.id, threshold)
+            },
             onSelect: {
                 let newId = selectedCardId == card.id ? nil : card.id
                 selectedCardId = newId
@@ -290,6 +316,34 @@ struct DroppableColumnView: View {
             enabledAssistants: enabledAssistants,
             onMigrateAssistant: { target in onMigrateAssistant(card.id, target) }
         )
+    }
+
+    private var subagentCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: subagentsByParent.values.flatMap { $0 }.map { ($0.id, $0) })
+    }
+
+    private var displayedCardsById: [String: KanbanCodeCard] {
+        Dictionary(uniqueKeysWithValues: (cards + Array(subagentCardsById.values)).map { ($0.id, $0) })
+    }
+
+    private var subagentLinks: [String: Link] {
+        Dictionary(uniqueKeysWithValues: subagentCardsById.values.map { ($0.id, $0.link) })
+    }
+
+    private func visibleSubagentRows(for parentId: String) -> [SubagentHierarchyRow] {
+        SubagentHierarchy.visibleDescendants(
+            of: parentId,
+            in: subagentLinks,
+            collapsedParentIds: collapsedSubagentParents
+        )
+    }
+
+    private func toggleSubagents(_ cardId: String) {
+        if collapsedSubagentParents.contains(cardId) {
+            collapsedSubagentParents.remove(cardId)
+        } else {
+            collapsedSubagentParents.insert(cardId)
+        }
     }
 }
 

@@ -1,10 +1,13 @@
-.PHONY: build test run app run-app run-release clean cli install-cli web
+.PHONY: build test run app app-debug run-app run-release clean cli install-cli web
 
 BUNDLE_NAME = KanbanCode.app
 BUNDLE_DIR = build/$(BUNDLE_NAME)
 BUNDLE_ID = com.kanban-code.app
 VERSION ?= 0.1.1
-CONFIG ?= debug
+# The bundle people actually run is optimized. Byte-level work like transcript
+# search is an order of magnitude slower unoptimized, which is felt directly in
+# the palette. Use `make app-debug` when iterating and the extra build time hurts.
+CONFIG ?= release
 ARCH := $(shell uname -m)
 BUILD_DIR = .build/$(ARCH)-apple-macosx/$(CONFIG)
 PNPM ?= corepack pnpm
@@ -14,7 +17,7 @@ CODESIGN_IDENTITY := -
 endif
 
 build:
-	swift build
+	swift build -c $(CONFIG)
 
 test:
 	swift test
@@ -82,12 +85,13 @@ app: build cli install-cli web
 	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f $(BUNDLE_DIR) 2>/dev/null || true
 	@echo "Built $(BUNDLE_DIR)"
 
+app-debug:
+	@$(MAKE) app CONFIG=debug
+
 run-app: app
 	open $(BUNDLE_DIR)
 
-run-release:
-	swift build -c release
-	@$(MAKE) app CONFIG=release
+run-release: app
 	KANBAN_WATCHDOG=1 build/$(BUNDLE_NAME)/Contents/MacOS/KanbanCode
 
 cli:

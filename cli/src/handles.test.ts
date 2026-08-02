@@ -10,7 +10,12 @@ describe("slugifyDisplay", () => {
     assert.equal(slugifyDisplay(" -Hello, World! "), "hello_world");
   });
   test("collapses runs of non-alnum", () => {
-    assert.equal(slugifyDisplay("foo---bar..baz"), "foo_bar_baz");
+    assert.equal(slugifyDisplay("foo---bar..baz"), "foo-bar_baz");
+  });
+  test("keeps dashes the author chose", () => {
+    assert.equal(slugifyDisplay("hi-tester"), "hi-tester");
+    assert.equal(slugifyDisplay("Cache Path - v2"), "cache_path-v2");
+    assert.equal(slugifyDisplay("Fix the parser"), "fix_the_parser");
   });
   test("empty / only punctuation returns empty", () => {
     assert.equal(slugifyDisplay("!!!"), "");

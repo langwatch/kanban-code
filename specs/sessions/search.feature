@@ -61,6 +61,14 @@ Feature: Session Search
     And results should appear incrementally as files are scored
     And the UI should update without blocking
 
+  Scenario: A slow file never holds back a match found elsewhere
+    Given a match is found in a small transcript
+    And a much larger transcript is being scanned at the same time
+    When the small transcript finishes
+    Then its match should be delivered immediately
+    And it should not wait for the larger transcript to finish
+    And a fixed number of transcripts should stay in flight throughout
+
   Scenario: Multi-word highlighting in search results
     Given I search for "database migration v2"
     Then each term ("database", "migration", "v2") should be highlighted
@@ -114,3 +122,5 @@ Feature: Session Search
     Then the live filter should update immediately
     And any running deep search should be cancelled
     And a new deep search should start on Enter
+    And the new search should wait for the cancelled one to stop scanning
+    And two full-corpus scans should never run at the same time

@@ -321,6 +321,34 @@ describe("sendDirectMessage", () => {
     assert.equal(msg.body, "private note");
   });
 
+  test("tells the receiver whether the sender is its parent or its subagent", () => {
+    const parent = mkLink("card_parent", "session-parent");
+    const child = { ...mkLink("card_child", "session-child"), parentCardId: "card_parent" } as Link;
+    const links = [parent, child];
+    const calls: string[] = [];
+    const sender = { sender: (_s: string, t: string) => { calls.push(t); return { ok: true }; } };
+
+    sendDirectMessage(
+      { cardId: parent.id, handle: "coordinator" },
+      { cardId: child.id, handle: "worker" },
+      "check the cache path",
+      links,
+      base,
+      sender
+    );
+    sendDirectMessage(
+      { cardId: child.id, handle: "worker" },
+      { cardId: parent.id, handle: "coordinator" },
+      "root cause found",
+      links,
+      base,
+      sender
+    );
+
+    assert.equal(calls[0], "[DM from @coordinator (parent agent)]: check the cache path");
+    assert.equal(calls[1], "[DM from @worker (subagent)]: root cause found");
+  });
+
   test("reports recipient offline without delivery", () => {
     const links = [mkLink("card_A", "session-a")]; // no card_B
     const { delivered, error } = sendDirectMessage(

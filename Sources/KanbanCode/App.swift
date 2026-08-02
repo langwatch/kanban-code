@@ -241,6 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         channelShareController?.terminateAllImmediately()
     }
 
+    /// Kanban Code keeps running from the system tray with its managed tmux
+    /// sessions alive, so closing the last window must never start a quit.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminationReplyPending else { return .terminateLater }
         let managedSessions = Self.listManagedTmuxSessionsSync()
@@ -379,7 +385,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
     }
 
     /// Synchronous tmux list-sessions — returns all sessions (no filtering).
-    static func listAllTmuxSessionsSync() -> [TmuxSession] {
+    ///
+    /// `applicationShouldTerminate` must answer AppKit synchronously, so this
+    /// runs on the main thread. A wedged tmux server would otherwise freeze the
+    /// whole app there, so the wait is bounded and the child is killed on
+    /// timeout. Output is drained before waiting to avoid a full-pipe deadlock.
+    static func listAllTmuxSessionsSync(timeout: TimeInterval = 5) -> [TmuxSession] {
         let tmuxPath = ShellCommand.findExecutable("tmux") ?? "tmux"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tmuxPath)
@@ -389,13 +400,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return []
         }
+
+        let collected = SyncProcessOutput()
+        let finished = DispatchSemaphore(value: 0)
+        let readHandle = pipe.fileHandleForReading
+        DispatchQueue.global(qos: .userInitiated).async {
+            collected.store(readHandle.readDataToEndOfFile())
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + timeout) == .timedOut {
+            KanbanCodeLog.warn("quit", "tmux list-sessions timed out after \(Int(timeout))s")
+            process.terminate()
+            return []
+        }
+        process.waitUntilExit()
+
         guard process.terminationStatus == 0 else { return [] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return [] }
+        guard let output = String(data: collected.data, encoding: .utf8), !output.isEmpty else { return [] }
 
         return output.components(separatedBy: "\n").compactMap { line -> TmuxSession? in
             let parts = line.components(separatedBy: "\t")
@@ -428,11 +452,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
 
     // Handle kanbancode:// deep links (from Pushover tap, browser, CLI, etc.)
     func application(_ application: NSApplication, open urls: [URL]) {
+        var shouldActivate = false
         for url in urls {
             guard url.scheme == "kanbancode" else { continue }
             // kanbancode://card/{cardId}
             if url.host == "card",
                let cardId = url.pathComponents.dropFirst().first, !cardId.isEmpty {
+                shouldActivate = true
                 NotificationCenter.default.post(
                     name: .kanbanCodeSelectCard, object: nil,
                     userInfo: ["cardId": cardId]
@@ -443,6 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                let path = components.queryItems?.first(where: { $0.name == "path" })?.value,
                !path.isEmpty {
+                shouldActivate = true
                 NotificationCenter.default.post(
                     name: .kanbanCodeOpenProject, object: nil,
                     userInfo: ["path": path]
@@ -451,6 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             // kanbancode://channel/<name> — from `kanban channel open <name>` CLI.
             if url.host == "channel",
                let name = url.pathComponents.dropFirst().first, !name.isEmpty {
+                shouldActivate = true
                 let normalized = name.hasPrefix("#") ? String(name.dropFirst()) : name
                 NotificationCenter.default.post(
                     name: .kanbanCodeSelectChannel, object: nil,
@@ -465,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                 let cardId = components?.queryItems?.first(where: { $0.name == "cardId" })?.value
                 if let handle = (queryHandle?.isEmpty == false ? queryHandle : pathHandle),
                    !handle.isEmpty {
+                    shouldActivate = true
                     var info: [String: String] = ["handle": handle.hasPrefix("@") ? String(handle.dropFirst()) : handle]
                     if let cardId, !cardId.isEmpty { info["cardId"] = cardId }
                     NotificationCenter.default.post(
@@ -472,10 +501,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
                     )
                 }
             }
+            // kanbancode://command/<id> from the CLI command mailbox.
+            if url.host == "command",
+               let requestId = url.pathComponents.dropFirst().first,
+               !requestId.isEmpty {
+                NotificationCenter.default.post(
+                    name: .kanbanCodeCLICommand,
+                    object: nil,
+                    userInfo: ["requestId": requestId]
+                )
+            }
         }
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
-            window.makeKeyAndOrderFront(nil)
+        if shouldActivate {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+                window.makeKeyAndOrderFront(nil)
+            }
         }
     }
 
@@ -571,7 +612,27 @@ extension Notification.Name {
     static let chatCardExpanded = Notification.Name("chatCardExpanded")
     static let kanbanCodeAddLink = Notification.Name("kanbanCodeAddLink")
     static let kanbanCodeOpenProject = Notification.Name("kanbanCodeOpenProject")
+    static let kanbanCodeCLICommand = Notification.Name("kanbanCodeCLICommand")
     static let browserFocusAddressBar = Notification.Name("browserFocusAddressBar")
     static let browserReload = Notification.Name("browserReload")
     static let kanbanReopenClosedTab = Notification.Name("kanbanReopenClosedTab")
+}
+
+/// Lock-protected box so a bounded synchronous process read can hand its output
+/// back from a background queue.
+private final class SyncProcessOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+
+    func store(_ data: Data) {
+        lock.lock()
+        buffer = data
+        lock.unlock()
+    }
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return buffer
+    }
 }

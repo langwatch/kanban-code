@@ -7,10 +7,11 @@ import {
   unlinkSync,
   renameSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, basename, join } from "node:path";
 import { linksPath } from "./paths.js";
 import { readLinks } from "./data.js";
-import { Link } from "./types.js";
+import { Link, QueuedPrompt } from "./types.js";
 
 /// ISO-8601 timestamp without milliseconds, matching Swift's `.iso8601`
 /// encoding ("2026-04-25T12:02:24Z") so headless writes diff cleanly against
@@ -80,6 +81,26 @@ export function upsertCard(card: Link): void {
   if (index >= 0) links[index] = card;
   else links.push(card);
   writeLinks(links);
+}
+
+/// Append a prompt to a card's queue so the agent picks it up once it goes idle.
+/// Only safe while Kanban Code is not running: the app owns links.json and would
+/// overwrite this on its next flush, so callers route through the command
+/// mailbox instead when the app is up.
+export function queueCardPrompt(cardId: string, body: string): boolean {
+  const card = readLinks().find((candidate) => candidate.id === cardId);
+  if (!card) return false;
+  const prompt: QueuedPrompt = {
+    id: randomUUID(),
+    body,
+    sendAutomatically: true,
+  };
+  upsertCard({
+    ...card,
+    queuedPrompts: [...(card.queuedPrompts ?? []), prompt],
+    updatedAt: isoNow(),
+  });
+  return true;
 }
 
 /// Find the existing card for an agent slug (matched by name), if any.

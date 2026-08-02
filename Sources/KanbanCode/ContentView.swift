@@ -20,6 +20,7 @@ struct LaunchConfig: Identifiable {
     let promptImagePaths: [String]
     let assistant: CodingAssistant
     let apiServiceId: String?
+    let modelOverride: String?
 
     init(
         cardId: String,
@@ -34,7 +35,8 @@ struct LaunchConfig: Identifiable {
         sessionId: String? = nil,
         promptImagePaths: [String] = [],
         assistant: CodingAssistant = .claude,
-        apiServiceId: String? = nil
+        apiServiceId: String? = nil,
+        modelOverride: String? = nil
     ) {
         self.cardId = cardId
         self.projectPath = projectPath
@@ -49,6 +51,7 @@ struct LaunchConfig: Identifiable {
         self.promptImagePaths = promptImagePaths
         self.assistant = assistant
         self.apiServiceId = apiServiceId
+        self.modelOverride = modelOverride
     }
 }
 
@@ -57,6 +60,11 @@ struct LaunchConfig: Identifiable {
 private struct RenameTarget: Identifiable, Equatable {
     let name: String
     var id: String { name }
+}
+
+private struct SubagentManagerTarget: Identifiable, Equatable {
+    let parentId: String
+    var id: String { parentId }
 }
 
 private enum DrawerNavigationTarget: Equatable {
@@ -107,6 +115,7 @@ struct ContentView: View {
     @State var renamingCardId: String?
     @State var pendingTerminalSession: String?
     @State var showAddLinkCardId: String?
+    @State private var subagentManagerTarget: SubagentManagerTarget?
     @State var launchConfig: LaunchConfig?
     @State var syncStatuses: [String: SyncStatus] = [:]
     @State var isSyncRefreshing = false
@@ -118,6 +127,7 @@ struct ContentView: View {
     @State var dmDraftImages: [String: [Data]] = [:]
     @State var activeDialog: DialogState = .none
     @State private var selfCompactTriggeredThresholds: [String: Set<Int>] = [:]
+    @State private var selfCompactPolicySignatures: [String: String] = [:]
     @State private var navigationBackStack: [DrawerNavigationTarget] = []
     @State private var navigationForwardStack: [DrawerNavigationTarget] = []
     @State private var suppressNextNavigationRecord = false
@@ -143,6 +153,7 @@ struct ContentView: View {
     let assistantRegistry: CodingAssistantRegistry
     let launcher: LaunchSession
     let tmuxAdapter: TmuxAdapter
+    let subagentCommandStore = SubagentCommandStore()
     let systemTray = SystemTray()
     let mutagenAdapter = MutagenAdapter()
     let hookEventsPath: String
@@ -364,12 +375,17 @@ struct ContentView: View {
                     cmd += "cd \(projectPath) && "
                 }
                 if let sessionId = card.link.sessionLink?.sessionId {
-                    cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
+                    cmd += card.link.effectiveAssistant.resumeCommand(
+                        sessionId: sessionId,
+                        skipPermissions: false,
+                        modelOverride: card.link.modelOverride
+                    )
                 }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(cmd, forType: .string)
             },
             onCopyConversationMarkdown: { cardId in copyConversationMarkdown(cardId: cardId) },
+            onShowSubagents: { cardId in showSubagents(for: cardId) },
             onTrimSession: { cardId in presentDialog(.confirmTrimSession(cardId: cardId)) },
             onDiscoverCard: { cardId in
                 Task {
@@ -394,6 +410,9 @@ struct ContentView: View {
             onDeleteCard: { cardId in presentDialog(.confirmDelete(cardId: cardId)) },
             onSetCardPinned: { cardId, isPinned in
                 store.dispatch(.setCardPinned(cardId: cardId, isPinned: isPinned))
+            },
+            onSetSelfCompactContextThreshold: { cardId, threshold in
+                store.dispatch(.setSelfCompactContextThreshold(cardId: cardId, thresholdTokens: threshold))
             },
             availableProjects: projectList,
             onMoveToProject: { cardId, projectPath in
@@ -451,15 +470,23 @@ struct ContentView: View {
                     cmd += "cd \(projectPath) && "
                 }
                 if let sessionId = card.link.sessionLink?.sessionId {
-                    cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sessionId, skipPermissions: false)
+                    cmd += card.link.effectiveAssistant.resumeCommand(
+                        sessionId: sessionId,
+                        skipPermissions: false,
+                        modelOverride: card.link.modelOverride
+                    )
                 }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(cmd, forType: .string)
             },
             onCopyConversationMarkdown: { cardId in copyConversationMarkdown(cardId: cardId) },
+            onShowSubagents: { cardId in showSubagents(for: cardId) },
             onTrimSession: { cardId in presentDialog(.confirmTrimSession(cardId: cardId)) },
             onSetCardPinned: { cardId, isPinned in
                 store.dispatch(.setCardPinned(cardId: cardId, isPinned: isPinned))
+            },
+            onSetSelfCompactContextThreshold: { cardId, threshold in
+                store.dispatch(.setSelfCompactContextThreshold(cardId: cardId, thresholdTokens: threshold))
             },
             onDiscoverCard: { cardId in
                 Task {
@@ -569,6 +596,11 @@ struct ContentView: View {
             onSetPinned: { isPinned in
                 store.dispatch(.setCardPinned(cardId: card.id, isPinned: isPinned))
             },
+            onSetSelfCompactContextThreshold: { threshold in
+                store.dispatch(.setSelfCompactContextThreshold(cardId: card.id, thresholdTokens: threshold))
+            },
+            subagentCount: subagentCount(for: card.id),
+            onShowSubagents: { showSubagents(for: card.id) },
             onFork: { keepWorktree in forkCard(cardId: card.id, keepWorktree: keepWorktree) },
             onDismiss: { store.dispatch(.selectCard(cardId: nil)) },
             onUnlink: { linkType in
@@ -937,16 +969,17 @@ struct ContentView: View {
                     promptImagePaths: config.promptImagePaths,
                     assistant: config.assistant,
                     initialServiceId: config.apiServiceId,
+                    modelOverride: config.modelOverride,
                     isPresented: Binding(
                         get: { launchConfig != nil },
                         set: { if !$0 { launchConfig = nil } }
                     )
                 ) { editedPrompt, createWorktree, worktreeBranch, runRemotely, skipPermissions, commandOverride, images, selectedServiceId in
                     if config.isResume {
-                        executeResume(cardId: config.cardId, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, assistant: config.assistant, serviceIdOverride: selectedServiceId)
+                        executeResume(cardId: config.cardId, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, assistant: config.assistant, serviceIdOverride: selectedServiceId, modelOverride: config.modelOverride)
                     } else {
                         let wtName: String? = createWorktree ? (worktreeBranch ?? config.worktreeName ?? "") : nil
-                        executeLaunch(cardId: config.cardId, prompt: editedPrompt, projectPath: config.projectPath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: config.assistant, serviceIdOverride: selectedServiceId)
+                        executeLaunch(cardId: config.cardId, prompt: editedPrompt, projectPath: config.projectPath, worktreeName: wtName, runRemotely: runRemotely, skipPermissions: skipPermissions, commandOverride: commandOverride, images: images, assistant: config.assistant, serviceIdOverride: selectedServiceId, modelOverride: config.modelOverride)
                     }
                 }
             }
@@ -982,6 +1015,32 @@ struct ContentView: View {
                         pendingTerminalSession = terminalSession
                         shouldFocusTerminal = true
                     }
+                )
+            }
+            .sheet(item: $subagentManagerTarget) { target in
+                SubagentManagerView(
+                    store: store,
+                    parentId: target.parentId,
+                    onOpen: { cardId in
+                        subagentManagerTarget = nil
+                        store.dispatch(.selectCard(cardId: cardId))
+                    },
+                    onResume: { cardId in
+                        guard var link = store.state.links[cardId] else { return }
+                        link.manuallyArchived = false
+                        link.column = .inProgress
+                        store.dispatch(.createManualTask(link))
+                        executeResume(
+                            cardId: cardId,
+                            runRemotely: link.isRemote,
+                            commandOverride: nil,
+                            assistant: link.effectiveAssistant,
+                            serviceIdOverride: link.apiServiceId,
+                            modelOverride: link.modelOverride,
+                            focusCard: false
+                        )
+                    },
+                    onArchive: { cardId in store.dispatch(.archiveCard(cardId: cardId)) }
                 )
             }
             .popover(isPresented: Binding(
@@ -1135,7 +1194,13 @@ struct ContentView: View {
     private var dialogMessage: some View {
         switch activeDialog {
         case .none: EmptyView()
-        case .confirmDelete: Text("This will permanently delete this card and its data.")
+        case .confirmDelete(let cardId):
+            let descendantCount = subagentCount(for: cardId)
+            if descendantCount > 0 {
+                Text("This will permanently delete this card, its data, and \(descendantCount) subagent\(descendantCount == 1 ? "" : "s").")
+            } else {
+                Text("This will permanently delete this card and its data.")
+            }
         case .confirmArchive: Text("This card has running terminals. Archiving will kill them.")
         case .confirmFork(let cardId):
             if store.state.cards.first(where: { $0.id == cardId })?.link.worktreeLink != nil {
@@ -1290,6 +1355,12 @@ struct ContentView: View {
             .task(id: "self-compact-monitor") {
                 await selfCompactMonitorLoop()
             }
+            .task(id: "subagent-command-bootstrap") {
+                await monitorSubagentCommands()
+            }
+            .task(id: "session-model-monitor") {
+                await sessionModelMonitorLoop()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeChannelsChanged).receive(on: RunLoop.main)) { _ in
                 store.dispatch(.refreshChannels)
                 channelsWatcher.syncChannelLogs(store.state.channels.map(\.name))
@@ -1353,6 +1424,11 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeOpenProject).receive(on: RunLoop.main)) { notification in
                 if let path = notification.userInfo?["path"] as? String {
                     openOrCreateProject(path: path)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeCLICommand).receive(on: RunLoop.main)) { notification in
+                if let requestId = notification.userInfo?["requestId"] as? String {
+                    Task { await processSubagentCommand(id: requestId) }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeAddLink).receive(on: RunLoop.main)) { notification in
@@ -2107,6 +2183,14 @@ struct ContentView: View {
         return counts
     }
 
+    private func subagentCount(for cardId: String) -> Int {
+        SubagentHierarchy.descendantIds(of: cardId, in: store.state.links).count
+    }
+
+    private func showSubagents(for cardId: String) {
+        subagentManagerTarget = SubagentManagerTarget(parentId: cardId)
+    }
+
     var currentProjectHasRemote: Bool {
         store.state.globalRemoteSettings != nil
     }
@@ -2158,16 +2242,25 @@ struct ContentView: View {
                     onSetPinned: { isPinned in
                         store.dispatch(.setCardPinned(cardId: card.id, isPinned: isPinned))
                     },
+                    onSetSelfCompactContextThreshold: { threshold in
+                        store.dispatch(.setSelfCompactContextThreshold(cardId: card.id, thresholdTokens: threshold))
+                    },
                     onCopyResumeCmd: {
                         var cmd = ""
                         if let pp = card.link.projectPath { cmd += "cd \(pp) && " }
                         if let sid = card.link.sessionLink?.sessionId {
-                            cmd += card.link.effectiveAssistant.resumeCommand(sessionId: sid, skipPermissions: false)
+                            cmd += card.link.effectiveAssistant.resumeCommand(
+                                sessionId: sid,
+                                skipPermissions: false,
+                                modelOverride: card.link.modelOverride
+                            )
                         }
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(cmd, forType: .string)
                     },
                     onCopyConversationMarkdown: { copyConversationMarkdown(cardId: card.id) },
+                    subagentCount: subagentCount(for: card.id),
+                    onShowSubagents: { showSubagents(for: card.id) },
                     onTrimSession: { presentDialog(.confirmTrimSession(cardId: card.id)) },
                     onCheckpoint: {
                         detailTab = .history
@@ -2928,30 +3021,47 @@ struct ContentView: View {
         let settings = (try? await settingsStore.read()) ?? Settings()
         let config = settings.selfCompact
         let interval = max(10, config.pollIntervalSeconds)
-        guard config.enabled else {
-            selfCompactTriggeredThresholds.removeAll()
-            return interval
-        }
 
-        let rules = config.rules
-            .filter { $0.thresholdTokens > 0 }
-            .sorted { $0.thresholdTokens < $1.thresholdTokens }
-        guard let firstThreshold = rules.first?.thresholdTokens else { return interval }
-
-        let candidates = store.state.cards.compactMap { card -> (cardId: String, sessionId: String, sessionName: String)? in
+        let candidates = store.state.cards.compactMap { card -> (cardId: String, sessionId: String, sessionName: String, rules: [SelfCompactRule])? in
             let link = card.link
-            guard link.effectiveAssistant == .claude,
+            guard !link.manuallyArchived,
+                  link.effectiveAssistant.supportsContextThresholdSelfCompact,
                   let sessionId = link.sessionLink?.sessionId,
-                  let sessionName = link.tmuxLink?.sessionName
+                  let sessionName = link.tmuxLink?.sessionName,
+                  store.state.tmuxSessions.contains(sessionName)
             else { return nil }
-            return (card.id, sessionId, sessionName)
+            let rules = SelfCompactPolicy.rules(
+                cardThresholdTokens: link.selfCompactContextThresholdTokens,
+                globalSettings: config
+            )
+            return (card.id, sessionId, sessionName, rules)
         }
 
         var liveSessionIds = Set<String>()
         for candidate in candidates {
             liveSessionIds.insert(candidate.sessionId)
+            let rules = candidate.rules
+            let signature = SelfCompactPolicy.signature(for: rules)
+            let previousSignature = selfCompactPolicySignatures[candidate.sessionId]
+
             guard let usage = ContextUsageReader.read(sessionId: candidate.sessionId) else { continue }
             let usedTokens = usage.currentContextTokens
+
+            if let previousSignature, previousSignature != signature {
+                removeQueuedSelfCompactWarnings(cardId: candidate.cardId, rules: rules)
+                selfCompactTriggeredThresholds[candidate.sessionId] = Set(
+                    rules.filter { $0.thresholdTokens <= usedTokens }.map(\.thresholdTokens)
+                )
+                selfCompactPolicySignatures[candidate.sessionId] = signature
+                continue
+            }
+            selfCompactPolicySignatures[candidate.sessionId] = signature
+
+            guard let firstThreshold = rules.first?.thresholdTokens else {
+                selfCompactTriggeredThresholds.removeValue(forKey: candidate.sessionId)
+                removeQueuedSelfCompactWarnings(cardId: candidate.cardId, rules: rules)
+                continue
+            }
             if usedTokens < firstThreshold {
                 selfCompactTriggeredThresholds.removeValue(forKey: candidate.sessionId)
                 removeQueuedSelfCompactWarnings(cardId: candidate.cardId, rules: rules)
@@ -2969,7 +3079,29 @@ struct ContentView: View {
         }
 
         selfCompactTriggeredThresholds = selfCompactTriggeredThresholds.filter { liveSessionIds.contains($0.key) }
+        selfCompactPolicySignatures = selfCompactPolicySignatures.filter { liveSessionIds.contains($0.key) }
         return interval
+    }
+
+    /// A card's `modelOverride` records what it was launched with, which stops
+    /// being true the moment anyone runs `/model` inside the session. Claude's
+    /// statusline is the only place the running model shows up, so poll it for
+    /// live sessions only, which keeps this to a handful of small file reads.
+    private func sessionModelMonitorLoop() async {
+        while !Task.isCancelled {
+            let sessionIds = store.state.links.values.compactMap { link -> String? in
+                guard link.tmuxLink != nil, !link.manuallyArchived else { return nil }
+                return link.sessionLink?.sessionId
+            }
+            var models: [String: String] = [:]
+            for sessionId in sessionIds {
+                if let alias = ContextUsageReader.read(sessionId: sessionId)?.modelAlias {
+                    models[sessionId] = alias
+                }
+            }
+            store.dispatch(.sessionModelsScanned(models))
+            try? await Task.sleep(for: .seconds(5))
+        }
     }
 
     private func triggerSelfCompactRule(_ rule: SelfCompactRule, allRules: [SelfCompactRule], cardId: String, sessionName: String, usedTokens: Int) async {
@@ -2989,10 +3121,13 @@ struct ContentView: View {
                 placement: .front
             ))
 
-        case .compactNow:
-            let command = rule.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "/compact" : rule.message
-            KanbanCodeLog.warn("self-compact", "Forcing compact for \(cardId.prefix(12)) at \(usedTokens) tokens")
-            try? await tmuxAdapter.pastePrompt(to: sessionName, text: command)
+        case .steer:
+            KanbanCodeLog.warn("self-compact", "Steering \(cardId.prefix(12)) at \(usedTokens) tokens")
+            try? await tmuxAdapter.pastePrompt(to: sessionName, text: SelfCompactPolicy.command(for: rule))
+
+        case .interrupt:
+            KanbanCodeLog.warn("self-compact", "Interrupting \(cardId.prefix(12)) at \(usedTokens) tokens")
+            try? await tmuxAdapter.interruptPrompt(to: sessionName, text: SelfCompactPolicy.command(for: rule))
         }
     }
 

@@ -11,14 +11,26 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
     public let isBusy: Bool
     /// True when this card's repo is affected by GitHub API rate limiting.
     public let isRateLimited: Bool
+    /// Model the live session is actually running, e.g. "opus". Read from
+    /// Claude's statusline, so it reflects an in-session `/model` switch that
+    /// the card's own `modelOverride` knows nothing about.
+    public let liveModel: String?
 
-    public init(link: Link, session: Session? = nil, activityState: ActivityState? = nil, isBusy: Bool = false, isRateLimited: Bool = false) {
+    public init(
+        link: Link,
+        session: Session? = nil,
+        activityState: ActivityState? = nil,
+        isBusy: Bool = false,
+        isRateLimited: Bool = false,
+        liveModel: String? = nil
+    ) {
         self.id = link.id
         self.link = link
         self.session = session
         self.activityState = activityState
         self.isBusy = isBusy
         self.isRateLimited = isRateLimited
+        self.liveModel = liveModel
     }
 
     /// Whether Claude is confirmed actively working right now (not just waiting).
@@ -129,7 +141,7 @@ public final class BoardState: @unchecked Sendable {
 
     /// Cards for a specific column, sorted by manual sortOrder then last activity (newest first).
     public func cards(in column: KanbanCodeColumn) -> [KanbanCodeCard] {
-        filteredCards.filter { $0.column == column }
+        filteredCards.filter { $0.column == column && $0.link.parentCardId == nil }
             .sorted {
                 // Cards with sortOrder come first, ordered by sortOrder ascending
                 switch ($0.link.sortOrder, $1.link.sortOrder) {
@@ -147,7 +159,7 @@ public final class BoardState: @unchecked Sendable {
 
     /// Count of cards in a column.
     public func cardCount(in column: KanbanCodeColumn) -> Int {
-        filteredCards.filter { $0.column == column }.count
+        filteredCards.filter { $0.column == column && $0.link.parentCardId == nil }.count
     }
 
     /// Check if a card matches the current project filter.
@@ -282,39 +294,6 @@ public final class BoardState: @unchecked Sendable {
             try? await coordinationStore.removeLink(id: link.id)
         }
         return link
-    }
-
-    /// Reorder a card within its column by placing it above or below a target card.
-    public func reorderCard(cardId: String, targetCardId: String, above: Bool) {
-        guard let draggedIndex = cards.firstIndex(where: { $0.id == cardId }) else { return }
-        let column = cards[draggedIndex].link.column
-        var columnCards = self.cards(in: column)
-
-        // Remove the dragged card
-        columnCards.removeAll { $0.id == cardId }
-
-        // Find insertion index
-        let insertIndex: Int
-        if let targetIdx = columnCards.firstIndex(where: { $0.id == targetCardId }) {
-            insertIndex = above ? targetIdx : targetIdx + 1
-        } else {
-            insertIndex = columnCards.count
-        }
-        columnCards.insert(cards[draggedIndex], at: insertIndex)
-
-        // Assign sortOrder and persist
-        for (i, card) in columnCards.enumerated() {
-            guard let idx = cards.firstIndex(where: { $0.id == card.id }) else { continue }
-            var link = cards[idx].link
-            link.sortOrder = i
-            let session = cards[idx].session
-            let activity = cards[idx].activityState
-            cards[idx] = KanbanCodeCard(link: link, session: session, activityState: activity)
-
-            Task {
-                try? await coordinationStore.upsertLink(link)
-            }
-        }
     }
 
     /// Move a card to a different column (manual override — e.g. user drag).
