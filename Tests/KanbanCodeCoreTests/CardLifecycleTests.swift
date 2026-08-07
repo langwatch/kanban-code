@@ -86,7 +86,7 @@ struct CardLifecycleTests {
         #expect(link.column == .done)
     }
 
-    @Test("Ended session with worktree → waiting")
+    @Test("Ended session with worktree → allSessions")
     func endedWithWorktree() {
         var link = Link(
             column: .inProgress,
@@ -94,7 +94,7 @@ struct CardLifecycleTests {
             worktreeLink: WorktreeLink(path: "", branch: "feature-x")
         )
         UpdateCardColumn.update(link: &link, activityState: .ended, hasWorktree: true)
-        #expect(link.column == .waiting)
+        #expect(link.column == .allSessions)
     }
 
     @Test("Stale session → allSessions")
