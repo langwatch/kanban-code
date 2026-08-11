@@ -105,11 +105,11 @@ struct AssignColumnTests {
         #expect(col == .waiting)
     }
 
-    @Test("Ended with worktree → waiting")
+    @Test("Ended with worktree → allSessions")
     func endedWithWorktree() {
         let link = Link(sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .ended, hasWorktree: true)
-        #expect(col == .waiting)
+        #expect(col == .allSessions)
     }
 
     @Test("Stale + recent → waiting (falls through to recency check)")
@@ -126,11 +126,11 @@ struct AssignColumnTests {
         #expect(col == .allSessions)
     }
 
-    @Test("Ended without worktree, recent → waiting")
+    @Test("Ended without worktree, recent → allSessions")
     func endedNoWorktreeRecent() {
         let link = Link(lastActivity: Date.now.addingTimeInterval(-3600), sessionLink: SessionLink(sessionId: "s1"))
         let col = AssignColumn.assign(link: link, activityState: .ended)
-        #expect(col == .waiting)
+        #expect(col == .allSessions)
     }
 
     @Test("Ended without worktree, old → allSessions")
