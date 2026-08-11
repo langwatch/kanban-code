@@ -1,5 +1,15 @@
 import { WebClient } from "@slack/web-api";
 
+/// One channel from a `conversations.list` snapshot. `isMember` reflects whether
+/// THIS bot token is in the channel — the bridge gates mirroring on it because a
+/// public channel is listed before the bot is invited (see matchPendingChannels).
+export interface SlackChannelInfo {
+  id: string;
+  name: string;
+  isMember: boolean;
+  isPrivate: boolean;
+}
+
 /// Thin wrapper over the Slack Web API for what the bridge needs: identify the
 /// bot, post messages, and resolve channel names to ids.
 export class SlackClient {
@@ -95,5 +105,30 @@ export class SlackClient {
       cursor = r.response_metadata?.next_cursor || undefined;
     } while (cursor);
     return undefined;
+  }
+
+  /// Page through every channel the bot can see in one pass and return a flat
+  /// snapshot (id + name + membership). Public channels are returned regardless
+  /// of membership (with isMember=false until the bot is invited); private
+  /// channels only where the bot is already a member. The bridge calls this once
+  /// per re-resolution pass and matches ALL pending agents against the single
+  /// snapshot, rather than a paginated lookup per agent.
+  async listChannels(): Promise<SlackChannelInfo[]> {
+    const out: SlackChannelInfo[] = [];
+    let cursor: string | undefined;
+    do {
+      const r = await this.web.conversations.list({
+        types: "public_channel,private_channel",
+        limit: 1000,
+        cursor,
+      });
+      for (const c of (r.channels ?? []) as any[]) {
+        if (c?.id && typeof c.name === "string") {
+          out.push({ id: c.id, name: c.name, isMember: !!c.is_member, isPrivate: !!c.is_private });
+        }
+      }
+      cursor = r.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+    return out;
   }
 }

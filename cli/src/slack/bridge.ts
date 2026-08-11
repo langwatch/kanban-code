@@ -1,7 +1,8 @@
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
 import { SocketModeClient } from "@slack/socket-mode";
-import { SlackClient } from "./client.js";
+import { SlackClient, SlackChannelInfo } from "./client.js";
+import { matchPendingChannels, PendingAgent } from "./reresolve.js";
 import { routeSlackMessage, prefixAuthor, ChannelMapping } from "./inbound.js";
 import { formatTranscriptLines, formatCodexRolloutLines, TERMINAL_STOP_REASONS } from "./format.js";
 import { loadAgentsConfig } from "../agents/config.js";
@@ -217,12 +218,14 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     list.splice(i, 1); // consume so a genuine resend later is not swallowed
     return true;
   };
-  for (const a of agents) {
-    const channelId = await client.resolveChannelId(a.slackChannel!);
-    if (!channelId) {
-      console.error(`Slack channel not found for ${a.slug}: ${a.slackChannel}`);
-      continue;
-    }
+  // Build a tail + channel→agent mapping for one agent whose channel is known
+  // and joinable. Used for agents resolved at startup AND, later, for agents
+  // whose channel only becomes usable after the bridge started (the pending
+  // re-resolution loop below). Appends live to `tails`/`mapping`, which the poll
+  // loop and inbound router read by reference, so a late add needs no restart.
+  const agentBySlug = new Map(agents.map((a) => [a.slug, a] as const));
+  const buildTail = (a: (typeof agents)[number], channelId: string): void => {
+    if (tails.some((t) => t.slug === a.slug)) return; // promote-once: never double-tail
     mapping[channelId] = a.slug;
     const runtime = (a.runtime ?? "claude") as Runtime;
     const sessionId = agentIdentity(a.slug, runtime).sessionId;
@@ -230,6 +233,21 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     const path = runtime === "codex" ? findCodexRollout(cwd) : findSessionJsonl(sessionId);
     // Start at EOF so we mirror only new activity, not the whole backlog.
     tails.push({ slug: a.slug, runtime, sessionId, cwd, channelId, path, offset: path ? statSync(path).size : 0 });
+  };
+
+  // Resolve every agent against ONE conversations.list snapshot, gating on bot
+  // MEMBERSHIP: a public channel is listed the moment it exists — before the bot
+  // is invited — so mirroring on mere presence would post into a channel the bot
+  // can't write to and gets no events from (a silent agent — exactly #677).
+  // Agents that don't resolve (channel absent, or bot not a member yet) go to
+  // `pending` and are retried by the loop below, so a channel created/invited
+  // AFTER this restart is picked up with no manual restart.
+  let pending: PendingAgent[] = agents.map((a) => ({ slug: a.slug, channel: a.slackChannel! }));
+  {
+    const snapshot = await client.listChannels();
+    const { resolved, stillPending } = matchPendingChannels(pending, snapshot);
+    pending = stillPending;
+    for (const r of resolved) buildTail(agentBySlug.get(r.slug)!, r.channelId);
   }
 
   // Per-agent active "working…" pill. Set on each tool/thinking post, cleared
@@ -497,10 +515,14 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
   // avoid send-keys-ing into a session that does not have this UI.
   const pickerByAgent = new Map<string, PickerState>();
   const PICKER_POLL_MS = 1000;
-  const claudeAgents = tails.filter((t) => t.runtime === "claude");
-  if (claudeAgents.length) {
+  // Schedule unconditionally and iterate `tails` live each tick so a Claude
+  // agent whose channel resolves AFTER startup (pending loop below) still gets
+  // pickers — a once-built `tails.filter(...)` snapshot would skip it, and zero
+  // Claude agents at boot would mean the interval was never scheduled at all.
+  {
     setInterval(async () => {
-      for (const t of claudeAgents) {
+      for (const t of tails) {
+        if (t.runtime !== "claude") continue;
         const pane = captureTmuxPane(t.slug);
         if (!pane) continue;
         const picker = parsePicker(pane);
@@ -708,8 +730,58 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
       }
     }
   });
+  // ── Pending-channel re-resolution: the #677 self-heal ───────────────────
+  // Retry pending agents against a fresh snapshot on a SELF-RESCHEDULING timer
+  // (not setInterval — overlapping ticks under Slack rate-limiting could both
+  // see an agent pending and double-append its tail). The chain re-arms only
+  // while agents remain pending, so it costs nothing once all are mirrored, and
+  // pulls ONE conversations.list snapshot per pass shared across all pending
+  // agents. A channel created (or the bot invited) after this restart is picked
+  // up within one interval — no manual `systemctl restart` (issue #677).
+  const RESOLVE_RETRY_MS = 60_000;
+  const resolvePendingOnce = async (): Promise<void> => {
+    if (!pending.length) return;
+    let snapshot: SlackChannelInfo[];
+    try {
+      snapshot = await client.listChannels();
+    } catch (e) {
+      console.error("pending-resolve listChannels failed (will retry):", e);
+      return;
+    }
+    const { resolved, stillPending } = matchPendingChannels(pending, snapshot);
+    pending = stillPending;
+    for (const r of resolved) {
+      const a = agentBySlug.get(r.slug);
+      if (!a) continue;
+      buildTail(a, r.channelId);
+      console.error(`now mirroring ${r.slug}: channel ${a.slackChannel} became reachable (no restart).`);
+    }
+  };
+  const schedulePendingResolve = (): void => {
+    if (!pending.length) return;
+    setTimeout(() => {
+      // Always re-arm (while agents remain pending) even if a pass throws — an
+      // unexpected error in one pass must not silently kill the self-heal chain.
+      resolvePendingOnce()
+        .catch((e) => console.error("pending-resolve pass failed (will retry):", e))
+        .finally(() => schedulePendingResolve());
+    }, RESOLVE_RETRY_MS);
+  };
+  if (pending.length) {
+    // One log line for the whole pending set (not one per agent per tick) so a
+    // permanently-misconfigured channel doesn't spam the journal every pass.
+    console.error(
+      `${pending.length} agent(s) awaiting a reachable Slack channel (created + bot invited): ${pending
+        .map((p) => p.slug)
+        .join(", ")}. Retrying every ${RESOLVE_RETRY_MS / 1000}s.`,
+    );
+    schedulePendingResolve();
+  }
+
   await socket.start();
-  console.error(`Slack bridge connected. Mirroring ${tails.length} agent(s).`);
+  console.error(
+    `Slack bridge connected. Mirroring ${tails.length} agent(s)${pending.length ? `; ${pending.length} pending channel(s).` : "."}`,
+  );
 
   // Drop attachments older than the retention window so the inbox does not
   // grow without bound. We sweep on startup and then every hour. Override the
