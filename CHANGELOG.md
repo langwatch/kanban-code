@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.33](https://github.com/langwatch/kanban-code/compare/v0.1.32...v0.1.33) (2026-08-21)
+
+
+### Features
+
+* **activity:** keep a card working while its subagents are ([4319c7d](https://github.com/langwatch/kanban-code/commit/4319c7d0d6939b73e4316fd5dd854a4798838c7c))
+* **agents:** name sessions in LangWatch, and stagger boot launches off the credential race ([143a23e](https://github.com/langwatch/kanban-code/commit/143a23e254efa0f32d3ecd66b98623356ca6537f))
+* **agents:** name sessions in LangWatch, and stagger boot launches off the credential race ([3d54f35](https://github.com/langwatch/kanban-code/commit/3d54f3598163674934fdc20fd432270dd014c9d2))
+* **chat:** jump through history without parsing or mounting it ([a106871](https://github.com/langwatch/kanban-code/commit/a1068711db818f20bb78e92a1a0e474e2e409241))
+* **chat:** stand a finished run of tool calls behind one line ([95d5cc2](https://github.com/langwatch/kanban-code/commit/95d5cc2319412da69b4be7963993ec6590c45cc3))
+* **shortcuts:** archive the open card with cmd+shift+A ([878160b](https://github.com/langwatch/kanban-code/commit/878160b15764c3e7ae6f20636253521d82a0136e))
+* **shortcuts:** rename the open card with cmd+R ([a65f9e8](https://github.com/langwatch/kanban-code/commit/a65f9e8ba993da146ebf131689869826edd57b7a))
+
+
+### Bug Fixes
+
+* **activity:** feed hook events to the detector in file order ([3d0fad4](https://github.com/langwatch/kanban-code/commit/3d0fad468221ca035edd565bb4a74cbb6def8ee6))
+* **activity:** keep spinners live through slow reconciles, and survive timed-out shell commands ([2f42982](https://github.com/langwatch/kanban-code/commit/2f429825ab708c7fc376456224d32f7019283f90))
+* **activity:** keep subagent tracking through a compaction ([bba2870](https://github.com/langwatch/kanban-code/commit/bba28701e5c0b36e811f312bdc2e66e833a4e76f))
+* **chat:** draw a link in the link colour when the message has no block markdown ([15e32fd](https://github.com/langwatch/kanban-code/commit/15e32fd1cceb0780df61995e790adcf3cf5f02d9))
+* **chat:** land a jump below the floating pill, not underneath it ([c8af904](https://github.com/langwatch/kanban-code/commit/c8af904d54709ae3a75e49d732a57545c18b65f6))
+* **chat:** pay for each history load with a real scroll ([e9b692c](https://github.com/langwatch/kanban-code/commit/e9b692c06e003decc4f873555937a3df636f4878))
+* **chat:** stop an expanded message drawing over the one below it ([b4b2582](https://github.com/langwatch/kanban-code/commit/b4b258212da76aa765e3fac8be8eb9f8b1dd0615))
+* **chat:** stop history loads a card switch triggers on its own ([b460718](https://github.com/langwatch/kanban-code/commit/b460718d24c752e333c92f2de7eca2257b7f4aac))
+* **chat:** stop the idle blink and the load that stops at the top ([4cda740](https://github.com/langwatch/kanban-code/commit/4cda740a1fb0ec234bc26d81b55d3b92c1032dba))
+* **discovery:** find the pull requests a card worked on but never pushed ([09b5e1e](https://github.com/langwatch/kanban-code/commit/09b5e1ebf91dcf17350417a59d520556fd45dc36))
+* **reconcile:** a launch takes only the session it started ([c73fe97](https://github.com/langwatch/kanban-code/commit/c73fe9757919af0d3c4a9934fd93cb61fb50d4b0))
+* **terminal:** make a link written by an agent clickable ([abfa2ab](https://github.com/langwatch/kanban-code/commit/abfa2abd1d9c84479119d6e941e1ff9ebb462916))
+
+
+### Refactoring
+
+* **agents:** name sessions through claude's own --name, drop the env var ([5321a81](https://github.com/langwatch/kanban-code/commit/5321a81bba50949ffda11bd2c59ca6e3079b97ec))
+
 ## [0.1.32](https://github.com/langwatch/kanban-code/compare/v0.1.31...v0.1.32) (2026-08-09)
 
 
