@@ -36,6 +36,7 @@ import { agentIdentity } from "./agents/identity.js";
 import { ensureAgentSession } from "./agents/launch.js";
 import { loadAgentsConfig } from "./agents/config.js";
 import { reconcileAll } from "./agents/reconcile.js";
+import { runtimeSpec } from "./agents/runtime.js";
 import { installHooks } from "./hooks.js";
 import { Daemon } from "./agents/daemon.js";
 import { slackAppManifest, MANIFEST_INSTRUCTIONS } from "./slack/manifest.js";
@@ -560,7 +561,16 @@ program
         const repoNote = a.repos
           .map((r) => `${r.name}${r.worktreeCreated ? " (worktree+)" : ""}`)
           .join(", ");
-        lines.push(`${a.slug}: ${a.launch.action} [${repoNote}]`);
+        // Only a runtime that is named after it starts can come up unnamed,
+        // and only then is it worth a word: a session with no name is still
+        // a working session, but an operator looking for it by name will not
+        // find it.
+        const wantsName = !!runtimeSpec(a.launch.identity.runtime).nameCommand;
+        const nameNote =
+          wantsName && a.launch.action !== "noop-running" && !a.launch.named
+            ? " (unnamed)"
+            : "";
+        lines.push(`${a.slug}: ${a.launch.action}${nameNote} [${repoNote}]`);
       }
       if (result.pruned.length) lines.push(`pruned: ${result.pruned.join(", ")}`);
       output(lines.join("\n") || "no agents configured", opts);

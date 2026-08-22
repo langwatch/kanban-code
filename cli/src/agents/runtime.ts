@@ -40,6 +40,12 @@ export interface RuntimeSpec {
   selfCompact: boolean;
   /// Config dir under $HOME (for hooks/skills install).
   configDirName: string;
+  /// The command that names a started session, for a runtime that takes no
+  /// name at launch. Claude has none: --name in buildArgs already named it.
+  nameCommand?(slug: string): string;
+  /// What the pane shows once the runtime will accept that command. Nothing
+  /// is typed into a session that has not shown it.
+  readyMarker?: string;
 }
 
 const claude: RuntimeSpec = {
@@ -65,6 +71,16 @@ const codex: RuntimeSpec = {
   canResume: true,
   selfCompact: false,
   configDirName: ".codex",
+  // Codex takes no name at launch. It names a thread through its own /rename,
+  // which is what `codex resume <name>` and the LangWatch session harvest both
+  // read, so the agent's slug is what labels the session in either.
+  nameCommand: (slug) => `/rename ${slug}`,
+  // The separator codex draws in the status line under its composer, and only
+  // once it will accept a command: before that the pane holds its banner, or
+  // the directory-trust question, and a command typed into either is lost or
+  // answers the wrong question. A separator rather than any wording, so a
+  // codex that rewrites its own UI text still names its sessions.
+  readyMarker: "·",
   buildArgs({ resume, skipPermissions, model }) {
     // --no-alt-screen keeps Codex inline so tmux send-keys paste works (no TUI
     // alt-screen). The bypass flags are Codex's equivalent of Claude's

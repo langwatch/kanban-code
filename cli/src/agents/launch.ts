@@ -2,6 +2,9 @@ import { AgentIdentity } from "./identity.js";
 import {
   hasTmuxSession,
   createTmuxSession,
+  captureTmuxPane,
+  sendTmuxKey,
+  sendTmuxEnter,
   findSessionJsonl,
   findCodexRollout,
   readLinks,
@@ -9,7 +12,7 @@ import {
 import { upsertCard, isoNow } from "../cards.js";
 import { generateKsuid } from "../ksuid.js";
 import { Link, ManualOverrides } from "../types.js";
-import { runtimeSpec } from "./runtime.js";
+import { runtimeSpec, RuntimeSpec } from "./runtime.js";
 import { randomUUID } from "node:crypto";
 
 export interface LaunchOptions {
@@ -29,6 +32,9 @@ export interface LaunchOptions {
   /// agents (e.g. a room's swarm) whose readable slug is recycled: resuming
   /// would reload a stale or unrelated conversation under the same id.
   forceFresh?: boolean;
+  /// How long a runtime that is named after launch gets to come up before the
+  /// name is given up on. A loaded box draws its first frame slowly.
+  nameTimeoutMs?: number;
 }
 
 export type LaunchAction = "noop-running" | "launched" | "resumed";
@@ -40,6 +46,10 @@ export interface LaunchResult {
   tmuxName: string;
   command?: string;
   card: Link;
+  /// Whether the session was named after it started. False for a runtime named
+  /// by a launch flag, for a session already running, and for one that never
+  /// came up in time.
+  named: boolean;
 }
 
 const DEFAULT_OVERRIDES: ManualOverrides = {
@@ -87,6 +97,7 @@ export function ensureAgentSession(
 
   let action: LaunchAction;
   let command: string | undefined;
+  let named = false;
 
   if (tmuxAlive) {
     action = "noop-running";
@@ -116,6 +127,12 @@ export function ensureAgentSession(
     if (!res.ok) {
       throw new Error(`Failed to create tmux session "${identity.tmuxName}": ${res.error}`);
     }
+    named = nameStartedSession({
+      tmuxName: launchIdentity.tmuxName,
+      slug: launchIdentity.slug,
+      spec,
+      timeoutMs: opts.nameTimeoutMs,
+    });
   }
 
   const card = upsertAgentCard(launchIdentity, opts.cwd);
@@ -126,7 +143,118 @@ export function ensureAgentSession(
     tmuxName: launchIdentity.tmuxName,
     command,
     card,
+    named,
   };
+}
+
+/// How long a runtime named after launch gets to come up. Codex spends a few
+/// seconds on its first frame, and a command typed before then is lost.
+const NAME_READY_TIMEOUT_MS = 15_000;
+/// The gap between pane reads while waiting for that first frame.
+const NAME_POLL_MS = 500;
+/// The gap between typing the command and the Enter that submits it. A TUI
+/// that sees the whole line and the Enter arrive together reads the Enter as
+/// part of a paste and keeps the line in its composer instead of running it.
+const NAME_SUBMIT_MS = 100;
+/// How long the command gets to leave the composer before it counts as not
+/// submitted.
+const NAME_CONFIRM_MS = 3_000;
+
+/// What naming a started session needs from the outside, so the wait can be
+/// driven by a test without a real runtime on the other end.
+export interface NameSessionIO {
+  capture(tmuxName: string): string;
+  type(tmuxName: string, text: string): { ok: boolean; error?: string };
+  enter(tmuxName: string): { ok: boolean; error?: string };
+  alive(tmuxName: string): boolean;
+  sleep(ms: number): void;
+  now(): number;
+}
+
+const REAL_NAME_SESSION_IO: NameSessionIO = {
+  capture: (tmuxName) => captureTmuxPane(tmuxName),
+  type: (tmuxName, text) => sendTmuxKey(tmuxName, text),
+  enter: (tmuxName) => sendTmuxEnter(tmuxName),
+  alive: (tmuxName) => hasTmuxSession(tmuxName),
+  sleep: sleepMs,
+  now: () => Date.now(),
+};
+
+/// Give a just-started session the name its runtime takes no launch flag for.
+/// Answers whether the runtime took the name, not merely whether keys were
+/// sent: a command that stayed in the composer named nothing.
+///
+/// Only ever called on a session that has just started and has been given no
+/// prompt, so the command cannot land in the middle of a turn. A runtime that
+/// does not come up in time is left unnamed rather than typed into blind: a
+/// command sitting in the composer would ride out with the agent's first real
+/// prompt.
+export function nameStartedSession(
+  {
+    tmuxName,
+    slug,
+    spec,
+    timeoutMs = NAME_READY_TIMEOUT_MS,
+  }: {
+    tmuxName: string;
+    slug: string;
+    spec: RuntimeSpec;
+    timeoutMs?: number;
+  },
+  io: NameSessionIO = REAL_NAME_SESSION_IO
+): boolean {
+  const command = spec.nameCommand?.(slug);
+  const marker = spec.readyMarker;
+  if (!command || !marker) return false;
+
+  const deadline = io.now() + timeoutMs;
+  while (io.now() < deadline) {
+    if (!io.alive(tmuxName)) return false;
+    if (paneAccepts(io.capture(tmuxName), marker)) {
+      if (!io.type(tmuxName, command).ok) return false;
+      io.sleep(NAME_SUBMIT_MS);
+      if (!io.enter(tmuxName).ok) return false;
+      return commandLeftTheComposer({ tmuxName, command, io });
+    }
+    io.sleep(NAME_POLL_MS);
+  }
+  return false;
+}
+
+/// A submitted command is gone from the pane: the runtime clears its composer
+/// and answers on a line of its own. One still on screen was typed and never
+/// run, which is a session that is not named.
+function commandLeftTheComposer({
+  tmuxName,
+  command,
+  io,
+}: {
+  tmuxName: string;
+  command: string;
+  io: NameSessionIO;
+}): boolean {
+  const deadline = io.now() + NAME_CONFIRM_MS;
+  while (io.now() < deadline) {
+    if (!io.capture(tmuxName).includes(command)) return true;
+    io.sleep(NAME_POLL_MS);
+  }
+  return false;
+}
+
+/// A runtime's status line is the last thing it draws, so the marker is looked
+/// for there rather than anywhere in the pane: a banner scrolled off the top
+/// must not read as ready.
+function paneAccepts(pane: string, marker: string): boolean {
+  const lines = pane.split("\n").filter((line) => line.trim() !== "");
+  const last = lines[lines.length - 1];
+  return last !== undefined && last.includes(marker);
+}
+
+/// Synchronous sleep: the launch path is synchronous end to end, so a wait
+/// must actually hold it.
+function sleepMs(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /// Reconcile the agent's card to current truth. Writes only when something

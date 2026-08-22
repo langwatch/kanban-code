@@ -36,6 +36,22 @@ Feature: Headless agent session reconciliation (CLI)
     And Claude is started with "--resume <uuid>" in the existing worktree
     And prior conversation history is preserved
 
+  Scenario: A runtime with no name flag is named once it is up
+    Given the agent's runtime takes no session name at launch
+    When the reconciler starts its session
+    Then it waits for the runtime to show it will accept a command
+    And it renames the session to the slug, before any prompt is sent
+    And the name reaches everything that reads the runtime's own session list
+    # Codex is that runtime. Claude takes --name and needs none of this.
+
+  Scenario: A runtime that never comes up is left unnamed
+    Given a started session that does not show it will accept a command
+    When the reconciler waits for it
+    Then nothing is typed into that session and the launch still succeeds
+    # A command typed blind sits in the composer and rides out with the
+    # agent's first real prompt. An unnamed session costs a label; a
+    # corrupted first prompt costs the turn.
+
   Scenario: Kanban Code does not clean or clone repos
     Given a canonical clone is missing
     When the reconciler runs for that agent

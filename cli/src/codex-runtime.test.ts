@@ -15,7 +15,7 @@ import { formatCodexRolloutLines } from "./slack/format.js";
 import { writeThreadRoot, readThreadRoot } from "./slack/thread-root.js";
 import { parseAgentsConfig } from "./agents/config.js";
 import { agentIdentity } from "./agents/identity.js";
-import { ensureAgentSession } from "./agents/launch.js";
+import { ensureAgentSession, nameStartedSession } from "./agents/launch.js";
 import { installCodexHooks } from "./hooks.js";
 import { readLinks } from "./data.js";
 
@@ -87,6 +87,11 @@ describe("runtime descriptor", () => {
       else process.env.KANBAN_CODE_HOME = prev;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("codex names a started session, claude was named at launch", () => {
+    assert.equal(runtimeSpec("codex").nameCommand?.("pr-reviewer"), "/rename pr-reviewer");
+    assert.equal(runtimeSpec("claude").nameCommand, undefined);
   });
 
   test("isRuntime guards the union", () => {
@@ -232,6 +237,141 @@ function hasTmux(): boolean {
   try { execSync("tmux -V", { stdio: "ignore" }); return true; } catch { return false; }
 }
 
+describe("naming a session the runtime takes no launch flag for", () => {
+  const BANNER = "  >_ OpenAI Codex (v0.149.0)\n  Tip: Try the Desktop app.";
+  const TRUST = `${BANNER}\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue`;
+  const COMPOSER = `${BANNER}\n› Ask Codex to do anything\n  gpt-5.6-sol low · /home/ubuntu/agent-workspaces/pr-reviewer`;
+  const RENAMED = `${BANNER}\n• Session renamed to pr-reviewer.\n› Ask Codex to do anything\n  gpt-5.6-sol low · /home/ubuntu/agent-workspaces/pr-reviewer`;
+
+  /// A pane driven by a script of frames: one read per call, the last frame
+  /// repeating, which is how a runtime stuck on one screen is expressed.
+  /// Typed text lands in the composer and stays there until an Enter is what
+  /// the runtime accepted, which is what the real TUI does.
+  function fakeIo(
+    frames: string[],
+    opts: { alive?: boolean; submits?: boolean; after?: string } = {}
+  ) {
+    const typed: string[] = [];
+    const enters: number[] = [];
+    let clock = 0;
+    let read = 0;
+    let composer: string | null = null;
+    let submitted = false;
+    const pane = () => {
+      const frame = submitted
+        ? (opts.after ?? RENAMED)
+        : frames[Math.min(read++, frames.length - 1)];
+      return composer === null ? frame : `${frame}\n› ${composer}`;
+    };
+    return {
+      typed,
+      enters,
+      elapsed: () => clock,
+      io: {
+        capture: () => pane(),
+        type: (_tmuxName: string, text: string) => {
+          typed.push(text);
+          composer = text;
+          return { ok: true };
+        },
+        enter: (_tmuxName: string) => {
+          enters.push(clock);
+          if (opts.submits ?? true) {
+            composer = null;
+            submitted = true;
+          }
+          return { ok: true };
+        },
+        alive: () => opts.alive ?? true,
+        sleep: (ms: number) => {
+          clock += ms;
+        },
+        now: () => clock,
+      },
+    };
+  }
+
+  test("waits for the composer, then renames the thread to the slug", () => {
+    const { io, typed, enters } = fakeIo([BANNER, BANNER, COMPOSER]);
+    const named = nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex") },
+      io
+    );
+    assert.equal(named, true);
+    assert.deepEqual(typed, ["/rename pr-reviewer"]);
+    assert.equal(enters.length, 1);
+  });
+
+  test("submits the command with its own keystroke, not alongside the text", () => {
+    // Sent together, a TUI reads the newline as pasted text and the command
+    // sits unrun in the composer.
+    const { io, enters } = fakeIo([COMPOSER]);
+    nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex") },
+      io
+    );
+    assert.deepEqual(enters, [100]);
+  });
+
+  test("reports a command that stayed in the composer as unnamed", () => {
+    const { io, typed } = fakeIo([COMPOSER], { submits: false });
+    const named = nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex") },
+      io
+    );
+    // The keys went out and the runtime kept them: the session has no name,
+    // and saying otherwise would send an operator looking in the wrong place.
+    assert.deepEqual(typed, ["/rename pr-reviewer"]);
+    assert.equal(named, false);
+  });
+
+  test("types nothing into the directory-trust question", () => {
+    const { io, typed, elapsed } = fakeIo([TRUST]);
+    const named = nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex"), timeoutMs: 2_000 },
+      io
+    );
+    // Answering it with a rename would pick one of its options at random.
+    assert.equal(named, false);
+    assert.deepEqual(typed, []);
+    assert.ok(elapsed() >= 2_000);
+  });
+
+  test("gives up as soon as the session is gone, rather than waiting it out", () => {
+    const { io, typed, elapsed } = fakeIo([BANNER], { alive: false });
+    const named = nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex"), timeoutMs: 60_000 },
+      io
+    );
+    assert.equal(named, false);
+    assert.deepEqual(typed, []);
+    assert.equal(elapsed(), 0);
+  });
+
+  test("sends nothing for a runtime that was named at launch", () => {
+    const { io, typed } = fakeIo([COMPOSER]);
+    const named = nameStartedSession(
+      { tmuxName: "docs-writer", slug: "docs-writer", spec: runtimeSpec("claude") },
+      io
+    );
+    assert.equal(named, false);
+    assert.deepEqual(typed, []);
+  });
+
+  test("reads the marker off the last line, so scrollback cannot pass for ready", () => {
+    // The status line of the session BEFORE this one, still in the scrollback
+    // above a fresh banner.
+    const stale = `  gpt-5.6-sol low · /home/ubuntu/agent-workspaces/pr-reviewer\n${BANNER}`;
+    const { io, typed } = fakeIo([stale]);
+    const named = nameStartedSession(
+      { tmuxName: "pr-reviewer", slug: "pr-reviewer", spec: runtimeSpec("codex"), timeoutMs: 1_000 },
+      io
+    );
+    assert.equal(named, false);
+    assert.deepEqual(typed, []);
+  });
+});
+
 describe("codex agent launch (real tmux)", { skip: !hasTmux() }, () => {
   let home: string;
   let workspace: string;
@@ -251,13 +391,17 @@ describe("codex agent launch (real tmux)", { skip: !hasTmux() }, () => {
   });
 
   test("launches codex fresh (no resume) and tags the card assistant=codex", () => {
-    const result = ensureAgentSession(identity, { cwd: workspace, bin: "true" });
+    // nameTimeoutMs 0: `true` is not codex, so it never draws the status line
+    // the rename waits for, and this test is about the launch, not the name.
+    const launch = { cwd: workspace, bin: "true", nameTimeoutMs: 0 };
+    const result = ensureAgentSession(identity, launch);
     assert.equal(result.action, "launched");
     assert.match(result.command!, /true --no-alt-screen --dangerously-bypass-approvals-and-sandbox/);
+    assert.equal(result.named, false);
     const card = readLinks().find((l) => l.name === slug);
     assert.equal(card?.assistant, "codex");
     // A second reconcile is a no-op while the session is alive.
-    const again = ensureAgentSession(identity, { cwd: workspace, bin: "true" });
+    const again = ensureAgentSession(identity, launch);
     assert.equal(again.action, "noop-running");
   });
 });
