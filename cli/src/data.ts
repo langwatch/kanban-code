@@ -115,9 +115,10 @@ export function remoteTmuxSessionNames(): string[] {
   return names;
 }
 
-/// One step of a tmux command chain: the arguments of a single tmux call, or a
-/// pause between two of them.
-export type TmuxStep = string[] | { sleep: number | string };
+/// One step of a tmux command chain: the arguments of a single tmux call, a
+/// pause between two of them, or a raw shell fragment (with `%TMUX%` standing
+/// in for the tmux binary) for the checks a plain call cannot express.
+export type TmuxStep = string[] | { sleep: number | string } | { raw: string };
 
 export interface TmuxRunOptions {
   /// Run detached and return immediately, for chains that sleep first.
@@ -151,11 +152,11 @@ export function buildTmuxCommand(
   const machine = remoteMachineForSession(sessionName);
   const tmux = machine ? "tmux" : findTmux();
   const script = steps
-    .map((step) =>
-      Array.isArray(step)
-        ? `${tmux} ${step.map(shellToken).join(" ")}`
-        : `sleep ${shellToken(String(step.sleep))}`
-    )
+    .map((step) => {
+      if (Array.isArray(step)) return `${tmux} ${step.map(shellToken).join(" ")}`;
+      if ("raw" in step) return step.raw.replaceAll("%TMUX%", tmux);
+      return `sleep ${shellToken(String(step.sleep))}`;
+    })
     .join(" && ");
   const command = machine
     ? `boxd machine exec ${shellToken(machine)} -- ${shellEscape(script)}`
@@ -347,6 +348,34 @@ export function sendTmuxKey(sessionName: string, key: string): { ok: boolean; er
   }
 }
 
+/// Paste text into the composer, submit it, and make sure the submit landed.
+///
+/// Under load the TUI can drop an Enter that arrives while it is still
+/// processing the paste before it, and the text left sitting in the composer
+/// concatenates with whatever is pasted next — a scheduled "/compact" plus its
+/// follow-up became one "/compactYou are..." line this way. The check re-sends
+/// Enter while the pasted text still shows at the bottom of the pane. After a
+/// real submit the transcript echo can match too, but those retries land
+/// within seconds of the submit, on an empty composer, where Enter is a no-op.
+function submitSteps(sessionName: string, text: string): TmuxStep[] {
+  const steps: TmuxStep[] = [
+    ...pasteSteps(sessionName, text),
+    { sleep: 1 },
+    ["send-keys", "-t", sessionName, "Enter"],
+  ];
+  const probe = text.split("\n")[0].trim().slice(0, 40);
+  if (probe.length >= 4) {
+    const session = shellToken(sessionName);
+    steps.push({
+      raw:
+        `{ i=0; while [ "$i" -lt 2 ]; do sleep 1.5; ` +
+        `%TMUX% capture-pane -t ${session} -p | tail -8 | grep -qF -- ${shellToken(probe)} || break; ` +
+        `%TMUX% send-keys -t ${session} Enter; i=$((i+1)); done; }`,
+    });
+  }
+  return steps;
+}
+
 export function scheduleTmuxPrompt(
   sessionName: string,
   text: string,
@@ -356,12 +385,7 @@ export function scheduleTmuxPrompt(
   try {
     runTmux(
       sessionName,
-      [
-        { sleep: delay },
-        ...pasteSteps(sessionName, text),
-        { sleep: 0.1 },
-        ["send-keys", "-t", sessionName, "Enter"],
-      ],
+      [{ sleep: delay }, ...submitSteps(sessionName, text)],
       { detached: true }
     );
     return { ok: true };
@@ -386,19 +410,15 @@ export function scheduleTmuxSelfCompact(
     // recognised as a slash command. 2s gives a comfortable buffer.
     { sleep: 2 },
     ["send-keys", "-t", sessionName, "Escape"],
-    ...pasteSteps(sessionName, "/compact"),
-    { sleep: 0.15 },
-    ["send-keys", "-t", sessionName, "Enter"],
+    // The interrupt redraws the composer; pasting into the middle of that is
+    // how an Enter gets dropped, so let it settle first.
+    { sleep: 0.5 },
+    ...submitSteps(sessionName, "/compact"),
   ];
 
   const followUpSteps: TmuxStep[] = followUp.trim().length === 0
     ? []
-    : [
-        { sleep: delay },
-        ...pasteSteps(sessionName, followUp),
-        { sleep: 0.1 },
-        ["send-keys", "-t", sessionName, "Enter"],
-      ];
+    : [{ sleep: delay }, ...submitSteps(sessionName, followUp)];
 
   try {
     runTmux(sessionName, [...compactSteps, ...followUpSteps], { detached: true });

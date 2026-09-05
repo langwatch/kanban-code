@@ -250,6 +250,18 @@ describe("tmux calls for a remote card", () => {
     assert.match(script, /tmux set-buffer -b kc-\d+-\d+ -- \/compact/);
     assert.match(script, /tmux set-buffer -b kc-\d+-\d+ -- 'carry on'/);
   });
+
+  test("every scheduled submit re-sends Enter while its text still sits in the composer", () => {
+    scheduleTmuxSelfCompact("kc-remote", "carry on with the rebase", 2);
+    const script = remoteScript(commands[0].command);
+    // One verify loop per submit: the /compact and the follow-up.
+    const loops = script.match(/capture-pane -t kc-remote -p \| tail -8 \| grep -qF -- \S+/g) ?? [];
+    assert.equal(loops.length, 2);
+    assert.match(script, /grep -qF -- \/compact \|\| break/);
+    assert.match(script, /grep -qF -- 'carry on with the rebase' \|\| break/);
+    // The raw loop runs the machine's tmux, not a Mac path.
+    assert.doesNotMatch(script, /%TMUX%/);
+  });
 });
 
 describe("tmux calls for a local card", () => {
