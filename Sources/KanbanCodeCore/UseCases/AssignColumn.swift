@@ -68,8 +68,10 @@ public enum AssignColumn {
                 // Only .activelyWorking should keep a card in In Progress.
                 return .waiting
             case .ended:
-                if hasWorktree { return .waiting }
-                // No worktree: fall through to recency check below
+                // Finished assistant sessions should leave the triage lanes.
+                // PR cards are handled above, and genuinely idle sessions use
+                // `.needsAttention` or `.idleWaiting`.
+                return .allSessions
             case .stale:
                 break // No hook data: fall through to recency check below
             }
