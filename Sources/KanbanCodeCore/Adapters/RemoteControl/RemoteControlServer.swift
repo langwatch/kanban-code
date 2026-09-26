@@ -302,7 +302,13 @@ public final class RemoteControlServer: Sendable {
             }
 
             switch await route(request) {
-            case .response(let response):
+            case .response(var response):
+                if response.body.count >= RemoteGzip.minimumBytes, RemoteGzip.accepts(request),
+                   let gzipped = RemoteGzip.compress(response.body) {
+                    response.body = gzipped
+                    response.headers.append(("Content-Encoding", "gzip"))
+                    response.headers.append(("Vary", "Accept-Encoding"))
+                }
                 let keepAlive = request.keepAlive
                 do {
                     try await conn.send(response.serialized(keepAlive: keepAlive))

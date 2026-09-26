@@ -85,6 +85,51 @@ struct RemoteControlServerTests {
         #expect(try JSONDecoder.remote.decode(RemoteBoard.self, from: allData).cards.count == 4)
     }
 
+    @Test("big responses are gzipped for clients that accept it")
+    func gzip() async throws {
+        let many = (0..<300).map { i in
+            RemoteCard(id: "card_\(i)", title: "Card number \(i) with a title", column: .inProgress,
+                       projectPath: "/Users/me/Projects/acme", updatedAt: Date())
+        }
+        let f = try await RemoteServerFixture(host: FakeRemoteHost(cards: many))
+        defer { f.shutdown() }
+        var req = URLRequest(url: URL(string: f.base + "/v1/board")!)
+        req.setValue("Bearer \(f.agentToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("gzip, deflate", forHTTPHeaderField: "Accept-Encoding")
+        let (data, response) = try await f.session.data(for: req)
+        let http = try #require(response as? HTTPURLResponse)
+        #expect(http.value(forHTTPHeaderField: "Content-Encoding") == "gzip")
+        #expect(try JSONDecoder.remote.decode(RemoteBoard.self, from: data).cards.count == 300)
+
+        // A small body goes out as it is.
+        var small = URLRequest(url: URL(string: f.base + "/v1/me")!)
+        small.setValue("Bearer \(f.agentToken)", forHTTPHeaderField: "Authorization")
+        let (_, smallResponse) = try await f.session.data(for: small)
+        #expect((smallResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Encoding") == nil)
+    }
+
+    @Test("gzip output is a valid gzip stream")
+    func gzipFormat() throws {
+        let text = String(repeating: "kanban code remote control ", count: 2000)
+        let gz = try #require(RemoteGzip.compress(Data(text.utf8)))
+        #expect(gz.count < text.utf8.count / 5)
+        let dir = NSTemporaryDirectory() + "gzip-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try gz.write(to: URL(fileURLWithPath: dir + "/x.gz"))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-dc", dir + "/x.gz"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let out = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        #expect(String(decoding: out, as: UTF8.self) == text)
+        #expect(RemoteGzip.crc32(Data("123456789".utf8)) == 0xCBF4_3926)
+    }
+
     @Test("transcript pages with limit and cursor")
     func transcript() async throws {
         let f = try await RemoteServerFixture()
