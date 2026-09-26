@@ -1,29 +1,7 @@
 import XCTest
 
 /// Walks the main flows against a running server and saves screenshots.
-///
-/// Environment (pass with the TEST_RUNNER_ prefix through xcodebuild):
-/// - KC_PAIR_LINK: kanbancode://pair link of the server under test
-/// - KC_SHOT_DIR: directory on the Mac where screenshots are written
-final class FlowTests: XCTestCase {
-    private var app: XCUIApplication!
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-        try launch(linkKey: "KC_PAIR_LINK")
-    }
-
-    private func launch(linkKey: String, extraEnv: [String: String] = [:]) throws {
-        let env = ProcessInfo.processInfo.environment
-        let link = try XCTUnwrap(env[linkKey], "Set TEST_RUNNER_\(linkKey)")
-        // A leftover "Open in Kanban Code?" prompt from simctl openurl.
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        if springboard.buttons["Cancel"].waitForExistence(timeout: 1) { springboard.buttons["Cancel"].tap() }
-        app = XCUIApplication()
-        app.launchEnvironment["KANBANCODE_PAIR_LINK"] = link
-        app.launchEnvironment.merge(extraEnv) { $1 }
-        app.launch()
-    }
+final class FlowTests: KanbanUITestCase {
 
     func test1Board() throws {
         let firstCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'card-'")).firstMatch
@@ -38,7 +16,7 @@ final class FlowTests: XCTestCase {
         openFirstCard()
         sleep(2)
         shot("03-chat")
-        let composer = app.textViews["composer"].exists ? app.textViews["composer"] : app.textFields["composer"]
+        let composer = self.composer
         guard composer.waitForExistence(timeout: 5) else {
             shot("03b-chat-not-live")
             return
@@ -80,13 +58,12 @@ final class FlowTests: XCTestCase {
     func test2bOlderMessages() throws {
         openCard("card_wait")
         sleep(2)
-        let before = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Step 1:'")).count
+        let before = message(containing: "Step 1:").exists
         for _ in 0..<12 { app.scrollViews.firstMatch.swipeDown(velocity: .fast) }
         sleep(2)
         shot("05b-chat-older")
-        XCTAssertEqual(before, 0)
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Step 1:'")).firstMatch.exists
-            || app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Step 2:'")).firstMatch.exists)
+        XCTAssertFalse(before)
+        XCTAssertTrue(message(containing: "Step 1:").exists || message(containing: "Step 2:").exists)
     }
 
     func test3NewTask() throws {
@@ -165,39 +142,5 @@ final class FlowTests: XCTestCase {
         sleep(1)
         XCTAssertFalse(app.segmentedControls["cardTabs"].exists)
         shot("16-agent-scope-card")
-    }
-
-    // MARK: helpers
-
-    private func openCard(_ id: String) {
-        let card = app.buttons["card-\(id)"]
-        if !card.waitForExistence(timeout: 10) {
-            app.swipeUp()
-        }
-        XCTAssertTrue(card.waitForExistence(timeout: 5))
-        card.tap()
-    }
-
-    private func openFirstCard() {
-        let firstCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'card-'")).firstMatch
-        XCTAssertTrue(firstCard.waitForExistence(timeout: 15))
-        firstCard.tap()
-    }
-
-    private func waitEnabled(_ element: XCUIElement) -> Bool {
-        let done = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: element)
-        return XCTWaiter.wait(for: [done], timeout: 10) == .completed
-    }
-
-    private func shot(_ name: String) {
-        let screenshot = XCUIScreen.main.screenshot()
-        let attachment = XCTAttachment(screenshot: screenshot)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        if let dir = ProcessInfo.processInfo.environment["KC_SHOT_DIR"] {
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
-        }
     }
 }

@@ -16,6 +16,7 @@ struct DemoOptions {
     var pairName: String?
     var scope: RemoteScope = .full
     var agtopId: String?
+    var tmuxSocket: String?
     var loopbackOnly = false
 
     static func parse(_ args: [String]) -> DemoOptions {
@@ -33,6 +34,7 @@ struct DemoOptions {
             case "--pair": o.pairName = value()
             case "--scope": o.scope = RemoteScope(rawValue: value()) ?? .full
             case "--agtop": o.agtopId = value()
+            case "--tmux-socket": o.tmuxSocket = value()
             case "--loopback-only": o.loopbackOnly = true
             case "-h", "--help": usage(nil)
             default: usage("unknown argument \(args[i])")
@@ -46,11 +48,13 @@ struct DemoOptions {
         if let error { FileHandle.standardError.write(Data("error: \(error)\n\n".utf8)) }
         print("""
         usage: kanban-code-remote-demo [--port 7790] [--devices <path>] [--pair <name> [--scope full|agent]]
-                                       [--agtop <agtop session id>] [--loopback-only]
+                                       [--agtop <agtop session id>] [--tmux-socket <name>] [--loopback-only]
 
           --pair      adds a device and prints its token and kanbancode://pair link
           --devices   devices file (default .claude/tmp/remote-demo/devices.json)
           --agtop     makes the "agtop" demo card open `agtop open <id> --solo`
+          --tmux-socket  tmux cards attach to a session on this tmux server (tmux -L <name>,
+                      no config file), created on first open, and scroll frames drive its copy-mode
         """)
         exit(error == nil ? 0 : 2)
     }
@@ -75,7 +79,10 @@ final class DemoHost: RemoteControlHost {
         RemoteProject(path: "/Users/demo/Projects/acme-api", name: "acme-api"),
     ]
 
-    init(agtopId: String?) {
+    let tmuxSocket: String?
+
+    init(agtopId: String?, tmuxSocket: String? = nil) {
+        self.tmuxSocket = tmuxSocket
         let now = Date()
         func card(_ id: String, _ title: String, _ column: RemoteColumn, project: Int, runtime: RemoteRuntime,
                   live: Bool, busy: Bool = false, prs: [RemotePR] = [], queued: Int = 0, minutesAgo: Double) -> RemoteCard {
@@ -287,6 +294,10 @@ final class DemoHost: RemoteControlHost {
 
     func scrollTerminal(sessionName: String, lines: Int) async {
         print("scroll \(sessionName) \(lines)")
+        guard let socket = tmuxSocket, let tmux = ShellCommand.findExecutable("tmux") else { return }
+        for command in RemoteTerminalScroll.tmuxCommands(session: sessionName, lines: lines) {
+            _ = try? await ShellCommand.run(tmux, arguments: ["-L", socket] + command)
+        }
     }
 
     func interrupt(cardId: String) async throws {
@@ -318,6 +329,9 @@ final class DemoHost: RemoteControlHost {
         if c.card.runtime == .agtop, let id = c.agtopId {
             return ["agtop", "open", id, "--solo"]
         }
+        if let socket = tmuxSocket {
+            return ["tmux", "-L", socket, "-f", "/dev/null", "new-session", "-A", "-s", sessionName, "/bin/zsh", "-l"]
+        }
         return ["/bin/zsh", "-l"]
     }
 
@@ -334,7 +348,7 @@ final class DemoHost: RemoteControlHost {
 
 let options = DemoOptions.parse(Array(CommandLine.arguments.dropFirst()))
 let devices = RemoteDeviceStore(path: options.devicesPath)
-let host = DemoHost(agtopId: options.agtopId)
+let host = DemoHost(agtopId: options.agtopId, tmuxSocket: options.tmuxSocket)
 let loopbackOnly = options.loopbackOnly
 let bindAddresses: @Sendable () -> [String] = {
     loopbackOnly ? [RemoteNetworkAddresses.loopback] : RemoteNetworkAddresses.bindable()
