@@ -25,7 +25,7 @@ agent: kanban remote ... ──┘   :7780, tailnet     └─ ~/.claude transcr
 
 ## Endpoints
 
-JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000Z`). Responses over 8 KB are gzipped (`Content-Encoding: gzip`) when the request sends `Accept-Encoding: gzip`.
+JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000Z`). A card leaves out `isLive`, `isBusy` and `archived` when false, `queuedPromptCount` when 0, `terminals` and `prs` when empty, and every null field; read a missing key as that default. Responses over 8 KB are gzipped (`Content-Encoding: gzip`) when the request sends `Accept-Encoding: gzip`.
 
 | Method and path | Scope | Returns |
 |---|---|---|

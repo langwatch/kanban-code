@@ -88,6 +88,8 @@ enum RemoteOpenAPI {
       "Terminal": {"type": "object", "properties": {"sessionName": {"type": "string"}, "label": {"type": "string"}, "isPrimary": {"type": "boolean"}}},
       "Card": {
         "type": "object",
+        "description": "isLive, isBusy and archived are left out when false, queuedPromptCount when 0, terminals and prs when empty, null fields always; a missing key means that default.",
+        "required": ["id", "title", "column", "assistant", "runtime", "updatedAt"],
         "properties": {
           "id": {"type": "string"},
           "title": {"type": "string"},

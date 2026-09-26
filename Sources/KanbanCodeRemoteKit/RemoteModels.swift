@@ -157,6 +157,66 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// The JSON of a card leaves out what is false, zero or empty (`isLive`,
+/// `isBusy`, `archived`, `queuedPromptCount`, `terminals`, `prs`) and nil
+/// optionals; decoding reads a missing key as that default. A board of
+/// thousands of cards stays small that way.
+extension RemoteCard {
+    private enum CodingKeys: String, CodingKey {
+        case id, title, column, projectPath, projectName, branch, worktreePath, assistant, runtime
+        case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, parentCardId, archived
+        case lastActivity, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(String.self, forKey: .id),
+            title: try c.decode(String.self, forKey: .title),
+            column: try c.decode(RemoteColumn.self, forKey: .column),
+            projectPath: try c.decodeIfPresent(String.self, forKey: .projectPath),
+            projectName: try c.decodeIfPresent(String.self, forKey: .projectName),
+            branch: try c.decodeIfPresent(String.self, forKey: .branch),
+            worktreePath: try c.decodeIfPresent(String.self, forKey: .worktreePath),
+            assistant: try c.decodeIfPresent(String.self, forKey: .assistant) ?? "claude",
+            runtime: try c.decodeIfPresent(RemoteRuntime.self, forKey: .runtime) ?? .none,
+            isLive: try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false,
+            isBusy: try c.decodeIfPresent(Bool.self, forKey: .isBusy) ?? false,
+            sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
+            terminals: try c.decodeIfPresent([RemoteTerminal].self, forKey: .terminals) ?? [],
+            prs: try c.decodeIfPresent([RemotePR].self, forKey: .prs) ?? [],
+            queuedPromptCount: try c.decodeIfPresent(Int.self, forKey: .queuedPromptCount) ?? 0,
+            parentCardId: try c.decodeIfPresent(String.self, forKey: .parentCardId),
+            archived: try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false,
+            lastActivity: try c.decodeIfPresent(Date.self, forKey: .lastActivity),
+            updatedAt: try c.decode(Date.self, forKey: .updatedAt)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(column, forKey: .column)
+        try c.encodeIfPresent(projectPath, forKey: .projectPath)
+        try c.encodeIfPresent(projectName, forKey: .projectName)
+        try c.encodeIfPresent(branch, forKey: .branch)
+        try c.encodeIfPresent(worktreePath, forKey: .worktreePath)
+        try c.encode(assistant, forKey: .assistant)
+        try c.encode(runtime, forKey: .runtime)
+        if isLive { try c.encode(true, forKey: .isLive) }
+        if isBusy { try c.encode(true, forKey: .isBusy) }
+        try c.encodeIfPresent(sessionId, forKey: .sessionId)
+        if !terminals.isEmpty { try c.encode(terminals, forKey: .terminals) }
+        if !prs.isEmpty { try c.encode(prs, forKey: .prs) }
+        if queuedPromptCount != 0 { try c.encode(queuedPromptCount, forKey: .queuedPromptCount) }
+        try c.encodeIfPresent(parentCardId, forKey: .parentCardId)
+        if archived { try c.encode(true, forKey: .archived) }
+        try c.encodeIfPresent(lastActivity, forKey: .lastActivity)
+        try c.encode(updatedAt, forKey: .updatedAt)
+    }
+}
+
 public struct RemoteProject: Codable, Sendable, Equatable, Identifiable {
     public var id: String { path }
     public var path: String
