@@ -15,6 +15,12 @@ public enum AssignColumn {
         hasWorktree: Bool = false,
         hasLiveSession: Bool = false
     ) -> KanbanCodeColumn {
+        // A headless run (`claude -p` from a script) that no card claims is
+        // reachable in All Sessions only, whatever its activity says.
+        if link.isUnclaimedHeadless {
+            return .allSessions
+        }
+
         // Manual backlog override is sticky — user explicitly parked this card.
         // Only resumeCard/launchCard (which clear manualOverrides.column) can move it out.
         // This check must run BEFORE .activelyWorking to prevent activity from

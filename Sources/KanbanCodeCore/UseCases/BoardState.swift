@@ -311,8 +311,9 @@ public final class BoardState: @unchecked Sendable {
             // Dragging to allSessions = archive; dragging out = unarchive
             if column == .allSessions {
                 link.manuallyArchived = true
-            } else if link.manuallyArchived {
+            } else {
                 link.manuallyArchived = false
+                if link.headless == true { link.headless = false }
             }
         }
         link.updatedAt = .now

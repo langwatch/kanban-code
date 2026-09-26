@@ -11,19 +11,23 @@ public enum JsonlParser {
         public var projectPath: String?
         public var gitBranch: String?
         public var messageCount: Int
+        /// The `entrypoint` Claude Code stamps on its records ("cli", "sdk-cli").
+        public var entrypoint: String?
 
         public init(
             sessionId: String,
             firstPrompt: String? = nil,
             projectPath: String? = nil,
             gitBranch: String? = nil,
-            messageCount: Int = 0
+            messageCount: Int = 0,
+            entrypoint: String? = nil
         ) {
             self.sessionId = sessionId
             self.firstPrompt = firstPrompt
             self.projectPath = projectPath
             self.gitBranch = gitBranch
             self.messageCount = messageCount
+            self.entrypoint = entrypoint
         }
     }
 
@@ -63,6 +67,10 @@ public enum JsonlParser {
             // Extract git branch
             if metadata.gitBranch == nil, let branch = obj["gitBranch"] as? String {
                 metadata.gitBranch = branch
+            }
+
+            if metadata.entrypoint == nil, let entrypoint = obj["entrypoint"] as? String {
+                metadata.entrypoint = entrypoint
             }
 
             if type == "user" || type == "assistant" {

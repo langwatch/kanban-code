@@ -83,3 +83,36 @@ Feature: Session Discovery
     Then the UI should remain responsive
     And existing cards should be interactive
     And new discoveries should appear incrementally
+
+  # ── Headless Sessions ──
+
+  Scenario: A headless session no card claims stays in All Sessions
+    Given a script runs "claude -p" in a project, so its transcript records "entrypoint": "sdk-cli"
+    And no card has its sessionId, and no agtop card is waiting for a session in that project
+    When the discovery process runs
+    Then a discovered card is created for the session with headless = true
+    And the card is listed in All Sessions only, whatever its activity
+    And it never shows in Backlog, In Progress, Waiting, In Review or Done
+
+  Scenario: Existing discovered headless cards leave the board columns
+    Given a discovered card sits in Waiting for a session whose transcript records "entrypoint": "sdk-cli"
+    And the user never renamed, pinned, launched or moved the card
+    When the next reconcile runs
+    Then the card moves to All Sessions and is not deleted
+
+  Scenario: Sessions Kanban runs headless keep their cards
+    Given a card launched on agtop, so its session runs as "claude -p" with "entrypoint": "sdk-cli"
+    When the discovery process runs
+    Then the card keeps its session and its column follows activity as usual
+    And it stays on the board after its agtop host is gone
+
+  Scenario: A headless session does not attach to an interactive card by project
+    Given a card launched in tmux is waiting for its session in "/repo"
+    When a headless session in "/repo" is discovered
+    Then the card keeps waiting for its own session
+    And the headless session gets a hidden card of its own
+
+  Scenario: The user can take a headless card onto the board
+    Given a headless card in All Sessions
+    When the user drags it to Waiting, pins it, renames it or resumes it
+    Then the card stays on the board from then on, even after its drag override clears

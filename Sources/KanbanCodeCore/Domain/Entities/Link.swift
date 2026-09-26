@@ -271,6 +271,35 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
     /// `updatedAt`, which a launch also stamps.
     public var launchAnchor: Date { launchedAt ?? updatedAt }
 
+    /// Whether this card's session came from a headless run (`claude -p`, an
+    /// SDK script) that nothing on the board asked for. nil when the session
+    /// is interactive or has not been judged; false once the user took the
+    /// card onto the board, which keeps it there for good.
+    public var headless: Bool?
+
+    /// Evidence that the card is more than a discovered transcript: someone
+    /// created, launched, named, pinned or placed it, or it carries work
+    /// (a worktree, a pull request, an issue, a parent card).
+    public var isClaimed: Bool {
+        source != .discovered
+            || name != nil
+            || manualOverrides.name
+            || (manualOverrides.column && column != .allSessions)
+            || tmuxLink != nil
+            || launchedAt != nil
+            || parentCardId != nil
+            || isPinned
+            || remote != nil
+            || worktreeLink != nil
+            || issueLink != nil
+            || !prLinks.isEmpty
+    }
+
+    /// A headless session nobody claimed: it lives in All Sessions only.
+    public var isUnclaimedHeadless: Bool {
+        headless == true && !isClaimed
+    }
+
     // MARK: - Display
 
     /// Best display title from link data alone: name → promptBody → branch → PR title → session ID.
@@ -384,7 +413,8 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         pinnedAt: Date? = nil,
         pinnedSortOrder: Int? = nil,
         discoveredBranches: [String]? = nil,
-        discoveredRepos: [String: String]? = nil
+        discoveredRepos: [String: String]? = nil,
+        headless: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -419,6 +449,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         self.pinnedSortOrder = pinnedSortOrder
         self.discoveredBranches = discoveredBranches
         self.discoveredRepos = discoveredRepos
+        self.headless = headless
     }
 
     // MARK: - Backward-compatible Codable
@@ -429,7 +460,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         case manualOverrides, manuallyArchived, source, promptBody, promptImagePaths, parentCardId, modelOverride
         case selfCompactContextThresholdTokens
         case isRemote, remote, isLaunching, launchedAt, sortOrder, pinnedAt, pinnedSortOrder
-        case discoveredBranches, discoveredRepos, assistant, apiServiceId
+        case discoveredBranches, discoveredRepos, assistant, apiServiceId, headless
         // Typed links (new nested format)
         case sessionLink, tmuxLink, worktreeLink, prLinks, issueLink, queuedPrompts, browserTabs
         // Old format keys (for reading legacy format)
@@ -468,6 +499,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         discoveredRepos = try c.decodeIfPresent([String: String].self, forKey: .discoveredRepos)
         assistant = try c.decodeIfPresent(CodingAssistant.self, forKey: .assistant)
         apiServiceId = try c.decodeIfPresent(String.self, forKey: .apiServiceId)
+        headless = try c.decodeIfPresent(Bool.self, forKey: .headless)
 
         // Session link: try nested first, fallback to flat
         if let sl = try c.decodeIfPresent(SessionLink.self, forKey: .sessionLink) {
@@ -562,6 +594,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         try c.encodeIfPresent(discoveredRepos, forKey: .discoveredRepos)
         try c.encodeIfPresent(assistant, forKey: .assistant)
         try c.encodeIfPresent(apiServiceId, forKey: .apiServiceId)
+        try c.encodeIfPresent(headless, forKey: .headless)
 
         // Always write new nested format
         try c.encodeIfPresent(sessionLink, forKey: .sessionLink)

@@ -108,6 +108,13 @@ public enum CardReconciler {
                     // Same session — update path in case it moved
                     link.sessionLink?.sessionPath = session.jsonlPath
                 }
+                // A card that only exists because discovery found a headless
+                // transcript leaves the board. Judged once: a card the user
+                // took back holds `headless == false` and is never re-marked.
+                if link.headless == nil, session.isHeadless,
+                   link.sessionLink?.sessionId == session.id, !link.isClaimed {
+                    link.headless = true
+                }
                 // Different sessionId (e.g., shell tab session) — just mark matched,
                 // don't overwrite the card's primary session. Activity only moves
                 // forward: a session from days ago that lost its own card lands
@@ -156,7 +163,8 @@ public enum CardReconciler {
                 matchedSessionIds.insert(session.id)
             } else {
                 KanbanCodeLog.info("reconciler", "New session \(session.id.prefix(8)) → new card")
-                // Truly new session — create discovered card
+                // Truly new session — create discovered card. A headless one
+                // is kept off the board columns (see AssignColumn).
                 let newLink = Link(
                     projectPath: session.projectPath,
                     column: .allSessions,
@@ -165,7 +173,8 @@ public enum CardReconciler {
                     sessionLink: SessionLink(
                         sessionId: session.id,
                         sessionPath: session.jsonlPath
-                    )
+                    ),
+                    headless: session.isHeadless ? true : nil
                 )
                 linksById[newLink.id] = newLink
                 cardIdBySessionId[session.id] = newLink.id
@@ -185,6 +194,9 @@ public enum CardReconciler {
                     // Skip cards with branch discovery blocked (watermark or legacy worktreePath) —
                     // the session's baked-in gitBranch belongs to the parent, not this card.
                     if linksById[cardId]?.manualOverrides.isBranchDiscoveryBlocked == true { continue }
+                    // A hidden headless card does not adopt the branch's worktree:
+                    // that worktree gets a card of its own on the board.
+                    if linksById[cardId]?.isUnclaimedHeadless == true { continue }
                     cardIdsByBranch[baseName, default: []].append(cardId)
                 }
             }
@@ -528,13 +540,21 @@ public enum CardReconciler {
             return cardId
         }
 
+        // A headless session (`claude -p` from a script) is not the one a
+        // card's terminal started. Only a card hosted on agtop, which runs
+        // Claude headless itself, may take one by the fuzzy rules below.
+        let acceptsSession: (Link) -> Bool = { link in
+            !session.isHeadless
+                || link.tmuxLink.map { AgtopSessionName.isAgtop($0.sessionName) } == true
+        }
+
         // 2. Match by worktree branch (session has gitBranch matching a card's worktreeLink)
         //    Must also match project path to avoid cross-project matches on common branches like "main"
         if let branch = session.gitBranch {
             let baseName = branch.replacingOccurrences(of: "refs/heads/", with: "")
             if let cardIds = cardIdsByBranch[baseName] {
                 let sameProject = cardIds.filter { cardId in
-                    guard let link = linksById[cardId] else { return false }
+                    guard let link = linksById[cardId], acceptsSession(link) else { return false }
                     guard let sessionPath = session.projectPath else { return true }
                     return link.projectPath == sessionPath
                         || isWorktreeUnder(sessionPath: sessionPath, projectRoot: link.projectPath)
@@ -559,6 +579,7 @@ public enum CardReconciler {
             let candidates = linksById.values.filter { link in
                 link.tmuxLink != nil
                     && link.sessionLink == nil
+                    && acceptsSession(link)
                     && (link.projectPath == projectPath
                         || isWorktreeUnder(sessionPath: projectPath, projectRoot: link.projectPath))
                     && startedAfterLaunch(session: session, link: link)
@@ -589,6 +610,7 @@ public enum CardReconciler {
                 let candidates = linksById.values.filter { link in
                     link.tmuxLink != nil
                         && link.sessionLink == nil
+                        && acceptsSession(link)
                         && link.projectPath == projectRoot
                         && startedAfterLaunch(session: session, link: link)
                 }
@@ -607,6 +629,7 @@ public enum CardReconciler {
             let candidates = linksById.values.filter { link in
                 link.tmuxLink != nil
                     && link.sessionLink != nil
+                    && acceptsSession(link)
                     && (link.projectPath == projectPath
                         || isWorktreeUnder(sessionPath: projectPath, projectRoot: link.projectPath))
             }

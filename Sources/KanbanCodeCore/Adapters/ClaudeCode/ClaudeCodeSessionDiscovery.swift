@@ -97,6 +97,7 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
                     session.jsonlPath = filePath
                     session.modifiedTime = mtime
                     session.messageCount = metadata.messageCount
+                    session.entrypoint = metadata.entrypoint
 
                     if session.firstPrompt == nil {
                         session.firstPrompt = metadata.firstPrompt

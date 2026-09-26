@@ -847,8 +847,10 @@ public enum Reducer {
                 link.manuallyArchived = true
                 link.pinnedAt = nil
                 link.pinnedSortOrder = nil
-            } else if link.manuallyArchived {
+            } else {
                 link.manuallyArchived = false
+                // The user put a headless session's card on the board: it stays.
+                if link.headless == true { link.headless = false }
             }
             link.updatedAt = .now
             state.links[cardId] = link
@@ -899,6 +901,7 @@ public enum Reducer {
             if isPinned {
                 if link.pinnedAt != nil { return [] }
                 link.pinnedAt = .now
+                if link.headless == true { link.headless = false }
                 let firstOrder = state.pinnedCards.compactMap(\.link.pinnedSortOrder).min() ?? 0
                 link.pinnedSortOrder = firstOrder - 1
                 // Pinning an archived card brings it back: leaving it archived

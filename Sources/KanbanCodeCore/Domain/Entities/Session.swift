@@ -11,6 +11,15 @@ public struct Session: Identifiable, Sendable, Equatable {
     public var modifiedTime: Date
     public var jsonlPath: String? // Full path to the session file (.jsonl or .json)
     public var assistant: CodingAssistant // Which assistant this session belongs to
+    /// How the assistant was started, as its transcript records it:
+    /// Claude Code writes "cli" for an interactive session and "sdk-cli"
+    /// for `claude -p` and SDK runs.
+    public var entrypoint: String?
+
+    /// Whether a script ran this session without a terminal (`claude -p`).
+    public var isHeadless: Bool { entrypoint == Self.headlessEntrypoint }
+
+    public static let headlessEntrypoint = "sdk-cli"
 
     public init(
         id: String,
@@ -21,7 +30,8 @@ public struct Session: Identifiable, Sendable, Equatable {
         messageCount: Int = 0,
         modifiedTime: Date = .now,
         jsonlPath: String? = nil,
-        assistant: CodingAssistant = .claude
+        assistant: CodingAssistant = .claude,
+        entrypoint: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -32,6 +42,7 @@ public struct Session: Identifiable, Sendable, Equatable {
         self.modifiedTime = modifiedTime
         self.jsonlPath = jsonlPath
         self.assistant = assistant
+        self.entrypoint = entrypoint
     }
 
     /// Display title: custom name → summary → first prompt → session ID prefix.
