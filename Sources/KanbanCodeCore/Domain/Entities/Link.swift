@@ -752,8 +752,11 @@ public struct ConversationTurn: Sendable, Equatable {
     /// Claude Code's interactive resume requires `message.model` on assistant
     /// lines, so migration writers persist this (or a fallback marker).
     public let modelName: String?
+    /// A prompt waiting in Claude Code's queue (a `queue-operation` record),
+    /// not yet a message of the conversation.
+    public let isQueued: Bool
 
-    public init(index: Int, lineNumber: Int, role: String, textPreview: String, timestamp: String? = nil, contentBlocks: [ContentBlock] = [], imageCount: Int = 0, modelName: String? = nil, endLineNumber: Int? = nil) {
+    public init(index: Int, lineNumber: Int, role: String, textPreview: String, timestamp: String? = nil, contentBlocks: [ContentBlock] = [], imageCount: Int = 0, modelName: String? = nil, endLineNumber: Int? = nil, isQueued: Bool = false) {
         self.index = index
         self.lineNumber = lineNumber
         self.endLineNumber = max(lineNumber, endLineNumber ?? lineNumber)
@@ -763,6 +766,7 @@ public struct ConversationTurn: Sendable, Equatable {
         self.contentBlocks = contentBlocks
         self.imageCount = imageCount
         self.modelName = modelName
+        self.isQueued = isQueued
     }
 }
 

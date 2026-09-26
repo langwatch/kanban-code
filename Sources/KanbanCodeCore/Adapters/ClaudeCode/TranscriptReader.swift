@@ -703,7 +703,8 @@ public enum TranscriptReader {
             timestamp: obj["timestamp"] as? String,
             contentBlocks: blocks,
             imageCount: type == "user" ? Self.countImages(in: obj) : 0,
-            modelName: (obj["message"] as? [String: Any])?["model"] as? String
+            modelName: (obj["message"] as? [String: Any])?["model"] as? String,
+            isQueued: type == "queue-operation"
         )
     }
 
@@ -712,7 +713,9 @@ public enum TranscriptReader {
     /// Merge consecutive assistant turns into a single turn.
     /// Claude Code writes thinking + response as separate JSONL entries
     /// that are parts of the same message.
+    /// Also drops queued prompts that were delivered later in `turns`.
     static func mergeConsecutiveAssistantTurns(_ turns: [ConversationTurn]) -> [ConversationTurn] {
+        let turns = dropDeliveredQueuedPrompts(turns)
         guard turns.count > 1 else { return turns }
         var result: [ConversationTurn] = []
         var i = 0
@@ -740,6 +743,32 @@ public enum TranscriptReader {
             i += 1
         }
         return result
+    }
+
+    /// Claude Code logs a queued prompt as an `enqueue` record, and once the
+    /// prompt is taken from the queue it logs it again as a user message.
+    /// Every prompt of a `claude -p` session goes through the queue. The
+    /// queued copy stays only while no later user message has its text.
+    static func dropDeliveredQueuedPrompts(_ turns: [ConversationTurn]) -> [ConversationTurn] {
+        guard turns.contains(where: \.isQueued) else { return turns }
+        var delivered: [String: Int] = [:]
+        var kept: [ConversationTurn] = []
+        kept.reserveCapacity(turns.count)
+        func text(_ turn: ConversationTurn) -> String {
+            turn.contentBlocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n")
+        }
+        for turn in turns.reversed() {
+            if turn.isQueued {
+                if let n = delivered[text(turn)], n > 0 {
+                    delivered[text(turn)] = n - 1
+                    continue
+                }
+            } else if turn.role == "user" {
+                delivered[text(turn), default: 0] += 1
+            }
+            kept.append(turn)
+        }
+        return kept.reversed()
     }
 
     // MARK: - User message parsing

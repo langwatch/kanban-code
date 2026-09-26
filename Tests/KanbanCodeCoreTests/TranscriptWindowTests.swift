@@ -104,6 +104,21 @@ struct TranscriptWindowTests {
 
     // MARK: - readTail
 
+    @Test("a queued prompt shows once after it is delivered")
+    func deliveredQueuedPromptShowsOnce() async throws {
+        let (path, _) = try Self.write([
+            Self.queued("run the check"),
+            Self.user("run the check"),
+            Self.assistant("done"),
+            Self.queued("still waiting"),
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let tail = try await TranscriptReader.readTail(from: path)
+        #expect(tail.turns.map(\.textPreview) == ["run the check", "done", "still waiting"])
+        #expect(tail.turns.map(\.isQueued) == [false, false, true])
+    }
+
     @Test("a bounded tail is the end of the unbounded one")
     func tailWindowMatchesFullRead() async throws {
         let (path, _) = try Self.write([
