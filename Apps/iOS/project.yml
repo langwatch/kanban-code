@@ -1,0 +1,90 @@
+name: KanbanCodeMobile
+options:
+  bundleIdPrefix: io.kanbancode
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  KanbanCode:
+    path: ../..
+  SwiftTerm:
+    path: ../../LocalPackages/SwiftTerm
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  KanbanCodeMobile:
+    type: application
+    platform: iOS
+    sources:
+      - KanbanCodeMobile
+    dependencies:
+      - package: KanbanCode
+        product: KanbanCodeRemoteKit
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.kanbancode.mobile
+        PRODUCT_NAME: KanbanCodeMobile
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: KanbanCodeMobile/Info.plist
+    info:
+      path: KanbanCodeMobile/Info.plist
+      properties:
+        CFBundleDisplayName: Kanban Code
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSCameraUsageDescription: Scan the pairing QR code shown by Kanban Code on your Mac.
+        NSLocalNetworkUsageDescription: Connect to Kanban Code on your Mac.
+        CFBundleURLTypes:
+          - CFBundleURLName: io.kanbancode.mobile
+            CFBundleURLSchemes:
+              - kanbancode
+  KanbanCodeMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - KanbanCodeMobileUITests
+    dependencies:
+      - target: KanbanCodeMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.kanbancode.mobile.uitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: KanbanCodeMobile
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+schemes:
+  KanbanCodeMobile:
+    build:
+      targets:
+        KanbanCodeMobile: all
+        KanbanCodeMobileUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - KanbanCodeMobileUITests
