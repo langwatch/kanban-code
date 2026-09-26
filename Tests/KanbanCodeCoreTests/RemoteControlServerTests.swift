@@ -71,6 +71,20 @@ struct RemoteControlServerTests {
         #expect(wrongMethod == 405)
     }
 
+    @Test("the board is the working set unless all=1")
+    func boardWorkingSet() async throws {
+        let host = FakeRemoteHost(cards: FakeRemoteHost.defaultCards + [
+            RemoteCard(id: "card_archived", title: "old", column: .inProgress, archived: true, updatedAt: Date()),
+            RemoteCard(id: "card_session", title: "session", column: .allSessions, updatedAt: Date()),
+        ])
+        let f = try await RemoteServerFixture(host: host)
+        defer { f.shutdown() }
+        let (_, data) = try await f.request("GET", "/v1/board", token: f.agentToken)
+        #expect(try JSONDecoder.remote.decode(RemoteBoard.self, from: data).cards.map(\.id) == ["card_live", "card_idle"])
+        let (_, allData) = try await f.request("GET", "/v1/board?all=1", token: f.agentToken)
+        #expect(try JSONDecoder.remote.decode(RemoteBoard.self, from: allData).cards.count == 4)
+    }
+
     @Test("transcript pages with limit and cursor")
     func transcript() async throws {
         let f = try await RemoteServerFixture()

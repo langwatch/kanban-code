@@ -41,6 +41,13 @@ Feature: Remote control from a phone and from other agents
     When I revoke the phone in Settings > Remote Control
     Then its sockets close and its next request is refused
 
+  Scenario: The phone gets the working set, not the whole history
+    Given the Mac has archived cards, All Sessions cards and 40 Done cards
+    When the phone reads the board
+    Then it gets no archived and no All Sessions cards, and the 30 most recent Done cards
+    When it asks with all=1
+    Then it gets every card
+
   Scenario: The board follows the Mac live
     Given the phone is connected to /v1/events
     When a card moves to Waiting on the Mac

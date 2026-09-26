@@ -31,7 +31,7 @@ JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000
 |---|---|---|
 | `GET /v1/health` | none | `RemoteHealth` |
 | `GET /v1/me` | any | `RemoteDevice` |
-| `GET /v1/board` | any | `RemoteBoard` |
+| `GET /v1/board?all=1` | any | `RemoteBoard` |
 | `GET /v1/cards/{id}` | any | `RemoteCard` |
 | `GET /v1/cards/{id}/transcript?limit=50&before=<cursor>` | any | `RemoteTranscript`, oldest first |
 | `POST /v1/tasks` | any | `RemoteTaskRequest` → `RemoteCard`, 201 |
@@ -43,6 +43,7 @@ JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000
 | `GET /.well-known/openapi.json` | none | OpenAPI 3.1 of the above |
 
 Behaviour:
+- `board` and `events` return the working set: no archived cards, no All Sessions cards, and only the 30 most recent Done cards (by `lastActivity`, else `updatedAt`). `?all=1` returns every card.
 - `POST /v1/tasks` resolves `project` as a project path first, then as a project name (case-insensitive). An unknown project is a 400 that lists the known names. The card launches with the app's defaults for that project: runtime (tmux or agtop), skip permissions, and the command template.
 - `prompt` with `mode: queue` delivers the text when the current turn ends, or at once when the session is idle. `mode: now` interrupts the turn first. A card with no live session returns 409 until it is resumed.
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.

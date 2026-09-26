@@ -148,3 +148,34 @@ struct RemoteControlMapperTests {
         #expect(again.remoteControl == RemoteControlSettings(enabled: true, port: 7781))
     }
 }
+
+@Suite("Remote working set")
+struct RemoteWorkingSetTests {
+    static func card(_ id: String, _ column: RemoteColumn, archived: Bool = false, minutesAgo: Double = 0) -> RemoteCard {
+        RemoteCard(id: id, title: id, column: column, archived: archived,
+                   lastActivity: Date(timeIntervalSince1970: 1_800_000_000 - minutesAgo * 60),
+                   updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    @Test("drops archived and All Sessions cards, keeps the 30 most recent Done")
+    func filter() {
+        var cards = [
+            Self.card("wip", .inProgress),
+            Self.card("wait", .waiting, minutesAgo: 9999),
+            Self.card("arch", .inProgress, archived: true),
+            Self.card("sess", .allSessions),
+            Self.card("done-archived", .done, archived: true),
+        ]
+        cards += (0..<40).map { Self.card("done\($0)", .done, minutesAgo: Double($0)) }
+        let ids = RemoteWorkingSet.filter(cards).map(\.id)
+        #expect(ids.contains("wip"))
+        #expect(ids.contains("wait"))
+        #expect(!ids.contains("arch"))
+        #expect(!ids.contains("sess"))
+        #expect(!ids.contains("done-archived"))
+        #expect(ids.filter { $0.hasPrefix("done") }.count == 30)
+        #expect(ids.contains("done0"))
+        #expect(ids.contains("done29"))
+        #expect(!ids.contains("done30"))
+    }
+}

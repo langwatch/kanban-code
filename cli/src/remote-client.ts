@@ -224,8 +224,9 @@ export class RemoteClient {
     return this.request("GET", "/v1/me");
   }
 
-  board(): Promise<RemoteBoard> {
-    return this.request("GET", "/v1/board");
+  /** The working set (no archived, no All Sessions, recent Done), or every card with `all`. */
+  board(opts: { all?: boolean } = {}): Promise<RemoteBoard> {
+    return this.request("GET", opts.all ? "/v1/board?all=1" : "/v1/board");
   }
 
   card(id: string): Promise<RemoteCard> {
@@ -561,7 +562,7 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
     } catch (error) {
       if (!(error instanceof RemoteHttpError) || (error.status !== 404 && error.status !== 400)) throw error;
     }
-    const board = await c.board();
+    const board = await c.board({ all: true });
     return resolveCardRef(board.cards, ref);
   };
 
@@ -647,14 +648,14 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
 
   remote
     .command("cards")
-    .description("List the Mac's cards (archived ones only with --all)")
+    .description("List the Mac's working cards (archived, All Sessions and older Done cards only with --all)")
     .option("--column <column>", "backlog, in_progress, waiting (requires_attention), in_review, done")
     .option("--project <project>", "project name or path")
-    .option("--all", "include archived cards")
+    .option("--all", "include archived, All Sessions and older Done cards")
     .option("--json", "output as JSON")
     .action(
       run(async (opts: { column?: string; project?: string; all?: boolean; json?: boolean }) => {
-        const board = await client().board();
+        const board = await client().board({ all: opts.all });
         const cards = filterCards(board.cards, opts);
         if (opts.json) return printJson(cards);
         println(formatCardsTable(cards));

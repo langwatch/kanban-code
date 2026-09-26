@@ -369,7 +369,8 @@ public final class RemoteControlServer: Sendable {
                 return .response(.json(device))
 
             case ("GET", "board"):
-                return .response(.json(await host.board()))
+                let board = await host.board()
+                return .response(.json(Self.wantsAll(request) ? board : RemoteWorkingSet.filter(board)))
 
             case ("GET", "cards/*"):
                 guard let card = await host.board().cards.first(where: { $0.id == id }) else {
@@ -444,6 +445,12 @@ public final class RemoteControlServer: Sendable {
         }
     }
 
+    /// `?all=1` asks for every card instead of the working set.
+    static func wantsAll(_ request: RemoteHTTPRequest) -> Bool {
+        guard let value = request.query["all"]?.lowercased() else { return false }
+        return value == "" || value == "1" || value == "true" || value == "yes"
+    }
+
     private static let knownShapes: Set<String> = [
         "me", "board", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt",
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
@@ -495,6 +502,7 @@ public final class RemoteControlServer: Sendable {
         }
         defer { unregister(socketId) }
 
+        let all = Self.wantsAll(request)
         let host = self.host
         let pushInterval = options.pushInterval
         let pingInterval = options.pingInterval
@@ -502,6 +510,7 @@ public final class RemoteControlServer: Sendable {
         let pusher = Task { [weak self] in
             guard let self else { return }
             var sent = await host.board()
+            if !all { sent = RemoteWorkingSet.filter(sent) }
             if let text = self.encodedEvent(RemoteEvent(type: .board, board: sent)) {
                 try? await ws.sendText(text)
             }
@@ -510,7 +519,8 @@ public final class RemoteControlServer: Sendable {
                 let wait = pushInterval - Date().timeIntervalSince(lastPush)
                 if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
                 if Task.isCancelled { return }
-                let board = await host.board()
+                var board = await host.board()
+                if !all { board = RemoteWorkingSet.filter(board) }
                 // The app signals many changes that leave the wire board as it was.
                 guard board.cards != sent.cards || board.projects != sent.projects else { continue }
                 lastPush = Date()

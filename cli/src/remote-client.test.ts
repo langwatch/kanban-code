@@ -116,8 +116,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return send(res, 200, { id: `dev_${scope}`, name: scope === "full" ? "iPhone" : "openclaw", scope, createdAt: "2026-09-26T09:00:00.000Z", lastSeenAt: null });
   }
   if (req.method === "GET" && path === "/v1/board") {
+    // Like the server: the working set unless ?all=1.
+    const all = url.searchParams.get("all") === "1";
     return send(res, 200, {
-      cards: state.cards,
+      cards: all ? state.cards : state.cards.filter((c: any) => !c.archived && c.column !== "all_sessions"),
       projects: [
         { path: "/Users/me/Projects/langwatch", name: "langwatch" },
         { path: "/Users/me/Projects/kanban", name: "kanban" },

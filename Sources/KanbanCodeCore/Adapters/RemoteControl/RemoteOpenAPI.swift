@@ -21,7 +21,8 @@ enum RemoteOpenAPI {
       "get": {"summary": "The device the token belongs to", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Device"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
     },
     "/v1/board": {
-      "get": {"summary": "All cards and projects", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Board"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
+      "parameters": [{"$ref": "#/components/parameters/All"}],
+      "get": {"summary": "The working set (no archived, no All Sessions, the 30 most recent Done) and projects; all=1 for every card", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Board"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
     },
     "/v1/cards/{id}": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
@@ -73,7 +74,10 @@ enum RemoteOpenAPI {
   },
   "components": {
     "securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}},
-    "parameters": {"CardId": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}},
+    "parameters": {
+      "CardId": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "All": {"name": "all", "in": "query", "description": "1 for every card instead of the working set", "schema": {"type": "string", "enum": ["1"]}}
+    },
     "responses": {"Error": {"description": "refused", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}},
     "schemas": {
       "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
