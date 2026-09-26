@@ -37,6 +37,19 @@ struct RemoteClientLoopbackTests {
         var events = client.events().makeAsyncIterator()
         let first = try await events.next()
         #expect(first?.type == .board)
+        var held = first?.board
+        try await client.sendPrompt(cardId: live.id, text: "delta please", mode: .now)
+        var sawDelta = false
+        for _ in 0..<5 {
+            guard let event = try await events.next() else { break }
+            event.apply(to: &held)
+            if event.type == .cards, event.upserted?.contains(where: { $0.id == live.id }) == true {
+                sawDelta = true
+                break
+            }
+        }
+        #expect(sawDelta)
+        #expect(held?.cards.contains { $0.id == live.id } == true)
 
         let terminal = client.terminal(cardId: live.id, session: live.terminals.last?.sessionName, cols: 80, rows: 24)
         defer { terminal.close() }

@@ -151,8 +151,9 @@ public struct RemoteClient: Sendable {
         try await send(makeRequest("GET", "v1/me"))
     }
 
-    public func board() async throws -> RemoteBoard {
-        try await send(makeRequest("GET", "v1/board"))
+    /// The working set (no archived cards, recent Done only), or every card with `all`.
+    public func board(all: Bool = false) async throws -> RemoteBoard {
+        try await send(makeRequest("GET", "v1/board", query: all ? [URLQueryItem(name: "all", value: "1")] : []))
     }
 
     public func card(id: String) async throws -> RemoteCard {
@@ -257,11 +258,16 @@ public struct RemoteClient: Sendable {
 
     // MARK: Events
 
-    /// Board updates from `WS /v1/events`. Reconnects with exponential
-    /// backoff (1 s doubling to 30 s) on any drop, and finishes with an error
-    /// only when the token is refused. `onState` reports the connection.
-    public func events(onState: (@Sendable (RemoteConnectionState) -> Void)? = nil) -> AsyncThrowingStream<RemoteEvent, Error> {
-        let request = webSocketRequest(webSocketURL("v1/events"))
+    /// Board updates from `WS /v1/events`: a whole `board` on every
+    /// (re)connect, then `cards` deltas to fold in with `RemoteEvent.apply(to:)`.
+    /// A delta that arrives before the connection's first board is dropped and
+    /// a resync asked for, so every delta applies to a whole board. Reconnects
+    /// with exponential backoff (1 s doubling to 30 s) on any drop, and
+    /// finishes with an error only when the token is refused. `onState`
+    /// reports the connection.
+    public func events(all: Bool = false,
+                       onState: (@Sendable (RemoteConnectionState) -> Void)? = nil) -> AsyncThrowingStream<RemoteEvent, Error> {
+        let request = webSocketRequest(webSocketURL("v1/events", query: all ? [URLQueryItem(name: "all", value: "1")] : []))
         let session = self.session
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -271,6 +277,7 @@ public struct RemoteClient: Sendable {
                     let socket = session.webSocketTask(with: request)
                     socket.resume()
                     var gotFrame = false
+                    var gotBoard = false
                     var reason = "Connection lost"
                     do {
                         while !Task.isCancelled {
@@ -286,9 +293,17 @@ public struct RemoteClient: Sendable {
                             case .data(let d): data = d
                             @unknown default: continue
                             }
-                            if let event = try? JSONDecoder.remote.decode(RemoteEvent.self, from: data) {
-                                continuation.yield(event)
+                            guard let event = try? JSONDecoder.remote.decode(RemoteEvent.self, from: data) else { continue }
+                            switch event.type {
+                            case .board:
+                                gotBoard = true
+                            case .cards where !gotBoard:
+                                try? await socket.send(.string(Self.resyncFrame))
+                                continue
+                            default:
+                                break
                             }
+                            continuation.yield(event)
                         }
                     } catch {
                         if let authError = Self.handshakeError(socket) {
@@ -309,6 +324,11 @@ public struct RemoteClient: Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    static let resyncFrame: String = {
+        let data = (try? JSONEncoder.remote.encode(RemoteEventsControl(type: .resync))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }()
 
     // MARK: Terminal
 

@@ -57,11 +57,10 @@ final class BoardModel {
             }
             do {
                 for try await event in stream {
-                    if event.type == .board, let board = event.board {
-                        model.board = board
-                        model.loadError = nil
-                        model.link = .live
-                    }
+                    guard event.type != .ping else { continue }
+                    event.apply(to: &model.board)
+                    model.loadError = nil
+                    model.link = .live
                 }
             } catch {
                 model.link = .refused(error.localizedDescription)

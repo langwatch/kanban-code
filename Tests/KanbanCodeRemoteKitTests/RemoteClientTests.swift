@@ -89,6 +89,13 @@ struct RemoteClientRequestTests {
         #expect(url.absoluteString == "ws://127.0.0.1:7780/v1/cards/c1/terminal?session=card-1&cols=80&rows=24")
     }
 
+    @Test("all=1 reaches the board and the events socket")
+    func allCards() {
+        #expect(client.webSocketURL("v1/events", query: [URLQueryItem(name: "all", value: "1")]).absoluteString
+            == "ws://127.0.0.1:7780/v1/events?all=1")
+        #expect(RemoteClient.resyncFrame == #"{"type":"resync"}"#)
+    }
+
     @Test("Error bodies map to typed errors")
     func errors() {
         let body = Data(#"{"error":"scope agent cannot open terminals"}"#.utf8)

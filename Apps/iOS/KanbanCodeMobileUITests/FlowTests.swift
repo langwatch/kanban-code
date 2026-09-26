@@ -13,7 +13,7 @@ final class FlowTests: XCTestCase {
         try launch(linkKey: "KC_PAIR_LINK")
     }
 
-    private func launch(linkKey: String) throws {
+    private func launch(linkKey: String, extraEnv: [String: String] = [:]) throws {
         let env = ProcessInfo.processInfo.environment
         let link = try XCTUnwrap(env[linkKey], "Set TEST_RUNNER_\(linkKey)")
         // A leftover "Open in Kanban Code?" prompt from simctl openurl.
@@ -21,6 +21,7 @@ final class FlowTests: XCTestCase {
         if springboard.buttons["Cancel"].waitForExistence(timeout: 1) { springboard.buttons["Cancel"].tap() }
         app = XCUIApplication()
         app.launchEnvironment["KANBANCODE_PAIR_LINK"] = link
+        app.launchEnvironment.merge(extraEnv) { $1 }
         app.launch()
     }
 
@@ -48,6 +49,17 @@ final class FlowTests: XCTestCase {
         app.buttons["send"].tap()
         sleep(2)
         shot("05-chat-sent")
+    }
+
+    func test1bLongColumnsCollapse() throws {
+        app.terminate()
+        try launch(linkKey: "KC_PAIR_LINK", extraEnv: ["KANBANCODE_COLUMN_PREVIEW": "1"])
+        let showAll = app.buttons["showAll-in_progress"]
+        XCTAssertTrue(showAll.waitForExistence(timeout: 15))
+        XCTAssertTrue(showAll.label.hasPrefix("Show all"))
+        shot("01b-board-collapsed")
+        showAll.tap()
+        XCTAssertTrue(app.buttons["showAll-in_progress"].label == "Show fewer")
     }
 
     func test2bOlderMessages() throws {

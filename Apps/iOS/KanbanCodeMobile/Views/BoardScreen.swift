@@ -8,6 +8,10 @@ struct BoardScreen: View {
     @State private var search = ""
     @State private var showNewTask = false
     @State private var showAddMac = false
+    @State private var expandedColumns: Set<RemoteColumn> = []
+
+    /// Cards shown per column before a "Show all" row.
+    private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
 
     init(server: SavedServer, client: RemoteClient?) {
         _model = State(initialValue: BoardModel(server: server, client: client))
@@ -76,11 +80,24 @@ struct BoardScreen: View {
                 List {
                     ForEach(sections, id: \.column) { section in
                         Section {
-                            ForEach(section.cards) { card in
+                            let collapsed = search.isEmpty && !expandedColumns.contains(section.column)
+                                && section.cards.count > Self.columnPreviewCount
+                            ForEach(collapsed ? Array(section.cards.prefix(Self.columnPreviewCount)) : section.cards) { card in
                                 NavigationLink(value: card.id) {
                                     CardRow(card: card)
                                 }
                                 .accessibilityIdentifier("card-\(card.id)")
+                            }
+                            if search.isEmpty && section.cards.count > Self.columnPreviewCount {
+                                Button {
+                                    withAnimation {
+                                        if collapsed { expandedColumns.insert(section.column) } else { expandedColumns.remove(section.column) }
+                                    }
+                                } label: {
+                                    Text(collapsed ? "Show all \(section.cards.count)" : "Show fewer")
+                                        .font(.subheadline.weight(.medium))
+                                }
+                                .accessibilityIdentifier("showAll-\(section.column.rawValue)")
                             }
                         } header: {
                             HStack {
