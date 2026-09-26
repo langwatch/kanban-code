@@ -43,6 +43,8 @@ export interface RemoteHealth {
   version: string;
   apiVersion: number;
   hostName: string;
+  /** Features beyond apiVersion 1 ("images", "queue", "terminalScroll"); missing on older servers. */
+  features?: string[];
 }
 
 export interface RemoteDevice {
@@ -82,10 +84,57 @@ export interface RemoteCard {
   terminals: RemoteTerminal[];
   prs: RemotePR[];
   queuedPromptCount: number;
+  queuedPrompts?: RemoteQueuedPrompt[];
   parentCardId?: string | null;
   archived: boolean;
   lastActivity?: string | null;
   updatedAt: string;
+}
+
+export interface RemoteQueuedPrompt {
+  id: string;
+  text: string;
+  imageCount?: number;
+}
+
+/** An image with a prompt or task: PNG, JPEG, GIF or WebP, base64. */
+export interface RemoteImage {
+  mediaType: string;
+  data: string;
+}
+
+export const REMOTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const REMOTE_IMAGE_MAX_COUNT = 6;
+
+/** The media type of image bytes, from their signature. */
+export function imageMediaType(bytes: Uint8Array): string | undefined {
+  const starts = (sig: number[], at = 0) => sig.every((b, i) => bytes[at + i] === b);
+  if (starts([0x89, 0x50, 0x4e, 0x47])) return "image/png";
+  if (starts([0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (starts([0x47, 0x49, 0x46, 0x38])) return "image/gif";
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "image/webp";
+  return undefined;
+}
+
+/** Reads image files for a prompt or task, checked as the server checks them. */
+export function readImages(paths: string[]): RemoteImage[] {
+  if (paths.length > REMOTE_IMAGE_MAX_COUNT) {
+    throw new RemoteCliError(`At most ${REMOTE_IMAGE_MAX_COUNT} images per prompt, got ${paths.length}.`);
+  }
+  return paths.map((path) => {
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(path);
+    } catch {
+      throw new RemoteCliError(`Cannot read image ${path}.`);
+    }
+    const mediaType = imageMediaType(bytes);
+    if (!mediaType) throw new RemoteCliError(`${path} is not a PNG, JPEG, GIF or WebP image.`);
+    if (bytes.length > REMOTE_IMAGE_MAX_BYTES) {
+      throw new RemoteCliError(`${path} is ${bytes.length} bytes, over the ${REMOTE_IMAGE_MAX_BYTES} byte limit.`);
+    }
+    return { mediaType, data: bytes.toString("base64") };
+  });
 }
 
 export interface RemoteProject {
@@ -120,11 +169,14 @@ export interface RemoteTaskRequest {
   assistant?: string;
   model?: string;
   launch?: boolean;
+  images?: RemoteImage[];
 }
 
 export interface RemotePromptRequest {
+  /** May be empty when images has some. */
   text: string;
   mode?: "queue" | "now";
+  images?: RemoteImage[];
 }
 
 // ── Errors ───────────────────────────────────────────────────────────
@@ -499,6 +551,10 @@ export function defaultRemoteIO(): RemoteIO {
   };
 }
 
+function collectImage(path: string, previous: string[]): string[] {
+  return [...previous, path];
+}
+
 function parsePositiveInt(name: string) {
   return (raw: string): number => {
     const n = Number(raw);
@@ -698,6 +754,7 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
     .option("--assistant <assistant>", "claude, codex or gemini (default: the project's)")
     .option("--model <model>", "model for the assistant")
     .option("--no-launch", "only create the card in the backlog")
+    .option("--image <path>", "attach an image (PNG, JPEG, GIF or WebP; repeat for more)", collectImage, [] as string[])
     .option("--json", "output as JSON")
     .action(
       run(
@@ -710,11 +767,13 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
             assistant?: string;
             model?: string;
             launch: boolean;
+            image: string[];
             json?: boolean;
           }
         ) => {
           const prompt = await readText(parts, "prompt");
           const body: RemoteTaskRequest = { project: opts.project, prompt };
+          if (opts.image.length) body.images = readImages(opts.image);
           if (opts.name) body.name = opts.name;
           if (opts.worktree !== undefined) body.worktree = opts.worktree === true ? "" : String(opts.worktree);
           if (opts.assistant) body.assistant = opts.assistant;
@@ -733,17 +792,21 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
     );
 
   remote
-    .command("send <card> <text...>")
+    .command("send <card> [text...]")
     .description("Send a prompt to a card, delivered when its turn ends ('-' reads the text from stdin)")
     .option("--now", "interrupt the current turn and send at once")
+    .option("--image <path>", "attach an image (PNG, JPEG, GIF or WebP; repeat for more)", collectImage, [] as string[])
     .option("--json", "output as JSON")
     .action(
-      run(async (ref: string, parts: string[], opts: { now?: boolean; json?: boolean }) => {
-        const text = await readText(parts, "text");
+      run(async (ref: string, parts: string[], opts: { now?: boolean; image: string[]; json?: boolean }) => {
+        const images = readImages(opts.image);
+        const text = images.length && parts.length === 0 ? "" : await readText(parts, "text");
         const c = client();
         const card = await findCard(c, ref);
         const mode = opts.now ? "now" : "queue";
-        await withConflictHint(card.id, () => c.prompt(card.id, { text, mode }));
+        const body: RemotePromptRequest = { text, mode };
+        if (images.length) body.images = images;
+        await withConflictHint(card.id, () => c.prompt(card.id, body));
         if (opts.json) return printJson({ ok: true, cardId: card.id, mode });
         println(
           opts.now

@@ -22,6 +22,7 @@ extension ContentView {
             column: request.launch ? .inProgress : .backlog,
             source: .manual,
             promptBody: trimmed,
+            promptImagePaths: request.imagePaths.isEmpty ? nil : request.imagePaths,
             modelOverride: request.model,
             assistant: request.assistant
         )
@@ -52,6 +53,7 @@ extension ContentView {
                 worktreeName: worktreeName,
                 runRemotely: runRemotely,
                 skipPermissions: Self.remoteSkipPermissions,
+                images: (link.promptImagePaths ?? []).compactMap { ImageAttachment.fromPath($0) },
                 assistant: assistant,
                 serviceIdOverride: settings?.defaultAPIServiceIds[assistant.rawValue],
                 modelOverride: link.modelOverride,

@@ -5,6 +5,21 @@ import Foundation
 public enum RemoteAPI {
     public static let version = 1
     public static let defaultPort = 7780
+
+    /// What this server supports beyond version 1, listed in `RemoteHealth.features`.
+    /// A client checks for a feature before using it, since an older server
+    /// ignores the new fields or, for terminal control frames, types them
+    /// into the terminal.
+    public enum Feature {
+        /// `images` on prompts and tasks.
+        public static let images = "images"
+        /// `queuedPrompts` on cards and `/v1/cards/{id}/queue/{promptId}`.
+        public static let queue = "queue"
+        /// The `scroll` terminal control frame.
+        public static let terminalScroll = "terminalScroll"
+    }
+
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.
@@ -20,12 +35,20 @@ public struct RemoteHealth: Codable, Sendable, Equatable {
     public var version: String
     public var apiVersion: Int
     public var hostName: String
+    /// `RemoteAPI.Feature` names. Missing on servers older than the list.
+    public var features: [String]?
 
-    public init(app: String = "kanban-code", version: String, apiVersion: Int = RemoteAPI.version, hostName: String) {
+    public init(app: String = "kanban-code", version: String, apiVersion: Int = RemoteAPI.version, hostName: String,
+                features: [String]? = RemoteAPI.features) {
         self.app = app
         self.version = version
         self.apiVersion = apiVersion
         self.hostName = hostName
+        self.features = features
+    }
+
+    public func supports(_ feature: String) -> Bool {
+        features?.contains(feature) == true
     }
 }
 
@@ -123,6 +146,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     public var terminals: [RemoteTerminal]
     public var prs: [RemotePR]
     public var queuedPromptCount: Int
+    /// The prompts waiting for the turn to end, oldest first.
+    public var queuedPrompts: [RemoteQueuedPrompt]
     public var parentCardId: String?
     public var archived: Bool
     public var lastActivity: Date?
@@ -132,7 +157,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         id: String, title: String, column: RemoteColumn, projectPath: String? = nil, projectName: String? = nil,
         branch: String? = nil, worktreePath: String? = nil, assistant: String = "claude", runtime: RemoteRuntime = .none,
         isLive: Bool = false, isBusy: Bool = false, sessionId: String? = nil, terminals: [RemoteTerminal] = [],
-        prs: [RemotePR] = [], queuedPromptCount: Int = 0, parentCardId: String? = nil, archived: Bool = false,
+        prs: [RemotePR] = [], queuedPromptCount: Int = 0, queuedPrompts: [RemoteQueuedPrompt] = [],
+        parentCardId: String? = nil, archived: Bool = false,
         lastActivity: Date? = nil, updatedAt: Date
     ) {
         self.id = id
@@ -150,6 +176,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.terminals = terminals
         self.prs = prs
         self.queuedPromptCount = queuedPromptCount
+        self.queuedPrompts = queuedPrompts
         self.parentCardId = parentCardId
         self.archived = archived
         self.lastActivity = lastActivity
@@ -158,13 +185,13 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
 }
 
 /// The JSON of a card leaves out what is false, zero or empty (`isLive`,
-/// `isBusy`, `archived`, `queuedPromptCount`, `terminals`, `prs`) and nil
+/// `isBusy`, `archived`, `queuedPromptCount`, `queuedPrompts`, `terminals`, `prs`) and nil
 /// optionals; decoding reads a missing key as that default. A board of
 /// thousands of cards stays small that way.
 extension RemoteCard {
     private enum CodingKeys: String, CodingKey {
         case id, title, column, projectPath, projectName, branch, worktreePath, assistant, runtime
-        case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, parentCardId, archived
+        case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived
         case lastActivity, updatedAt
     }
 
@@ -186,6 +213,7 @@ extension RemoteCard {
             terminals: try c.decodeIfPresent([RemoteTerminal].self, forKey: .terminals) ?? [],
             prs: try c.decodeIfPresent([RemotePR].self, forKey: .prs) ?? [],
             queuedPromptCount: try c.decodeIfPresent(Int.self, forKey: .queuedPromptCount) ?? 0,
+            queuedPrompts: try c.decodeIfPresent([RemoteQueuedPrompt].self, forKey: .queuedPrompts) ?? [],
             parentCardId: try c.decodeIfPresent(String.self, forKey: .parentCardId),
             archived: try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false,
             lastActivity: try c.decodeIfPresent(Date.self, forKey: .lastActivity),
@@ -210,11 +238,66 @@ extension RemoteCard {
         if !terminals.isEmpty { try c.encode(terminals, forKey: .terminals) }
         if !prs.isEmpty { try c.encode(prs, forKey: .prs) }
         if queuedPromptCount != 0 { try c.encode(queuedPromptCount, forKey: .queuedPromptCount) }
+        if !queuedPrompts.isEmpty { try c.encode(queuedPrompts, forKey: .queuedPrompts) }
         try c.encodeIfPresent(parentCardId, forKey: .parentCardId)
         if archived { try c.encode(true, forKey: .archived) }
         try c.encodeIfPresent(lastActivity, forKey: .lastActivity)
         try c.encode(updatedAt, forKey: .updatedAt)
     }
+}
+
+/// A prompt waiting on a card for its turn to end.
+public struct RemoteQueuedPrompt: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var text: String
+    public var imageCount: Int
+
+    public init(id: String, text: String, imageCount: Int = 0) {
+        self.id = id
+        self.text = text
+        self.imageCount = imageCount
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, text, imageCount }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        imageCount = try c.decodeIfPresent(Int.self, forKey: .imageCount) ?? 0
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(text, forKey: .text)
+        if imageCount != 0 { try c.encode(imageCount, forKey: .imageCount) }
+    }
+}
+
+/// An image sent with a prompt or a task: PNG, JPEG, GIF or WebP bytes,
+/// base64 encoded.
+public struct RemoteImage: Codable, Sendable, Equatable {
+    /// Largest image the server takes, decoded.
+    public static let maxBytes = 5 * 1024 * 1024
+    /// Most images in one prompt or task.
+    public static let maxCount = 6
+
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    public var mediaType: String
+    /// Base64 of the image bytes.
+    public var data: String
+
+    public init(mediaType: String, data: String) {
+        self.mediaType = mediaType
+        self.data = data
+    }
+
+    public init(bytes: Data, mediaType: String) {
+        self.init(mediaType: mediaType, data: bytes.base64EncodedString())
+    }
+
+    public var bytes: Data? { Data(base64Encoded: data, options: .ignoreUnknownCharacters) }
 }
 
 public struct RemoteProject: Codable, Sendable, Equatable, Identifiable {
@@ -287,9 +370,10 @@ public struct RemoteTaskRequest: Codable, Sendable, Equatable {
     public var model: String?
     /// false only creates the card in the backlog.
     public var launch: Bool?
+    public var images: [RemoteImage]?
 
     public init(project: String, prompt: String, name: String? = nil, worktree: String? = nil,
-                assistant: String? = nil, model: String? = nil, launch: Bool? = nil) {
+                assistant: String? = nil, model: String? = nil, launch: Bool? = nil, images: [RemoteImage]? = nil) {
         self.project = project
         self.prompt = prompt
         self.name = name
@@ -297,6 +381,7 @@ public struct RemoteTaskRequest: Codable, Sendable, Equatable {
         self.assistant = assistant
         self.model = model
         self.launch = launch
+        self.images = images
     }
 }
 
@@ -309,12 +394,15 @@ public struct RemotePromptRequest: Codable, Sendable, Equatable {
         case now
     }
 
+    /// May be empty when `images` has some.
     public var text: String
     public var mode: Mode?
+    public var images: [RemoteImage]?
 
-    public init(text: String, mode: Mode? = nil) {
+    public init(text: String, mode: Mode? = nil, images: [RemoteImage]? = nil) {
         self.text = text
         self.mode = mode
+        self.images = images
     }
 }
 
@@ -397,16 +485,22 @@ public struct RemoteEventsControl: Codable, Sendable, Equatable {
 public struct RemoteTerminalControl: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case resize
+        /// Scrolls a tmux terminal's history by `lines`: up when positive,
+        /// down when negative. Only when the server lists
+        /// `RemoteAPI.Feature.terminalScroll`.
+        case scroll
     }
 
     public var type: Kind
     public var cols: Int?
     public var rows: Int?
+    public var lines: Int?
 
-    public init(type: Kind, cols: Int? = nil, rows: Int? = nil) {
+    public init(type: Kind, cols: Int? = nil, rows: Int? = nil, lines: Int? = nil) {
         self.type = type
         self.cols = cols
         self.rows = rows
+        self.lines = lines
     }
 }
 

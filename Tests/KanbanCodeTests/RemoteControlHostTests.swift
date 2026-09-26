@@ -33,6 +33,15 @@ private final class SentPrompts: TmuxManagerPort, @unchecked Sendable {
 @Suite("Remote control host")
 @MainActor
 struct RemoteControlHostTests {
+    private final class TmuxCommands: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _runs: [(commands: [[String]], session: String)] = []
+        var runs: [(commands: [[String]], session: String)] { lock.withLock { _runs } }
+        func record(_ commands: [[String]], _ session: String) { lock.withLock { _runs.append((commands, session)) } }
+    }
+
+    private let tmuxCommands = TmuxCommands()
+
     private func makeHost() -> (AppRemoteControlHost, BoardStore, SentPrompts) {
         let tmux = SentPrompts()
         let dir = NSTemporaryDirectory() + "kanban-remote-host-\(UUID().uuidString)"
@@ -45,7 +54,8 @@ struct RemoteControlHostTests {
             discovery: ClaudeCodeSessionDiscovery(),
             coordinationStore: CoordinationStore(basePath: dir)
         )
-        let host = AppRemoteControlHost(store: store) { session in tmux.escape(session) }
+        let commands = tmuxCommands
+        let host = AppRemoteControlHost(store: store, runTmux: { commands.record($0, $1) }) { session in tmux.escape(session) }
         return (host, store, tmux)
     }
 
@@ -77,7 +87,7 @@ struct RemoteControlHostTests {
     func promptIdle() async throws {
         let (host, store, tmux) = makeHost()
         addCard(store, id: "card_a", session: "card-a", live: true, busy: false)
-        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "hello", mode: .queue))
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "hello", mode: .queue), images: [])
         await waitFor { !tmux.sent.isEmpty }
         #expect(tmux.sent.map(\.text) == ["hello"])
         #expect(store.state.links["card_a"]?.queuedPrompts == nil)
@@ -87,7 +97,7 @@ struct RemoteControlHostTests {
     func promptBusy() async throws {
         let (host, store, tmux) = makeHost()
         addCard(store, id: "card_a", session: "card-a", live: true, busy: true)
-        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "after this", mode: .queue))
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "after this", mode: .queue), images: [])
         #expect(store.state.links["card_a"]?.queuedPrompts?.map(\.body) == ["after this"])
         #expect(store.state.links["card_a"]?.queuedPrompts?.first?.sendAutomatically == true)
         #expect(tmux.sent.isEmpty)
@@ -97,7 +107,7 @@ struct RemoteControlHostTests {
     func promptNow() async throws {
         let (host, store, tmux) = makeHost()
         addCard(store, id: "card_a", session: "card-a", live: true, busy: true)
-        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "stop, wrong file", mode: .now))
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "stop, wrong file", mode: .now), images: [])
         await waitFor { !tmux.sent.isEmpty }
         #expect(tmux.escapes == ["card-a"])
         #expect(tmux.sent.map(\.text) == ["stop, wrong file"])
@@ -108,12 +118,68 @@ struct RemoteControlHostTests {
         let (host, store, _) = makeHost()
         addCard(store, id: "card_a", session: "card-a", live: false, busy: false)
         await #expect(throws: RemoteHostError.conflict("card card_a has no live session; resume it first")) {
-            try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "x"))
+            try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "x"), images: [])
         }
         await #expect(throws: RemoteHostError.self) { try await host.interrupt(cardId: "card_a") }
         await #expect(throws: RemoteHostError.notFound("no card nope")) {
             try await host.interrupt(cardId: "nope")
         }
+    }
+
+    @Test("a prompt's images are written to files and queued with it")
+    func promptImages() async throws {
+        let (host, store, _) = makeHost()
+        addCard(store, id: "card_a", session: "card-a", live: true, busy: true)
+        let jpeg = RemotePromptImages.Decoded(bytes: Data([0xFF, 0xD8, 0xFF, 0xE0]), fileExtension: "jpg")
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "this screen"), images: [jpeg])
+        let paths = store.state.links["card_a"]?.queuedPrompts?.first?.imagePaths ?? []
+        #expect(paths.count == 1)
+        #expect(paths.first?.hasSuffix(".jpg") == true)
+        #expect(paths.first.flatMap { FileManager.default.contents(atPath: $0) } == jpeg.bytes)
+        paths.forEach { try? FileManager.default.removeItem(atPath: $0) }
+    }
+
+    @Test("send now on a queued prompt interrupts the turn and sends that prompt")
+    func queuedSendNow() async throws {
+        let (host, store, tmux) = makeHost()
+        addCard(store, id: "card_a", session: "card-a", live: true, busy: true)
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "first"), images: [])
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "second"), images: [])
+        let second = try #require(store.state.links["card_a"]?.queuedPrompts?.last)
+        #expect(await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.map(\.text) == ["first", "second"])
+
+        try await host.sendQueuedPromptNow(cardId: "card_a", promptId: second.id)
+        await waitFor { !tmux.sent.isEmpty }
+        #expect(tmux.escapes == ["card-a"])
+        #expect(tmux.sent.map(\.text) == ["second"])
+        #expect(store.state.links["card_a"]?.queuedPrompts?.map(\.body) == ["first"])
+
+        await #expect(throws: RemoteHostError.self) {
+            try await host.sendQueuedPromptNow(cardId: "card_a", promptId: second.id)
+        }
+    }
+
+    @Test("a queued prompt can be removed")
+    func queuedRemove() async throws {
+        let (host, store, tmux) = makeHost()
+        addCard(store, id: "card_a", session: "card-a", live: true, busy: true)
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "never mind"), images: [])
+        let prompt = try #require(store.state.links["card_a"]?.queuedPrompts?.first)
+        try await host.removeQueuedPrompt(cardId: "card_a", promptId: prompt.id)
+        #expect(store.state.links["card_a"]?.queuedPrompts == nil)
+        #expect(tmux.sent.isEmpty)
+        await #expect(throws: RemoteHostError.self) {
+            try await host.removeQueuedPrompt(cardId: "card_a", promptId: prompt.id)
+        }
+    }
+
+    @Test("terminal scroll drives tmux copy-mode; agtop is left to mouse reporting")
+    func terminalScroll() async {
+        let (host, _, _) = makeHost()
+        await host.scrollTerminal(sessionName: "card-a", lines: 4)
+        await host.scrollTerminal(sessionName: AgtopSessionName.name(agtopId: "abcd1234"), lines: 4)
+        #expect(tmuxCommands.runs.map(\.session) == ["card-a"])
+        #expect(tmuxCommands.runs.first?.commands == RemoteTerminalScroll.tmuxCommands(session: "card-a", lines: 4))
     }
 
     @Test("interrupt sends Esc to the live session")

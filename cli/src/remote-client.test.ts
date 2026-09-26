@@ -419,6 +419,32 @@ describe("kanban remote task / send / interrupt / resume", () => {
     ]);
   });
 
+  test("send attaches images with --image, text optional", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-remote-img-"));
+    const png = join(dir, "shot.png");
+    const pngBytes = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    writeFileSync(png, pngBytes);
+    const notImage = join(dir, "notes.txt");
+    writeFileSync(notImage, "hello");
+    try {
+      let r = await run(["send", "card_2abcF", "--image", png, "see", "this"]);
+      assert.equal(r.code, 0, r.err);
+      r = await run(["send", "card_2abcF", "--image", png, "--image", png]);
+      assert.equal(r.code, 0, r.err);
+      const sent = state.prompts as Array<{ text: string; images?: Array<{ mediaType: string; data: string }> }>;
+      assert.equal(sent[0].text, "see this");
+      assert.deepEqual(sent[0].images, [{ mediaType: "image/png", data: pngBytes.toString("base64") }]);
+      assert.equal(sent[1].text, "");
+      assert.equal(sent[1].images?.length, 2);
+      r = await run(["send", "card_2abcF", "--image", notImage, "x"]);
+      assert.equal(r.code, 1);
+      assert.match(r.err, /not a PNG, JPEG, GIF or WebP image/);
+      assert.equal(state.prompts.length, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("send to a card with no live session explains the 409 and how to resume", async () => {
     const r = await run(["send", "card_3", "hello"]);
     assert.equal(r.code, 1);

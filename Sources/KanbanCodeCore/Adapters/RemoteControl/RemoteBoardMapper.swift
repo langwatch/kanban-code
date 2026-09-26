@@ -43,6 +43,9 @@ public enum RemoteBoardMapper {
             terminals: terminals(of: link),
             prs: link.prLinks.map(pr),
             queuedPromptCount: link.queuedPrompts?.count ?? 0,
+            queuedPrompts: (link.queuedPrompts ?? []).map {
+                RemoteQueuedPrompt(id: $0.id, text: $0.body, imageCount: $0.imagePaths?.count ?? 0)
+            },
             parentCardId: link.parentCardId,
             archived: link.manuallyArchived,
             lastActivity: link.lastActivity,

@@ -16,6 +16,16 @@ struct RemoteControlServerTests {
         let health = try JSONDecoder.remote.decode(RemoteHealth.self, from: data)
         #expect(health.hostName == "test-mac")
         #expect(health.apiVersion == RemoteAPI.version)
+        #expect(health.supports(RemoteAPI.Feature.images))
+        #expect(health.supports(RemoteAPI.Feature.queue))
+        #expect(health.supports(RemoteAPI.Feature.terminalScroll))
+    }
+
+    @Test("a health reply without features supports none")
+    func healthWithoutFeatures() throws {
+        let old = try JSONDecoder.remote.decode(RemoteHealth.self, from: Data(#"{"app":"kanban-code","version":"1","apiVersion":1,"hostName":"m"}"#.utf8))
+        #expect(old.features == nil)
+        #expect(!old.supports(RemoteAPI.Feature.images))
     }
 
     @Test("requests without a token or with an unknown one are refused with 401")
@@ -188,6 +198,52 @@ struct RemoteControlServerTests {
         #expect(try JSONDecoder.remote.decode(RemoteCard.self, from: resumeData).isLive)
     }
 
+    @Test("a prompt may carry images, checked before the host sees them")
+    func promptImages() async throws {
+        let f = try await RemoteServerFixture()
+        defer { f.shutdown() }
+        let png = RemoteImage(mediaType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+        let body = try JSONEncoder.remote.encode(RemotePromptRequest(text: "", mode: .queue, images: [png]))
+        let (status, _) = try await f.request("POST", "/v1/cards/card_live/prompt", token: f.agentToken, body: body)
+        #expect(status == 204)
+        #expect(f.host.state.withLock { $0.promptImages.first?.map(\.fileExtension) } == ["png"])
+
+        let text = RemoteImage(mediaType: "image/png", data: Data("not an image".utf8).base64EncodedString())
+        let bad = try JSONEncoder.remote.encode(RemotePromptRequest(text: "look", images: [text]))
+        let (badStatus, badData) = try await f.request("POST", "/v1/cards/card_live/prompt", token: f.agentToken, body: bad)
+        #expect(badStatus == 400)
+        #expect(String(decoding: badData, as: UTF8.self).contains("not PNG, JPEG, GIF or WebP"))
+
+        let many = try JSONEncoder.remote.encode(RemotePromptRequest(text: "x", images: Array(repeating: png, count: RemoteImage.maxCount + 1)))
+        let (manyStatus, _) = try await f.request("POST", "/v1/cards/card_live/prompt", token: f.agentToken, body: many)
+        #expect(manyStatus == 400)
+        #expect(f.host.state.withLock { $0.prompts.count } == 1)
+    }
+
+    @Test("a queued prompt can be sent now or removed by id")
+    func queuedPrompts() async throws {
+        var cards = FakeRemoteHost.defaultCards
+        cards[0].queuedPrompts = [RemoteQueuedPrompt(id: "p1", text: "first"), RemoteQueuedPrompt(id: "p2", text: "second", imageCount: 1)]
+        cards[0].queuedPromptCount = 2
+        let f = try await RemoteServerFixture(host: FakeRemoteHost(cards: cards))
+        defer { f.shutdown() }
+
+        let (_, cardData) = try await f.request("GET", "/v1/cards/card_live", token: f.agentToken)
+        let card = try JSONDecoder.remote.decode(RemoteCard.self, from: cardData)
+        #expect(card.queuedPrompts.map(\.id) == ["p1", "p2"])
+        #expect(card.queuedPrompts.last?.imageCount == 1)
+
+        let (sent, _) = try await f.request("POST", "/v1/cards/card_live/queue/p1", token: f.agentToken)
+        #expect(sent == 204)
+        #expect(f.host.state.withLock { $0.queueSends } == ["p1"])
+        let (removed, _) = try await f.request("DELETE", "/v1/cards/card_live/queue/p2", token: f.agentToken)
+        #expect(removed == 204)
+        let (gone, _) = try await f.request("POST", "/v1/cards/card_live/queue/p2", token: f.agentToken)
+        #expect(gone == 404)
+        let (wrongMethod, _) = try await f.request("GET", "/v1/cards/card_live/queue/p1", token: f.agentToken)
+        #expect(wrongMethod == 405)
+    }
+
     @Test("keep-alive serves several requests on one connection")
     func keepAlive() async throws {
         let f = try await RemoteServerFixture()
@@ -333,6 +389,16 @@ struct RemoteControlServerTests {
         try await ws.send(.data(Data("size\n".utf8)))
         try await output.waitFor("size:40 120")
         #expect(host.state.withLock { $0.terminalRequests.first?.session } == "acme-card_live")
+
+        // A scroll frame goes to the host, never into the terminal.
+        try await ws.send(.string(#"{"type":"scroll","lines":3}"#))
+        try await ws.send(.string(#"{"type":"scroll","lines":-2}"#))
+        try await ws.send(.data(Data("after\n".utf8)))
+        try await output.waitFor("got:after")
+        for _ in 0..<50 where host.state.withLock({ $0.scrolls.count }) < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(host.state.withLock { $0.scrolls.map(\.lines) } == [3, -2])
+        #expect(host.state.withLock { $0.scrolls.first?.session } == "acme-card_live")
+        #expect(!output.text.contains("scroll"))
     }
 
     @Test("terminal: a big output arrives whole")

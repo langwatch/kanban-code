@@ -41,7 +41,8 @@ final class RemoteConnection: @unchecked Sendable {
     private var isClosed = false
 
     static let maxHeaderBytes = 64 * 1024
-    static let maxBodyBytes = 4 * 1024 * 1024
+    /// Room for `RemoteImage.maxCount` images of `RemoteImage.maxBytes`, base64 encoded.
+    static let maxBodyBytes = 48 * 1024 * 1024
 
     init(_ nw: NWConnection) {
         self.nw = nw

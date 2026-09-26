@@ -41,11 +41,53 @@ struct RemoteControlMapperTests {
         #expect(remote.isBusy)
         #expect(remote.sessionId == "s-1")
         #expect(remote.queuedPromptCount == 1)
+        #expect(remote.queuedPrompts.map(\.text) == ["also run the tests"])
+        #expect(remote.queuedPrompts.first?.id.isEmpty == false)
         #expect(remote.prs == [RemotePR(number: 7, url: "https://github.com/acme/acme/pull/7", status: "open")])
         #expect(remote.terminals == [
             RemoteTerminal(sessionName: "card-abc", label: "Claude Code", isPrimary: true),
             RemoteTerminal(sessionName: "card-abc-sh1", label: "server", isPrimary: false),
         ])
+    }
+
+    @Test("images: format from the bytes, size and count capped")
+    func images() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0])
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0, 0])
+        let webp = Data("RIFF\0\0\0\0WEBPVP8 ".utf8)
+        let decoded = try RemotePromptImages.decode([
+            RemoteImage(bytes: png, mediaType: "image/jpeg"),
+            RemoteImage(bytes: jpeg, mediaType: "image/jpeg"),
+            RemoteImage(bytes: webp, mediaType: "image/webp"),
+        ])
+        #expect(decoded.map(\.fileExtension) == ["png", "jpg", "webp"])
+        #expect(try RemotePromptImages.decode(nil).isEmpty)
+        #expect(throws: RemoteHostError.self) {
+            try RemotePromptImages.decode([RemoteImage(mediaType: "image/png", data: "%%%")])
+        }
+        let huge = png + Data(count: RemoteImage.maxBytes)
+        #expect(throws: RemoteHostError.self) {
+            try RemotePromptImages.decode([RemoteImage(bytes: huge, mediaType: "image/png")])
+        }
+
+        let dir = NSTemporaryDirectory() + "kanban-remote-images-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let paths = try RemotePromptImages.write(decoded, to: dir)
+        #expect(paths.count == 3)
+        #expect(paths[0].hasSuffix(".png") && paths[1].hasSuffix(".jpg"))
+        #expect(FileManager.default.contents(atPath: paths[1]) == jpeg)
+    }
+
+    @Test("terminal scroll: copy-mode up, scroll-down, never keys to the shell")
+    func terminalScroll() {
+        #expect(RemoteTerminalScroll.tmuxCommands(session: "s", lines: 3) == [
+            ["copy-mode", "-e", "-t", "s"],
+            ["send-keys", "-t", "s", "-X", "-N", "3", "scroll-up"],
+        ])
+        #expect(RemoteTerminalScroll.tmuxCommands(session: "s", lines: -2) == [
+            ["send-keys", "-t", "s", "-X", "-N", "2", "scroll-down"],
+        ])
+        #expect(RemoteTerminalScroll.tmuxCommands(session: "s", lines: 0).isEmpty)
     }
 
     @Test("runtime and liveness: agtop, machine, shell only, ended")

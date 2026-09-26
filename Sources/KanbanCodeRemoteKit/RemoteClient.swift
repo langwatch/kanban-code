@@ -167,12 +167,27 @@ public struct RemoteClient: Sendable {
     }
 
     public func createTask(_ task: RemoteTaskRequest) async throws -> RemoteCard {
-        try await send(makeRequest("POST", "v1/tasks", body: task))
+        var request = makeRequest("POST", "v1/tasks", body: task)
+        if task.images?.isEmpty == false { request.timeoutInterval = 120 }
+        return try await send(request)
     }
 
-    public func sendPrompt(cardId: String, text: String, mode: RemotePromptRequest.Mode = .queue) async throws {
-        try await sendEmpty(makeRequest("POST", "v1/cards/\(Self.escape(cardId))/prompt",
-                                        body: RemotePromptRequest(text: text, mode: mode)))
+    public func sendPrompt(cardId: String, text: String, mode: RemotePromptRequest.Mode = .queue,
+                           images: [RemoteImage] = []) async throws {
+        var request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/prompt",
+                                  body: RemotePromptRequest(text: text, mode: mode, images: images.isEmpty ? nil : images))
+        if !images.isEmpty { request.timeoutInterval = 120 }
+        try await sendEmpty(request)
+    }
+
+    /// Sends a queued prompt right away, interrupting the turn.
+    public func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
+        try await sendEmpty(makeRequest("POST", "v1/cards/\(Self.escape(cardId))/queue/\(Self.escape(promptId))"))
+    }
+
+    /// Drops a queued prompt before it is sent.
+    public func removeQueuedPrompt(cardId: String, promptId: String) async throws {
+        try await sendEmpty(makeRequest("DELETE", "v1/cards/\(Self.escape(cardId))/queue/\(Self.escape(promptId))"))
     }
 
     public func interrupt(cardId: String) async throws {
@@ -406,7 +421,18 @@ public final class RemoteTerminalConnection: @unchecked Sendable {
     }
 
     public func resize(cols: Int, rows: Int) {
-        let control = RemoteTerminalControl(type: .resize, cols: cols, rows: rows)
+        sendControl(RemoteTerminalControl(type: .resize, cols: cols, rows: rows))
+    }
+
+    /// Scrolls a tmux terminal's history on the Mac: up when `lines` is
+    /// positive. Only for a server that lists `RemoteAPI.Feature.terminalScroll`;
+    /// an older one types the frame into the terminal.
+    public func scroll(lines: Int) {
+        guard lines != 0 else { return }
+        sendControl(RemoteTerminalControl(type: .scroll, lines: lines))
+    }
+
+    private func sendControl(_ control: RemoteTerminalControl) {
         guard let data = try? JSONEncoder.remote.encode(control) else { return }
         task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
     }

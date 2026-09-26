@@ -89,7 +89,9 @@ final class DemoHost: RemoteControlHost {
                     RemoteTerminal(sessionName: "\(p.name)-\(id)", label: "claude", isPrimary: true),
                     RemoteTerminal(sessionName: "\(p.name)-\(id)-sh1", label: "shell", isPrimary: false),
                 ] : [],
-                prs: prs, queuedPromptCount: queued, lastActivity: now.addingTimeInterval(-minutesAgo * 60), updatedAt: now
+                prs: prs, queuedPromptCount: queued,
+                queuedPrompts: (0..<queued).map { RemoteQueuedPrompt(id: "prompt_seed\($0)", text: "Also run the e2e suite once it passes") },
+                lastActivity: now.addingTimeInterval(-minutesAgo * 60), updatedAt: now
             )
         }
         let cards: [CardState] = [
@@ -169,7 +171,6 @@ final class DemoHost: RemoteControlHost {
             self.update(id) { c in
                 c.messages.append(RemoteMessage(id: "m\(c.messages.count)", role: .assistant, text: reply, at: Date()))
                 c.card.isBusy = false
-                c.card.queuedPromptCount = 0
                 c.card.column = .waiting
                 c.card.lastActivity = Date()
             }
@@ -215,27 +216,77 @@ final class DemoHost: RemoteControlHost {
         return card
     }
 
-    func sendPrompt(cardId: String, _ request: RemotePromptRequest) async throws {
+    func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws {
         let c = try cardState(cardId)
         guard c.card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first") }
+        let text = Self.promptText(request.text, imageCount: images.count)
         if c.card.isBusy && request.mode != .now {
-            update(cardId) { $0.card.queuedPromptCount += 1 }
-            Task {
-                while (try? self.cardState(cardId))?.card.isBusy == true { try? await Task.sleep(for: .milliseconds(200)) }
-                self.update(cardId) { c in
-                    c.messages.append(RemoteMessage(id: "m\(c.messages.count)", role: .user, text: request.text, at: Date()))
-                }
-                self.simulateTurn(cardId, reply: "Queued prompt handled: \(request.text)")
+            let prompt = RemoteQueuedPrompt(id: "prompt_\(UUID().uuidString.prefix(8))", text: request.text, imageCount: images.count)
+            update(cardId) { c in
+                c.card.queuedPrompts.append(prompt)
+                c.card.queuedPromptCount = c.card.queuedPrompts.count
             }
+            deliverWhenIdle(cardId)
             return
         }
+        deliver(cardId, text: text, interrupting: c.card.isBusy)
+    }
+
+    /// What the transcript shows for a prompt, with its images as the Mac pastes them.
+    static func promptText(_ text: String, imageCount: Int) -> String {
+        let images = (0..<imageCount).map { "[Image #\($0 + 1)]" }.joined(separator: " ")
+        return [images, text].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private func deliver(_ cardId: String, text: String, interrupting: Bool) {
         update(cardId) { c in
-            if c.card.isBusy {
+            if interrupting {
                 c.messages.append(RemoteMessage(id: "m\(c.messages.count)", role: .system, text: "Interrupted", at: Date()))
             }
-            c.messages.append(RemoteMessage(id: "m\(c.messages.count)", role: .user, text: request.text, at: Date()))
+            c.messages.append(RemoteMessage(id: "m\(c.messages.count)", role: .user, text: text, at: Date()))
         }
-        simulateTurn(cardId, reply: "Got it: \(request.text)")
+        simulateTurn(cardId, reply: "Got it: \(text)")
+    }
+
+    /// Sends the oldest queued prompt once the turn ends, as the Mac does.
+    private func deliverWhenIdle(_ cardId: String) {
+        Task {
+            while (try? self.cardState(cardId))?.card.isBusy == true { try? await Task.sleep(for: .milliseconds(200)) }
+            guard let next = self.popQueued(cardId, promptId: nil) else { return }
+            self.deliver(cardId, text: Self.promptText(next.text, imageCount: next.imageCount), interrupting: false)
+        }
+    }
+
+    private func popQueued(_ cardId: String, promptId: String?) -> RemoteQueuedPrompt? {
+        var popped: RemoteQueuedPrompt?
+        update(cardId) { c in
+            guard let index = promptId.map({ id in c.card.queuedPrompts.firstIndex { $0.id == id } })
+                    ?? (c.card.queuedPrompts.isEmpty ? nil : 0) else { return }
+            popped = c.card.queuedPrompts.remove(at: index)
+            c.card.queuedPromptCount = c.card.queuedPrompts.count
+        }
+        return popped
+    }
+
+    func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
+        let c = try cardState(cardId)
+        guard c.card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first") }
+        guard let prompt = popQueued(cardId, promptId: promptId) else {
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
+        }
+        deliver(cardId, text: Self.promptText(prompt.text, imageCount: prompt.imageCount), interrupting: c.card.isBusy)
+        if !(try cardState(cardId)).card.queuedPrompts.isEmpty { deliverWhenIdle(cardId) }
+    }
+
+    func removeQueuedPrompt(cardId: String, promptId: String) async throws {
+        _ = try cardState(cardId)
+        guard popQueued(cardId, promptId: promptId) != nil else {
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId)")
+        }
+    }
+
+    func scrollTerminal(sessionName: String, lines: Int) async {
+        print("scroll \(sessionName) \(lines)")
     }
 
     func interrupt(cardId: String) async throws {

@@ -60,8 +60,8 @@ Only the `kanban remote` commands are meant for that machine. The other `kanban`
 | `cards [--column c] [--project p] [--all]` | Lists cards. Archived cards only with `--all`. Columns: `backlog`, `in_progress`, `waiting`, `in_review`, `done`. |
 | `projects` | Lists project names and paths that `task --project` accepts. |
 | `show <card>` | One card: column, state, project, branch, worktree, PRs. |
-| `task --project <name\|path> [--worktree [name]] [--name n] [--assistant a] [--model m] [--no-launch] <prompt...>` | Creates a card and launches it. `--worktree` without a name picks a random one. |
-| `send <card> [--now] <text...>` | Queues a prompt for when the current turn ends. `--now` interrupts the turn first. |
+| `task --project <name\|path> [--worktree [name]] [--name n] [--assistant a] [--model m] [--no-launch] [--image <path>]... <prompt...>` | Creates a card and launches it. `--worktree` without a name picks a random one. |
+| `send <card> [--now] [--image <path>]... [text...]` | Queues a prompt for when the current turn ends. `--now` interrupts the turn first. `--image` attaches a PNG, JPEG, GIF or WebP file (up to 6, 5 MiB each); the text may be left out when there is an image. |
 | `transcript <card> [--limit N] [--follow] [--timeout d]` | Prints the conversation, oldest first. `--follow` keeps printing new messages until the card is idle. |
 | `wait <card> [--timeout d]` | Blocks until the card is idle and has no queued prompts. |
 | `interrupt <card>` | Interrupts the current turn. |

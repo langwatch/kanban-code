@@ -13,6 +13,8 @@ struct RemoteLaunchRequest: Sendable {
     var assistant: CodingAssistant
     var model: String?
     var launch: Bool
+    /// Image files for the first prompt, already written.
+    var imagePaths: [String] = []
 }
 
 /// Runs the remote control server of Settings > Remote Control and holds
@@ -159,10 +161,23 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
     private let store: BoardStore
     /// Esc to a session, as the stop button does (agtop: its interrupt).
     private let sendEscape: @Sendable (String) async throws -> Void
+    /// Runs tmux commands on the server that holds the session.
+    private let runTmux: @Sendable ([[String]], String) async -> Void
 
-    init(store: BoardStore, sendEscape: @escaping @Sendable (String) async throws -> Void) {
+    init(store: BoardStore,
+         runTmux: @escaping @Sendable ([[String]], String) async -> Void = AppRemoteControlHost.runTmux(_:session:),
+         sendEscape: @escaping @Sendable (String) async throws -> Void) {
         self.store = store
+        self.runTmux = runTmux
         self.sendEscape = sendEscape
+    }
+
+    /// The session's own tmux server: local, or the machine it runs on.
+    static func runTmux(_ commands: [[String]], session: String) async {
+        guard let adapter = try? AppServices.tmux.adapter(for: session) else { return }
+        for command in commands {
+            _ = try? await adapter.run(command)
+        }
     }
 
     func board() async -> RemoteBoard {
@@ -230,6 +245,8 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
                 assistant = last.flatMap { ContentView.loadEnabledAssistants().contains($0) ? $0 : nil } ?? .claude
             }
             let title = request.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let imagePaths = try RemotePromptImages.write(
+                RemotePromptImages.decode(request.images), to: RemotePromptImages.taskDirectory, prefix: "remote")
             return RemoteLaunchRequest(
                 projectPath: project.path,
                 prompt: request.prompt,
@@ -237,7 +254,8 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
                 worktree: request.worktree,
                 assistant: assistant,
                 model: request.model,
-                launch: request.launch ?? true
+                launch: request.launch ?? true,
+                imagePaths: imagePaths
             )
         }
         let cardId = try await MainActor.run { () throws -> String in
@@ -253,22 +271,33 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
         throw RemoteHostError.notFound("card \(cardId) was created but is not on the board yet")
     }
 
-    func sendPrompt(cardId: String, _ request: RemotePromptRequest) async throws {
-        let (session, busy) = try await MainActor.run { () throws -> (String, Bool) in
-            let card = try card(cardId)
-            guard let session = RemoteBoardMapper.liveAssistantSession(card.link, liveSessions: store.state.tmuxSessions) else {
-                throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first")
-            }
-            return (session, card.activityState == .activelyWorking)
+    /// The card's live session and whether a turn runs in it.
+    @MainActor
+    private func liveSession(_ cardId: String) throws -> (session: String, busy: Bool) {
+        let card = try card(cardId)
+        guard let session = RemoteBoardMapper.liveAssistantSession(card.link, liveSessions: store.state.tmuxSessions) else {
+            throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first")
         }
+        return (session, card.activityState == .activelyWorking)
+    }
+
+    /// Stops the running turn so a prompt can go out now.
+    private func interruptForPrompt(session: String) async throws {
+        try await sendEscape(session)
+        // The composer takes input again once the turn has stopped.
+        try? await Task.sleep(for: .milliseconds(600))
+    }
+
+    func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws {
+        let (session, busy) = try await MainActor.run { try liveSession(cardId) }
+        let imagePaths = try RemotePromptImages.write(images, to: RemotePromptImages.promptDirectory)
         let mode = request.mode ?? .queue
         if mode == .now && busy {
-            try await sendEscape(session)
-            // The composer takes input again once the turn has stopped.
-            try? await Task.sleep(for: .milliseconds(600))
+            try await interruptForPrompt(session: session)
         }
         await MainActor.run {
-            let prompt = QueuedPrompt(body: request.text, sendAutomatically: true)
+            let prompt = QueuedPrompt(body: request.text, sendAutomatically: true,
+                                      imagePaths: imagePaths.isEmpty ? nil : imagePaths)
             store.dispatch(.addQueuedPrompt(cardId: cardId, prompt: prompt, placement: .back))
             // A queued prompt on a busy card goes out when the turn ends; the
             // rest goes out now, as the chat's send button does.
@@ -276,6 +305,40 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
                 store.dispatch(.sendQueuedPrompt(cardId: cardId, promptId: prompt.id))
             }
         }
+    }
+
+    func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
+        let (session, busy) = try await MainActor.run { () throws -> (String, Bool) in
+            try queuedPrompt(cardId, promptId)
+            return try liveSession(cardId)
+        }
+        if busy { try await interruptForPrompt(session: session) }
+        await MainActor.run {
+            // Once the turn stops the queue may send it on its own.
+            guard (try? queuedPrompt(cardId, promptId)) != nil else { return }
+            store.dispatch(.sendQueuedPrompt(cardId: cardId, promptId: promptId))
+        }
+    }
+
+    func removeQueuedPrompt(cardId: String, promptId: String) async throws {
+        try await MainActor.run {
+            try queuedPrompt(cardId, promptId)
+            store.dispatch(.removeQueuedPrompt(cardId: cardId, promptId: promptId))
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func queuedPrompt(_ cardId: String, _ promptId: String) throws -> QueuedPrompt {
+        guard let prompt = try card(cardId).link.queuedPrompts?.first(where: { $0.id == promptId }) else {
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
+        }
+        return prompt
+    }
+
+    func scrollTerminal(sessionName: String, lines: Int) async {
+        guard !AgtopSessionName.isAgtop(sessionName) else { return }
+        await runTmux(RemoteTerminalScroll.tmuxCommands(session: sessionName, lines: lines), sessionName)
     }
 
     func interrupt(cardId: String) async throws {

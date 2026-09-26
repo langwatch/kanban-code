@@ -13,7 +13,14 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// Creates a card and, unless `launch` is false, starts its session.
     func createTask(_ request: RemoteTaskRequest) async throws -> RemoteCard
 
-    func sendPrompt(cardId: String, _ request: RemotePromptRequest) async throws
+    /// `request.images` come checked and decoded by the server as `images`.
+    func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws
+
+    /// Sends a queued prompt at once, interrupting the turn when one runs.
+    func sendQueuedPromptNow(cardId: String, promptId: String) async throws
+
+    /// Drops a queued prompt before it goes out.
+    func removeQueuedPrompt(cardId: String, promptId: String) async throws
 
     func interrupt(cardId: String) async throws
 
@@ -24,6 +31,11 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// as argv: `agtop open <id> --solo` for agtop, `tmux attach -t <name>`
     /// for tmux.
     func terminalCommand(cardId: String, sessionName: String) async throws -> [String]
+
+    /// Scrolls a tmux terminal's history for a remote viewer (up when
+    /// `lines` is positive). agtop terminals scroll through mouse reporting
+    /// instead and ignore this.
+    func scrollTerminal(sessionName: String, lines: Int) async
 
     /// Yields whenever the board changed; the server throttles pushes.
     func boardChanges() -> AsyncStream<Void>

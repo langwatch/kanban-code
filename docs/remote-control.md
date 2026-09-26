@@ -25,7 +25,12 @@ agent: kanban remote ... ──┘   :7780, tailnet     └─ ~/.claude transcr
 
 ## Endpoints
 
-JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000Z`). A card leaves out `isLive`, `isBusy` and `archived` when false, `queuedPromptCount` when 0, `terminals` and `prs` when empty, and every null field; read a missing key as that default. Responses over 8 KB are gzipped (`Content-Encoding: gzip`) when the request sends `Accept-Encoding: gzip`.
+JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000Z`). A card leaves out `isLive`, `isBusy` and `archived` when false, `queuedPromptCount` when 0, `queuedPrompts`, `terminals` and `prs` when empty, and every null field; read a missing key as that default. Responses over 8 KB are gzipped (`Content-Encoding: gzip`) when the request sends `Accept-Encoding: gzip`.
+
+`GET /v1/health` lists `features`, the additions to API version 1 this server has. A client checks for one before using it; a server without the list has none of them:
+- `images`: `images` on prompts and tasks.
+- `queue`: `queuedPrompts` on cards and the `/v1/cards/{id}/queue/{promptId}` routes.
+- `terminalScroll`: the `scroll` terminal control frame.
 
 | Method and path | Scope | Returns |
 |---|---|---|
@@ -36,6 +41,8 @@ JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000
 | `GET /v1/cards/{id}/transcript?limit=50&before=<cursor>` | any | `RemoteTranscript`, oldest first |
 | `POST /v1/tasks` | any | `RemoteTaskRequest` → `RemoteCard`, 201 |
 | `POST /v1/cards/{id}/prompt` | any | `RemotePromptRequest` → 204 |
+| `POST /v1/cards/{id}/queue/{promptId}` | any | 204 |
+| `DELETE /v1/cards/{id}/queue/{promptId}` | any | 204 |
 | `POST /v1/cards/{id}/interrupt` | any | 204 |
 | `POST /v1/cards/{id}/resume` | any | `RemoteCard` |
 | `GET /v1/events?all=1` (WebSocket) | any | `RemoteEvent` text frames |
@@ -46,6 +53,8 @@ Behaviour:
 - `board` and `events` return the working set: no archived cards, no All Sessions cards, and only the 30 most recent Done cards (by `lastActivity`, else `updatedAt`). `?all=1` returns every card.
 - `POST /v1/tasks` resolves `project` as a project path first, then as a project name (case-insensitive). An unknown project is a 400 that lists the known names. The card launches with the app's defaults for that project: runtime (tmux or agtop), skip permissions, and the command template.
 - `prompt` with `mode: queue` delivers the text when the current turn ends, or at once when the session is idle. `mode: now` interrupts the turn first. A card with no live session returns 409 until it is resumed.
+- `prompt` and `tasks` take `images`: up to 6 `RemoteImage` objects, `{"mediaType": "image/png", "data": "<base64>"}`, each at most 5 MiB decoded, PNG, JPEG, GIF or WebP (the server reads the format from the bytes). `text` may be empty when there are images. The Mac writes them to files and sends them the way its own chat does: pasted into Claude in tmux, `--image` for agtop. A bad image fails the whole request with 400. An older server ignores `images` and sends the text alone, so check the `images` feature first.
+- A card's `queuedPrompts` lists the prompts waiting for the turn to end, oldest first, each with `id`, `text` and `imageCount`. `POST /v1/cards/{id}/queue/{promptId}` sends one now, interrupting the turn when one runs; `DELETE` on the same path drops it. Both return 404 when the prompt is no longer queued (sent or removed).
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.
 - `resume` on a card that never ran launches it.
 - `/v1/events` (also `?all=1`) sends a `board` event with the whole board on connect, then `cards` events at most once per second: `upserted` holds the cards whose value changed or that joined the set, `removed` the ids that left it (archived, moved out of the recent Done, deleted), and `projects` the project list when it changed. A client applies them by id (`RemoteEvent.apply(to:)` in RemoteKit). A text frame `{"type":"resync"}` from the client gets a whole `board` again; so does every new connection. A `ping` event arrives every 20 seconds.
@@ -60,6 +69,7 @@ Behaviour:
 The command runs in a pseudo-terminal on the Mac.
 - Binary frames carry bytes both ways: the terminal's output to the client, keystrokes to the terminal.
 - A text frame `{"type":"resize","cols":N,"rows":M}` resizes the pseudo-terminal.
+- A text frame `{"type":"scroll","lines":N}` scrolls a tmux terminal's history, up when N is positive, as the Mac's own terminal does with the wheel: tmux copy-mode, left again on reaching the bottom. agtop ignores it; it turns on mouse reporting, so a client scrolls it with wheel events (`CSI < 64;col;row M` up, `65` down) in the byte stream. An older server types unknown text frames into the terminal, so send `scroll` only when health lists `terminalScroll`.
 - Closing the socket ends that one viewer process. The session itself keeps running.
 
 ## Clients
@@ -68,8 +78,8 @@ The command runs in a pseudo-terminal on the Mac.
 - CLI: `kanban remote login <url> --token <token>` saves the server in `~/.kanban-code/remote-client.json`. `KANBAN_REMOTE_URL` and `KANBAN_REMOTE_TOKEN` override the file. Then:
   - `kanban remote cards`
   - `kanban remote show <card>`
-  - `kanban remote task --project <name|path> [--worktree [name]] [--name <n>] "<prompt>"`
-  - `kanban remote send <card> [--now] "<text>"`
+  - `kanban remote task --project <name|path> [--worktree [name]] [--name <n>] [--image <path>]... "<prompt>"`
+  - `kanban remote send <card> [--now] [--image <path>]... "<text>"`
   - `kanban remote transcript <card> [--limit N] [--follow]`
   - `kanban remote wait <card> [--timeout 30m]`
   - `kanban remote interrupt <card>`

@@ -14,6 +14,9 @@ final class FakeRemoteHost: RemoteControlHost {
         var continuations: [UUID: AsyncStream<Void>.Continuation] = [:]
         var terminalCommand: [String] = ["/bin/sh", "-c", "printf ready; cat"]
         var terminalRequests: [(cardId: String, session: String)] = []
+        var promptImages: [[RemotePromptImages.Decoded]] = []
+        var queueSends: [String] = []
+        var scrolls: [(session: String, lines: Int)] = []
     }
 
     let state: Mutex<State>
@@ -78,10 +81,37 @@ final class FakeRemoteHost: RemoteControlHost {
         return card
     }
 
-    func sendPrompt(cardId: String, _ request: RemotePromptRequest) async throws {
+    func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws {
         let card = try card(cardId)
         guard card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session") }
-        state.withLock { $0.prompts.append((cardId, request)) }
+        state.withLock {
+            $0.prompts.append((cardId, request))
+            $0.promptImages.append(images)
+        }
+    }
+
+    func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
+        try takeQueued(cardId, promptId)
+        state.withLock { $0.queueSends.append(promptId) }
+    }
+
+    func removeQueuedPrompt(cardId: String, promptId: String) async throws {
+        try takeQueued(cardId, promptId)
+    }
+
+    private func takeQueued(_ cardId: String, _ promptId: String) throws {
+        guard try card(cardId).queuedPrompts.contains(where: { $0.id == promptId }) else {
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId)")
+        }
+        mutate { cards in
+            guard let i = cards.firstIndex(where: { $0.id == cardId }) else { return }
+            cards[i].queuedPrompts.removeAll { $0.id == promptId }
+            cards[i].queuedPromptCount = cards[i].queuedPrompts.count
+        }
+    }
+
+    func scrollTerminal(sessionName: String, lines: Int) async {
+        state.withLock { $0.scrolls.append((sessionName, lines)) }
     }
 
     func interrupt(cardId: String) async throws {

@@ -51,6 +51,11 @@ enum RemoteOpenAPI {
         "responses": {"204": {"description": "accepted"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}
       }
     },
+    "/v1/cards/{id}/queue/{promptId}": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}, {"name": "promptId", "in": "path", "required": true, "description": "an id from the card's queuedPrompts", "schema": {"type": "string"}}],
+      "post": {"summary": "Send a queued prompt now, interrupting the turn when one runs", "responses": {"204": {"description": "sent"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}},
+      "delete": {"summary": "Drop a queued prompt", "responses": {"204": {"description": "removed"}, "404": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/cards/{id}/interrupt": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {"summary": "Interrupt the current turn", "responses": {"204": {"description": "done"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
@@ -70,7 +75,7 @@ enum RemoteOpenAPI {
         {"name": "cols", "in": "query", "schema": {"type": "integer", "default": 80}},
         {"name": "rows", "in": "query", "schema": {"type": "integer", "default": 24}}
       ],
-      "get": {"summary": "WebSocket, scope full. Binary frames carry terminal bytes both ways; a text frame {\"type\":\"resize\",\"cols\":N,\"rows\":M} resizes.", "responses": {"101": {"description": "switching protocols"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
+      "get": {"summary": "WebSocket, scope full. Binary frames carry terminal bytes both ways; a text frame {\"type\":\"resize\",\"cols\":N,\"rows\":M} resizes; {\"type\":\"scroll\",\"lines\":N} scrolls a tmux terminal's history, up when N is positive (servers listing the terminalScroll feature).", "responses": {"101": {"description": "switching protocols"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
     }
   },
   "components": {
@@ -82,13 +87,13 @@ enum RemoteOpenAPI {
     "responses": {"Error": {"description": "refused", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}},
     "schemas": {
       "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
-      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}}},
+      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}, "features": {"type": "array", "items": {"type": "string", "enum": ["images", "queue", "terminalScroll"]}, "description": "what the server supports beyond apiVersion 1; missing on older servers"}}},
       "Device": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "scope": {"type": "string", "enum": ["full", "agent"]}, "createdAt": {"type": "string", "format": "date-time"}, "lastSeenAt": {"type": ["string", "null"], "format": "date-time"}}},
       "PR": {"type": "object", "properties": {"number": {"type": "integer"}, "url": {"type": ["string", "null"]}, "title": {"type": ["string", "null"]}, "status": {"type": ["string", "null"], "description": "open, draft, merged or closed"}}},
       "Terminal": {"type": "object", "properties": {"sessionName": {"type": "string"}, "label": {"type": "string"}, "isPrimary": {"type": "boolean"}}},
       "Card": {
         "type": "object",
-        "description": "isLive, isBusy and archived are left out when false, queuedPromptCount when 0, terminals and prs when empty, null fields always; a missing key means that default.",
+        "description": "isLive, isBusy and archived are left out when false, queuedPromptCount when 0, queuedPrompts, terminals and prs when empty, null fields always; a missing key means that default.",
         "required": ["id", "title", "column", "assistant", "runtime", "updatedAt"],
         "properties": {
           "id": {"type": "string"},
@@ -106,6 +111,7 @@ enum RemoteOpenAPI {
           "terminals": {"type": "array", "items": {"$ref": "#/components/schemas/Terminal"}},
           "prs": {"type": "array", "items": {"$ref": "#/components/schemas/PR"}},
           "queuedPromptCount": {"type": "integer"},
+          "queuedPrompts": {"type": "array", "items": {"$ref": "#/components/schemas/QueuedPrompt"}, "description": "oldest first"},
           "parentCardId": {"type": ["string", "null"]},
           "archived": {"type": "boolean"},
           "lastActivity": {"type": ["string", "null"], "format": "date-time"},
@@ -126,10 +132,13 @@ enum RemoteOpenAPI {
           "worktree": {"type": "string", "description": "worktree name, empty for a random one; omit to run in the project checkout"},
           "assistant": {"type": "string", "description": "claude, codex or gemini"},
           "model": {"type": "string"},
-          "launch": {"type": "boolean", "description": "false only creates the card in the backlog"}
+          "launch": {"type": "boolean", "description": "false only creates the card in the backlog"},
+          "images": {"type": "array", "maxItems": 6, "items": {"$ref": "#/components/schemas/Image"}}
         }
       },
-      "PromptRequest": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}, "mode": {"type": "string", "enum": ["queue", "now"], "default": "queue"}}},
+      "PromptRequest": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "description": "may be empty when images has some"}, "mode": {"type": "string", "enum": ["queue", "now"], "default": "queue"}, "images": {"type": "array", "maxItems": 6, "items": {"$ref": "#/components/schemas/Image"}}}},
+      "Image": {"type": "object", "required": ["mediaType", "data"], "properties": {"mediaType": {"type": "string", "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"]}, "data": {"type": "string", "contentEncoding": "base64", "description": "at most 5 MiB decoded"}}},
+      "QueuedPrompt": {"type": "object", "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "imageCount": {"type": "integer", "description": "left out when 0"}}},
       "Event": {"type": "object", "properties": {
         "type": {"type": "string", "enum": ["board", "cards", "ping"]},
         "board": {"$ref": "#/components/schemas/Board"},

@@ -319,8 +319,8 @@ public final class RemoteControlServer: Sendable {
             case .events(let device):
                 await serveEvents(conn, request: request, device: device)
                 return
-            case .terminal(let device, let argv, let cols, let rows):
-                await serveTerminal(conn, request: request, device: device, argv: argv, cols: cols, rows: rows)
+            case .terminal(let device, let argv, let session, let cols, let rows):
+                await serveTerminal(conn, request: request, device: device, argv: argv, session: session, cols: cols, rows: rows)
                 return
             }
         }
@@ -331,7 +331,7 @@ public final class RemoteControlServer: Sendable {
     private enum Outcome {
         case response(RemoteHTTPResponse)
         case events(RemoteDevice)
-        case terminal(RemoteDevice, argv: [String], cols: Int, rows: Int)
+        case terminal(RemoteDevice, argv: [String], session: String, cols: Int, rows: Int)
     }
 
     private func token(from request: RemoteHTTPRequest) -> String? {
@@ -369,7 +369,10 @@ public final class RemoteControlServer: Sendable {
         do {
             let rest = Array(seg.dropFirst())
             let id = rest.count >= 2 && rest[0] == "cards" ? rest[1] : ""
-            let shape = rest.enumerated().map { $0.offset == 1 && rest[0] == "cards" ? "*" : $0.element }.joined(separator: "/")
+            let shape = rest.enumerated().map { item in
+                let wildcard = rest[0] == "cards" && (item.offset == 1 || (item.offset == 3 && rest[2] == "queue"))
+                return wildcard ? "*" : item.element
+            }.joined(separator: "/")
             switch (method, shape) {
             case ("GET", "me"):
                 return .response(.json(device))
@@ -399,16 +402,26 @@ public final class RemoteControlServer: Sendable {
                 guard !body.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || body.launch == false else {
                     return .response(.error(400, "prompt is required"))
                 }
+                _ = try RemotePromptImages.decode(body.images)
                 return .response(.json(try await host.createTask(body), status: 201))
 
             case ("POST", "cards/*/prompt"):
                 guard let body = try? JSONDecoder.remote.decode(RemotePromptRequest.self, from: request.body) else {
-                    return .response(.error(400, "body must be {\"text\": \"...\", \"mode\": \"queue\"|\"now\"}"))
+                    return .response(.error(400, "body must be {\"text\": \"...\", \"mode\": \"queue\"|\"now\", \"images\": [...]}"))
                 }
-                guard !body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    return .response(.error(400, "text is required"))
+                let images = try RemotePromptImages.decode(body.images)
+                guard !body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else {
+                    return .response(.error(400, "text or images are required"))
                 }
-                try await host.sendPrompt(cardId: id, body)
+                try await host.sendPrompt(cardId: id, body, images: images)
+                return .response(.noContent)
+
+            case ("POST", "cards/*/queue/*"):
+                try await host.sendQueuedPromptNow(cardId: id, promptId: rest[3])
+                return .response(.noContent)
+
+            case ("DELETE", "cards/*/queue/*"):
+                try await host.removeQueuedPrompt(cardId: id, promptId: rest[3])
                 return .response(.noContent)
 
             case ("POST", "cards/*/interrupt"):
@@ -438,7 +451,7 @@ public final class RemoteControlServer: Sendable {
                 guard !argv.isEmpty else { return .response(.error(409, "card \(id) has no terminal")) }
                 let cols = min(max(Int(request.query["cols"] ?? "") ?? 80, 2), 1000)
                 let rows = min(max(Int(request.query["rows"] ?? "") ?? 24, 2), 1000)
-                return .terminal(device, argv: argv, cols: cols, rows: rows)
+                return .terminal(device, argv: argv, session: session, cols: cols, rows: rows)
 
             default:
                 if Self.knownShapes.contains(shape) {
@@ -458,7 +471,7 @@ public final class RemoteControlServer: Sendable {
     }
 
     private static let knownShapes: Set<String> = [
-        "me", "board", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt",
+        "me", "board", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt", "cards/*/queue/*",
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
     ]
 
@@ -576,7 +589,7 @@ public final class RemoteControlServer: Sendable {
 
     private func serveTerminal(
         _ conn: RemoteConnection, request: RemoteHTTPRequest, device: RemoteDevice,
-        argv: [String], cols: Int, rows: Int
+        argv: [String], session: String, cols: Int, rows: Int
     ) async {
         guard let handshake = RemoteWebSocketHandshake.response(for: request) else {
             try? await conn.send(RemoteHTTPResponse.error(400, "bad WebSocket upgrade").serialized(keepAlive: false))
@@ -624,9 +637,17 @@ public final class RemoteControlServer: Sendable {
             case .binary(let data):
                 process.write(data)
             case .text(let text):
-                if let control = try? JSONDecoder().decode(RemoteTerminalControl.self, from: Data(text.utf8)),
-                   control.type == .resize, let c = control.cols, let r = control.rows, c > 0, r > 0 {
-                    process.resize(cols: min(c, 1000), rows: min(r, 1000))
+                if let control = try? JSONDecoder().decode(RemoteTerminalControl.self, from: Data(text.utf8)) {
+                    switch control.type {
+                    case .resize:
+                        if let c = control.cols, let r = control.rows, c > 0, r > 0 {
+                            process.resize(cols: min(c, 1000), rows: min(r, 1000))
+                        }
+                    case .scroll:
+                        if let lines = control.lines, lines != 0 {
+                            await host.scrollTerminal(sessionName: session, lines: lines)
+                        }
+                    }
                 } else {
                     process.write(Data(text.utf8))
                 }
