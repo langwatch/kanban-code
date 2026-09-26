@@ -264,21 +264,71 @@ public struct RemoteError: Codable, Sendable, Equatable, Error {
     public init(_ error: String) { self.error = error }
 }
 
-/// Text frames on WS /v1/events.
+/// Text frames on WS /v1/events: a whole `board` first, then `cards` deltas.
 public struct RemoteEvent: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
-        /// `board` holds the whole board.
+        /// `board` holds the whole board (the working set unless `all=1`).
         case board
+        /// Changes since the last frame: `upserted` cards replace or join the
+        /// board by id, `removed` ids leave it, `projects` (when present)
+        /// replaces the project list.
+        case cards
         /// Sent every 20 s so idle connections stay up.
         case ping
     }
 
     public var type: Kind
     public var board: RemoteBoard?
+    public var upserted: [RemoteCard]?
+    public var removed: [String]?
+    public var projects: [RemoteProject]?
 
-    public init(type: Kind, board: RemoteBoard? = nil) {
+    public init(
+        type: Kind, board: RemoteBoard? = nil, upserted: [RemoteCard]? = nil,
+        removed: [String]? = nil, projects: [RemoteProject]? = nil
+    ) {
         self.type = type
         self.board = board
+        self.upserted = upserted
+        self.removed = removed
+        self.projects = projects
+    }
+
+    /// Applies a `board` or `cards` event to a board the client holds.
+    public func apply(to board: inout RemoteBoard?) {
+        switch type {
+        case .board:
+            board = self.board
+        case .cards:
+            guard var current = board else { return }
+            let gone = Set(removed ?? [])
+            current.cards.removeAll { gone.contains($0.id) }
+            for card in upserted ?? [] {
+                if let i = current.cards.firstIndex(where: { $0.id == card.id }) {
+                    current.cards[i] = card
+                } else {
+                    current.cards.append(card)
+                }
+            }
+            if let projects { current.projects = projects }
+            board = current
+        case .ping:
+            break
+        }
+    }
+}
+
+/// Text frames a client sends on WS /v1/events.
+public struct RemoteEventsControl: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable {
+        /// Asks for a whole `board` frame again.
+        case resync
+    }
+
+    public var type: Kind
+
+    public init(type: Kind) {
+        self.type = type
     }
 }
 

@@ -183,10 +183,51 @@ struct RemoteControlServerTests {
         while (!sawChange || !sawPing) && Date() < deadline {
             let event = try decodeEvent(try await withTimeout(5) { try await ws.receive() })
             if event.type == .ping { sawPing = true }
-            if event.type == .board, event.board?.cards.first?.column == .waiting { sawChange = true }
+            if event.type == .cards {
+                #expect(event.upserted?.map(\.id) == ["card_live"])
+                #expect(event.removed == [])
+                if event.upserted?.first?.column == .waiting { sawChange = true }
+            }
         }
         #expect(sawChange)
         #expect(sawPing)
+    }
+
+    @Test("events: a card leaving the working set is removed, resync sends the whole board")
+    func eventsRemovedAndResync() async throws {
+        let f = try await RemoteServerFixture()
+        defer { f.shutdown() }
+        let ws = f.webSocket("/v1/events", token: f.agentToken)
+        defer { ws.cancel(with: .normalClosure, reason: nil) }
+        var board: RemoteBoard?
+        try decodeEvent(try await withTimeout(5) { try await ws.receive() }).apply(to: &board)
+        #expect(board?.cards.count == 2)
+
+        f.host.mutate { cards in cards[1].archived = true }
+        var event = try decodeEvent(try await withTimeout(5) { try await ws.receive() })
+        while event.type == .ping { event = try decodeEvent(try await withTimeout(5) { try await ws.receive() }) }
+        #expect(event.type == .cards)
+        #expect(event.removed == ["card_idle"])
+        #expect(event.upserted == [])
+        event.apply(to: &board)
+        #expect(board?.cards.map(\.id) == ["card_live"])
+
+        try await ws.send(.string(#"{"type":"resync"}"#))
+        event = try decodeEvent(try await withTimeout(5) { try await ws.receive() })
+        while event.type == .ping { event = try decodeEvent(try await withTimeout(5) { try await ws.receive() }) }
+        #expect(event.type == .board)
+        #expect(event.board?.cards.map(\.id) == ["card_live"])
+    }
+
+    @Test("events with all=1 keeps archived cards")
+    func eventsAll() async throws {
+        let f = try await RemoteServerFixture()
+        defer { f.shutdown() }
+        f.host.mutate { cards in cards[1].archived = true }
+        let ws = f.webSocket("/v1/events?all=1", token: f.agentToken)
+        defer { ws.cancel(with: .normalClosure, reason: nil) }
+        let first = try decodeEvent(try await withTimeout(5) { try await ws.receive() })
+        #expect(first.board?.cards.count == 2)
     }
 
     @Test("events pushes at most once per push interval")
@@ -204,7 +245,7 @@ struct RemoteControlServerTests {
         var boards: [Date] = []
         while Date().timeIntervalSince(start) < 1.2 {
             guard let message = try? await withTimeout(0.5, { try await ws.receive() }) else { break }
-            if try decodeEvent(message).type == .board { boards.append(Date()) }
+            if try decodeEvent(message).type == .cards { boards.append(Date()) }
         }
         // 20 changes over ~0.4 s with a 0.2 s interval: a handful of pushes, never 20.
         #expect(boards.count >= 1)

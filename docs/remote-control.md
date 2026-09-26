@@ -38,7 +38,7 @@ JSON bodies. Dates are ISO 8601 with milliseconds, UTC (`2026-09-26T10:00:00.000
 | `POST /v1/cards/{id}/prompt` | any | `RemotePromptRequest` → 204 |
 | `POST /v1/cards/{id}/interrupt` | any | 204 |
 | `POST /v1/cards/{id}/resume` | any | `RemoteCard` |
-| `GET /v1/events` (WebSocket) | any | `RemoteEvent` text frames |
+| `GET /v1/events?all=1` (WebSocket) | any | `RemoteEvent` text frames |
 | `GET /v1/cards/{id}/terminal?session=<name>&cols=80&rows=24` (WebSocket) | full | terminal bytes |
 | `GET /.well-known/openapi.json` | none | OpenAPI 3.1 of the above |
 
@@ -48,7 +48,7 @@ Behaviour:
 - `prompt` with `mode: queue` delivers the text when the current turn ends, or at once when the session is idle. `mode: now` interrupts the turn first. A card with no live session returns 409 until it is resumed.
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.
 - `resume` on a card that never ran launches it.
-- `/v1/events` sends the whole board on connect, then again after each change, at most once per second. A `ping` event arrives every 20 seconds.
+- `/v1/events` (also `?all=1`) sends a `board` event with the whole board on connect, then `cards` events at most once per second: `upserted` holds the cards whose value changed or that joined the set, `removed` the ids that left it (archived, moved out of the recent Done, deleted), and `projects` the project list when it changed. A client applies them by id (`RemoteEvent.apply(to:)` in RemoteKit). A text frame `{"type":"resync"}` from the client gets a whole `board` again; so does every new connection. A `ping` event arrives every 20 seconds.
 - `terminal` without `session` opens the card's primary terminal. A terminal that is not running returns 409.
 
 ## Terminal stream

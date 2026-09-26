@@ -506,26 +506,37 @@ public final class RemoteControlServer: Sendable {
         let host = self.host
         let pushInterval = options.pushInterval
         let pingInterval = options.pingInterval
+        let (triggers, trigger) = AsyncStream<EventTrigger>.makeStream(bufferingPolicy: .unbounded)
         let changes = host.boardChanges()
+        let forwarder = Task {
+            for await _ in changes { trigger.yield(.change) }
+        }
         let pusher = Task { [weak self] in
             guard let self else { return }
-            var sent = await host.board()
-            if !all { sent = RemoteWorkingSet.filter(sent) }
-            if let text = self.encodedEvent(RemoteEvent(type: .board, board: sent)) {
+            var tracker = RemoteBoardDeltaTracker()
+            func current() async -> RemoteBoard {
+                let board = await host.board()
+                return all ? board : RemoteWorkingSet.filter(board)
+            }
+            if let text = self.encodedEvent(tracker.fullBoard(await current())) {
                 try? await ws.sendText(text)
             }
             var lastPush = Date()
-            for await _ in changes {
-                let wait = pushInterval - Date().timeIntervalSince(lastPush)
-                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            for await next in triggers {
                 if Task.isCancelled { return }
-                var board = await host.board()
-                if !all { board = RemoteWorkingSet.filter(board) }
-                // The app signals many changes that leave the wire board as it was.
-                guard board.cards != sent.cards || board.projects != sent.projects else { continue }
+                let event: RemoteEvent?
+                switch next {
+                case .resync:
+                    event = tracker.fullBoard(await current())
+                case .change:
+                    let wait = pushInterval - Date().timeIntervalSince(lastPush)
+                    if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                    if Task.isCancelled { return }
+                    // The app signals many changes that leave the wire board as it was.
+                    event = tracker.delta(await current())
+                }
+                guard let event, let text = self.encodedEvent(event) else { continue }
                 lastPush = Date()
-                sent = board
-                guard let text = self.encodedEvent(RemoteEvent(type: .board, board: board)) else { continue }
                 do { try await ws.sendText(text) } catch { return }
             }
         }
@@ -537,13 +548,24 @@ public final class RemoteControlServer: Sendable {
             }
         }
         defer {
+            forwarder.cancel()
             pusher.cancel()
             pinger.cancel()
+            trigger.finish()
         }
-        // Client frames carry nothing; reading keeps pings answered and sees the close.
+        // The only client frame is {"type":"resync"}; reading also answers pings and sees the close.
         while let message = try? await ws.receive() {
-            _ = message
+            if case .text(let text) = message,
+               let control = try? JSONDecoder().decode(RemoteEventsControl.self, from: Data(text.utf8)),
+               control.type == .resync {
+                trigger.yield(.resync)
+            }
         }
+    }
+
+    private enum EventTrigger: Sendable {
+        case change
+        case resync
     }
 
     private func serveTerminal(

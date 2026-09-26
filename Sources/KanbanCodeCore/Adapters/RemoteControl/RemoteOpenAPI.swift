@@ -60,7 +60,8 @@ enum RemoteOpenAPI {
       "post": {"summary": "Start the card's session again when it ended", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Card"}}}}, "404": {"$ref": "#/components/responses/Error"}}}
     },
     "/v1/events": {
-      "get": {"summary": "WebSocket. Text frames of Event: the whole board on connect and after each change (at most once per second), a ping every 20 s.", "responses": {"101": {"description": "switching protocols"}, "401": {"$ref": "#/components/responses/Error"}}}
+      "parameters": [{"$ref": "#/components/parameters/All"}],
+      "get": {"summary": "WebSocket. Text frames of Event: a board event on connect, then cards events (upserted, removed, projects) at most once per second, a ping every 20 s. Send {\"type\":\"resync\"} for a whole board again.", "responses": {"101": {"description": "switching protocols"}, "401": {"$ref": "#/components/responses/Error"}}}
     },
     "/v1/cards/{id}/terminal": {
       "parameters": [
@@ -127,7 +128,13 @@ enum RemoteOpenAPI {
         }
       },
       "PromptRequest": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}, "mode": {"type": "string", "enum": ["queue", "now"], "default": "queue"}}},
-      "Event": {"type": "object", "properties": {"type": {"type": "string", "enum": ["board", "ping"]}, "board": {"$ref": "#/components/schemas/Board"}}}
+      "Event": {"type": "object", "properties": {
+        "type": {"type": "string", "enum": ["board", "cards", "ping"]},
+        "board": {"$ref": "#/components/schemas/Board"},
+        "upserted": {"type": "array", "items": {"$ref": "#/components/schemas/Card"}},
+        "removed": {"type": "array", "items": {"type": "string"}},
+        "projects": {"type": "array", "items": {"$ref": "#/components/schemas/Project"}}
+      }}
     }
   }
 }

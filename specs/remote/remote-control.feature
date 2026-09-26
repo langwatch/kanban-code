@@ -50,8 +50,13 @@ Feature: Remote control from a phone and from other agents
 
   Scenario: The board follows the Mac live
     Given the phone is connected to /v1/events
+    Then it gets the whole board first
     When a card moves to Waiting on the Mac
-    Then the phone gets the new board within a second
+    Then within a second the phone gets a cards event with only that card in upserted
+    When a card is archived on the Mac
+    Then the phone gets its id in removed
+    When the phone sends a resync frame
+    Then it gets the whole board again
 
   Scenario: Streaming an agtop card's terminal
     Given a card running on agtop
