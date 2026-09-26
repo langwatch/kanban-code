@@ -85,6 +85,9 @@ public final class AppState: @unchecked Sendable {
     /// `/model` switch shows up.
     public var sessionModels: [String: String] = [:]
     public var tmuxSessions: Set<String> = []                  // live tmux names
+    /// Messages queued in each live agtop host, by session name; hosts with
+    /// an empty queue are left out.
+    public var agtopQueues: [String: [String]] = [:]
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
     /// `selectedCardId` / `selectedChannelName` / `selectedDMParticipant`
@@ -487,6 +490,10 @@ public enum Action: Sendable {
     /// Fast tmux liveness pass: clears links whose tmux sessions no longer
     /// exist (e.g. after a reboot) without waiting for a full reconcile.
     case tmuxLivenessScanned(live: Set<String>)
+    /// Every live agtop host's queue, from the same scan.
+    case agtopQueuesScanned([String: [String]])
+    /// One agtop host's queue, read after acting on it.
+    case agtopQueueRead(sessionName: String, queue: [String])
     case gitHubIssuesUpdated(links: [Link])
     case activityChanged([String: ActivityState]) // sessionId → state
 
@@ -2035,6 +2042,17 @@ public enum Reducer {
 
         // MARK: Background Reconciliation
 
+        case .agtopQueuesScanned(let queues):
+            let nonEmpty = queues.filter { !$0.value.isEmpty }
+            if state.agtopQueues != nonEmpty { state.agtopQueues = nonEmpty }
+            return []
+
+        case .agtopQueueRead(let sessionName, let queue):
+            if state.agtopQueues[sessionName] ?? [] != queue {
+                state.agtopQueues[sessionName] = queue.isEmpty ? nil : queue
+            }
+            return []
+
         case .tmuxLivenessScanned(let live):
             if state.tmuxSessions != live { state.tmuxSessions = live }
 
@@ -2586,10 +2604,20 @@ public final class BoardStore: @unchecked Sendable {
         self.sessionStore = sessionStore
     }
 
+    /// The queues of the agtop hosts in a session scan, by session name.
+    nonisolated static func agtopQueues(in sessions: [TmuxSession]) -> [String: [String]] {
+        var queues: [String: [String]] = [:]
+        for session in sessions {
+            if let queue = session.agtopQueue, !queue.isEmpty { queues[session.name] = queue }
+        }
+        return queues
+    }
+
     /// Actions that only toggle UI state and don't affect card data — skip rebuildCards().
     private static func needsRebuild(_ action: Action) -> Bool {
         switch action {
-        case .reconciled, .setRateLimitedRepos, .tmuxLivenessScanned, .sessionModelsScanned:
+        case .reconciled, .setRateLimitedRepos, .tmuxLivenessScanned, .sessionModelsScanned,
+             .agtopQueuesScanned, .agtopQueueRead:
             // These reducers diff their card inputs and rebuild only when the
             // derived card snapshots can actually change. A periodic PR/status
             // pass that produces the same links must not relayout the board.
@@ -2807,6 +2835,7 @@ public final class BoardStore: @unchecked Sendable {
             // attach fails in the pane until the first full pass lands.
             if let tmuxAdapter, let live = try? await tmuxAdapter.listSessions() {
                 dispatch(.tmuxLivenessScanned(live: Set(live.map(\.name))))
+                dispatch(.agtopQueuesScanned(Self.agtopQueues(in: live)))
             }
 
             let t1 = ContinuousClock.now
@@ -2954,6 +2983,7 @@ public final class BoardStore: @unchecked Sendable {
             let tmuxSessions = (try? await tmuxAdapter?.listSessions()) ?? []
             KanbanCodeLog.info("reconcile", "tmux: \(t2.duration(to: .now)) (\(tmuxSessions.count) sessions)")
             if tmuxAdapter != nil {
+                dispatch(.agtopQueuesScanned(Self.agtopQueues(in: tmuxSessions)))
                 let currentNames = Set(tmuxSessions.map(\.name))
                 let home = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
                 // The disk snapshot covers the first pass of a fresh app run:

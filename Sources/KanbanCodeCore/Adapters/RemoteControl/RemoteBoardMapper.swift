@@ -8,10 +8,11 @@ public enum RemoteBoardMapper {
         cards: [KanbanCodeCard],
         projects: [Project],
         liveSessions: Set<String>,
+        agtopQueues: [String: [String]] = [:],
         generatedAt: Date = Date()
     ) -> RemoteBoard {
         RemoteBoard(
-            cards: cards.map { card($0, liveSessions: liveSessions) }.sorted(by: order),
+            cards: cards.map { card($0, liveSessions: liveSessions, agtopQueues: agtopQueues) }.sorted(by: order),
             projects: projects.map { RemoteProject(path: $0.path, name: $0.name) },
             generatedAt: generatedAt
         )
@@ -25,8 +26,17 @@ public enum RemoteBoardMapper {
         return a.id < b.id
     }
 
-    public static func card(_ card: KanbanCodeCard, liveSessions: Set<String>) -> RemoteCard {
+    /// `agtopQueues` holds the queues of live agtop hosts by session name:
+    /// an agtop card lists its host's queue ahead of any prompt the app
+    /// itself holds for it.
+    public static func card(_ card: KanbanCodeCard, liveSessions: Set<String>,
+                            agtopQueues: [String: [String]] = [:]) -> RemoteCard {
         let link = card.link
+        let hostQueue = link.tmuxLink.flatMap { agtopQueues[$0.sessionName] } ?? []
+        let queued = hostQueue.enumerated().map { RemoteQueuedPrompt(id: agtopPromptId(index: $0.offset, text: $0.element), text: $0.element) }
+            + (link.queuedPrompts ?? []).map {
+                RemoteQueuedPrompt(id: $0.id, text: $0.body, imageCount: $0.imagePaths?.count ?? 0)
+            }
         return RemoteCard(
             id: link.id,
             title: card.displayTitle,
@@ -42,15 +52,39 @@ public enum RemoteBoardMapper {
             sessionId: link.sessionLink?.sessionId,
             terminals: terminals(of: link),
             prs: link.prLinks.map(pr),
-            queuedPromptCount: link.queuedPrompts?.count ?? 0,
-            queuedPrompts: (link.queuedPrompts ?? []).map {
-                RemoteQueuedPrompt(id: $0.id, text: $0.body, imageCount: $0.imagePaths?.count ?? 0)
-            },
+            queuedPromptCount: queued.count,
+            queuedPrompts: queued,
             parentCardId: link.parentCardId,
             archived: link.manuallyArchived,
             lastActivity: link.lastActivity,
             updatedAt: link.updatedAt
         )
+    }
+
+    /// The id of a message queued in an agtop host: its place and a hash of
+    /// its text, so it can be found again after the queue moved.
+    public static func agtopPromptId(index: Int, text: String) -> String {
+        "agtop-\(index)-\(String(fnv1a(text), radix: 16))"
+    }
+
+    /// The place in `queue` of the message `id` names, preferring the place
+    /// it had; nil when it is no longer queued or `id` is not an agtop one.
+    public static func agtopQueueIndex(of id: String, in queue: [String]) -> Int? {
+        let parts = id.split(separator: "-")
+        guard parts.count == 3, parts[0] == "agtop", let index = Int(parts[1]) else { return nil }
+        let hash = String(parts[2])
+        let matches = { (i: Int) in String(fnv1a(queue[i]), radix: 16) == hash }
+        if queue.indices.contains(index), matches(index) { return index }
+        return queue.indices.first(where: matches)
+    }
+
+    static func fnv1a(_ text: String) -> UInt32 {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return hash
     }
 
     /// Where the card's main session runs.

@@ -90,6 +90,22 @@ struct RemoteControlMapperTests {
         #expect(RemoteTerminalScroll.tmuxCommands(session: "s", lines: 0).isEmpty)
     }
 
+    @Test("an agtop card lists its host's queue first, with ids that find each message again")
+    func agtopQueue() {
+        let card = KanbanCodeCard(link: Self.link(tmux: TmuxLink(sessionName: "agtop-0a1b2c3d")), activityState: .activelyWorking)
+        let remote = RemoteBoardMapper.card(card, liveSessions: ["agtop-0a1b2c3d"],
+                                            agtopQueues: ["agtop-0a1b2c3d": ["one", "two"]])
+        #expect(remote.queuedPrompts.map(\.text) == ["one", "two", "also run the tests"])
+        #expect(remote.queuedPromptCount == 3)
+        let two = remote.queuedPrompts[1].id
+        #expect(two.hasPrefix("agtop-1-"))
+        #expect(RemoteBoardMapper.agtopQueueIndex(of: two, in: ["one", "two"]) == 1)
+        // The queue moved: found by its text.
+        #expect(RemoteBoardMapper.agtopQueueIndex(of: two, in: ["two"]) == 0)
+        #expect(RemoteBoardMapper.agtopQueueIndex(of: two, in: ["one"]) == nil)
+        #expect(RemoteBoardMapper.agtopQueueIndex(of: "prompt_abc", in: ["one"]) == nil)
+    }
+
     @Test("runtime and liveness: agtop, machine, shell only, ended")
     func runtimes() {
         let agtop = Self.link(tmux: TmuxLink(sessionName: "agtop-0123abcd"))

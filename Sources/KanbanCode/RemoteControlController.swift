@@ -163,11 +163,16 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
     private let sendEscape: @Sendable (String) async throws -> Void
     /// Runs tmux commands on the server that holds the session.
     private let runTmux: @Sendable ([[String]], String) async -> Void
+    /// agtop cards queue and send through agtop itself.
+    private let agtop: AgtopCliAdapter
+    private let queueWatch = QueueWatchFlag()
 
     init(store: BoardStore,
+         agtop: AgtopCliAdapter = AppServices.tmux.agtop,
          runTmux: @escaping @Sendable ([[String]], String) async -> Void = AppRemoteControlHost.runTmux(_:session:),
          sendEscape: @escaping @Sendable (String) async throws -> Void) {
         self.store = store
+        self.agtop = agtop
         self.runTmux = runTmux
         self.sendEscape = sendEscape
     }
@@ -181,13 +186,16 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
     }
 
     func board() async -> RemoteBoard {
-        await MainActor.run {
+        let board = await MainActor.run {
             RemoteBoardMapper.board(
                 cards: store.state.cards,
                 projects: store.state.configuredProjects,
-                liveSessions: store.state.tmuxSessions
+                liveSessions: store.state.tmuxSessions,
+                agtopQueues: store.state.agtopQueues
             )
         }
+        await watchAgtopQueues()
+        return board
     }
 
     @MainActor
@@ -200,7 +208,7 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
 
     @MainActor
     private func remoteCard(_ cardId: String) throws -> RemoteCard {
-        RemoteBoardMapper.card(try card(cardId), liveSessions: store.state.tmuxSessions)
+        RemoteBoardMapper.card(try card(cardId), liveSessions: store.state.tmuxSessions, agtopQueues: store.state.agtopQueues)
     }
 
     func transcript(cardId: String, limit: Int, before: String?) async throws -> RemoteTranscript {
@@ -292,6 +300,14 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
         let (session, busy) = try await MainActor.run { try liveSession(cardId) }
         let imagePaths = try RemotePromptImages.write(images, to: RemotePromptImages.promptDirectory)
         let mode = request.mode ?? .queue
+        if let agtopId = AgtopSessionName.agtopId(fromName: session) {
+            // agtop queues a message sent mid-turn itself, and `now` hands it
+            // to Claude mid-turn; the card's own queue is not used.
+            let text = PromptImageLayout.replacingMarkersWithMarkdown(in: request.text, imagePaths: imagePaths)
+            try await agtop.send(id: agtopId, text: text, imagePaths: imagePaths, now: mode == .now)
+            await readAgtopQueue(session: session, agtopId: agtopId)
+            return
+        }
         if mode == .now && busy {
             try await interruptForPrompt(session: session)
         }
@@ -308,6 +324,10 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
     }
 
     func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
+        if promptId.hasPrefix("agtop-") {
+            try await agtopQueueAction(cardId: cardId, promptId: promptId, send: true)
+            return
+        }
         let (session, busy) = try await MainActor.run { () throws -> (String, Bool) in
             try queuedPrompt(cardId, promptId)
             return try liveSession(cardId)
@@ -321,6 +341,10 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
     }
 
     func removeQueuedPrompt(cardId: String, promptId: String) async throws {
+        if promptId.hasPrefix("agtop-") {
+            try await agtopQueueAction(cardId: cardId, promptId: promptId, send: false)
+            return
+        }
         try await MainActor.run {
             try queuedPrompt(cardId, promptId)
             store.dispatch(.removeQueuedPrompt(cardId: cardId, promptId: promptId))
@@ -334,6 +358,69 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
             throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
         }
         return prompt
+    }
+
+    // MARK: agtop queue
+
+    /// Sends now, or drops, a message queued in the card's agtop host.
+    private func agtopQueueAction(cardId: String, promptId: String, send: Bool) async throws {
+        let (session, queue) = try await MainActor.run { () throws -> (String, [String]) in
+            let (session, _) = try liveSession(cardId)
+            return (session, store.state.agtopQueues[session] ?? [])
+        }
+        guard let agtopId = AgtopSessionName.agtopId(fromName: session) else {
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId)")
+        }
+        // The queue as the phone saw it may be older than agtop's.
+        var current = queue
+        if RemoteBoardMapper.agtopQueueIndex(of: promptId, in: current) == nil,
+           let info = try? await agtop.info(id: agtopId) {
+            current = info.queue
+        }
+        guard let index = RemoteBoardMapper.agtopQueueIndex(of: promptId, in: current) else {
+            await readAgtopQueue(session: session, agtopId: agtopId)
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
+        }
+        do {
+            if send {
+                try await agtop.sendQueued(id: agtopId, index: index, was: current[index])
+            } else {
+                try await agtop.removeQueued(id: agtopId, index: index, was: current[index])
+            }
+        } catch let error as AgtopCommandFailed where error.message.contains("already been sent") {
+            await readAgtopQueue(session: session, agtopId: agtopId)
+            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it was sent already")
+        }
+        await readAgtopQueue(session: session, agtopId: agtopId)
+    }
+
+    /// Reads one agtop host's queue into the store, then keeps watching
+    /// while any host has something queued.
+    private func readAgtopQueue(session: String, agtopId: String) async {
+        guard let info = try? await agtop.info(id: agtopId) else { return }
+        await MainActor.run { store.dispatch(.agtopQueueRead(sessionName: session, queue: info.queue)) }
+        await watchAgtopQueues()
+    }
+
+    /// While an agtop host has messages queued, reads its queue every two
+    /// seconds, so they leave the phone when agtop sends them. The session
+    /// scan also reads them, but only as often as the board reconciles.
+    private func watchAgtopQueues() async {
+        let queued = await MainActor.run { !store.state.agtopQueues.isEmpty }
+        guard queued, queueWatch.claim() else { return }
+        Task { [weak self] in
+            defer { self?.queueWatch.release() }
+            while let self, !Task.isCancelled {
+                let sessions = await MainActor.run { Array(self.store.state.agtopQueues.keys) }
+                if sessions.isEmpty { return }
+                try? await Task.sleep(for: .seconds(2))
+                for session in sessions {
+                    guard let id = AgtopSessionName.agtopId(fromName: session) else { continue }
+                    let queue = (try? await self.agtop.info(id: id))?.queue ?? []
+                    await MainActor.run { self.store.dispatch(.agtopQueueRead(sessionName: session, queue: queue)) }
+                }
+            }
+        }
     }
 
     func scrollTerminal(sessionName: String, lines: Int) async {
@@ -418,6 +505,7 @@ final class AppRemoteControlHost: RemoteControlHost, @unchecked Sendable {
         withObservationTracking {
             _ = store.state.cards
             _ = store.state.tmuxSessions
+            _ = store.state.agtopQueues
             _ = store.state.configuredProjects
         } onChange: {
             continuation.yield()
@@ -432,4 +520,21 @@ private final class BoardChangeFlag: @unchecked Sendable {
 
     var isAlive: Bool { lock.withLock { alive } }
     func stop() { lock.withLock { alive = false } }
+}
+
+/// One agtop queue watcher at a time.
+private final class QueueWatchFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+
+    /// True when the caller should start the watcher.
+    func claim() -> Bool {
+        lock.withLock {
+            if running { return false }
+            running = true
+            return true
+        }
+    }
+
+    func release() { lock.withLock { running = false } }
 }

@@ -8,17 +8,22 @@ public struct AgtopSessionInfo: Decodable, Sendable, Equatable {
     public let name: String?
     public let state: String
     public let alive: Bool
+    /// Messages waiting for the turn to end, oldest first; the host sends
+    /// them when it ends.
+    public let queue: [String]
 
-    public init(id: String, sessionId: String, cwd: String, name: String? = nil, state: String, alive: Bool) {
+    public init(id: String, sessionId: String, cwd: String, name: String? = nil, state: String, alive: Bool,
+                queue: [String] = []) {
         self.id = id
         self.sessionId = sessionId
         self.cwd = cwd
         self.name = name
         self.state = state
         self.alive = alive
+        self.queue = queue
     }
 
-    enum CodingKeys: String, CodingKey { case id, sessionId, cwd, name, state, alive }
+    enum CodingKeys: String, CodingKey { case id, sessionId, cwd, name, state, alive, queue }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -28,6 +33,7 @@ public struct AgtopSessionInfo: Decodable, Sendable, Equatable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "stopped"
         alive = try c.decodeIfPresent(Bool.self, forKey: .alive) ?? false
+        queue = try c.decodeIfPresent([String].self, forKey: .queue) ?? []
     }
 
     /// Claude is running a turn or waiting on a permission answer.
@@ -135,8 +141,9 @@ public final class AgtopCliAdapter: @unchecked Sendable {
         return try JSONDecoder().decode(AgtopSessionInfo.self, from: Data(result.utf8))
     }
 
-    /// Sends a message. A busy session queues it, `now` interrupts the turn
-    /// first. A stopped host is started again with `--resume`.
+    /// Sends a message. A busy session queues it; `now` delivers it mid-turn,
+    /// for Claude to read at its next step. Images always go at once. A
+    /// stopped host is started again with `--resume`.
     public func send(id: String, text: String, imagePaths: [String] = [], now: Bool = false) async throws {
         let file = try writeScratch(text)
         defer { try? FileManager.default.removeItem(atPath: file) }
@@ -149,6 +156,17 @@ public final class AgtopCliAdapter: @unchecked Sendable {
         guard result.succeeded else {
             throw AgtopCommandFailed(arguments: args, message: Self.errorMessage(result))
         }
+    }
+
+    /// Sends the queued message at `index` now. `was` is its text as last
+    /// read, so the host still finds it if the queue moved.
+    public func sendQueued(id: String, index: Int, was: String) async throws {
+        _ = try await run(["session", "queue", id, "send", String(index), "--was", was], timeout: 30)
+    }
+
+    /// Drops the queued message at `index` (see `sendQueued`).
+    public func removeQueued(id: String, index: Int, was: String) async throws {
+        _ = try await run(["session", "queue", id, "remove", String(index), "--was", was], timeout: 30)
     }
 
     public func interrupt(id: String) async throws {

@@ -26,7 +26,7 @@ struct AgtopTests {
                 else
                   echo '{"error":"not found"}'; exit 1
                 fi ;;
-              list) echo '[{"id":"0a1b2c3d","sessionId":"s1","cwd":"/repo","state":"idle","alive":true},{"id":"99999999","sessionId":"s2","cwd":"/old","state":"stopped","alive":false}]' ;;
+              list) echo '[{"id":"0a1b2c3d","sessionId":"s1","cwd":"/repo","state":"working","alive":true,"queue":["later","and this"]},{"id":"99999999","sessionId":"s2","cwd":"/old","state":"stopped","alive":false}]' ;;
             esac
             """
             try script.write(toFile: path, atomically: true, encoding: .utf8)
@@ -176,8 +176,24 @@ struct AgtopTests {
         #expect(calls.contains("ARGS session interrupt 0a1b2c3d"))
         #expect(calls.contains("ARGS session stop 0a1b2c3d"))
 
-        let names = try await router.listSessions().map(\.name)
+        let sessions = try await router.listSessions()
+        let names = sessions.map(\.name)
         #expect(names.contains("agtop-0a1b2c3d"))
         #expect(!names.contains("agtop-99999999"))
+        #expect(sessions.first { $0.name == "agtop-0a1b2c3d" }?.agtopQueue == ["later", "and this"])
+        #expect(BoardStore.agtopQueues(in: sessions) == ["agtop-0a1b2c3d": ["later", "and this"]])
+    }
+
+    @Test("A queued message is sent now or removed by its place and text")
+    func queueCommands() async throws {
+        let fake = try FakeAgtop()
+        defer { fake.cleanup() }
+        let adapter = fake.adapter()
+        try await adapter.sendQueued(id: "0a1b2c3d", index: 1, was: "and this")
+        try await adapter.removeQueued(id: "0a1b2c3d", index: 0, was: "later")
+        let calls = fake.calls()
+        #expect(calls.contains("ARGS session queue 0a1b2c3d send 1 --was and this"))
+        #expect(calls.contains("ARGS session queue 0a1b2c3d remove 0 --was later"))
+        #expect(try await adapter.list().first?.queue == ["later", "and this"])
     }
 }

@@ -49,7 +49,7 @@ public final class RoutingTmuxAdapter: TmuxManagerPort, @unchecked Sendable {
         var result = try await local.listSessions()
         if agtop.isAvailable, let hosts = try? await agtop.list() {
             for host in hosts where host.alive {
-                result.append(TmuxSession(name: AgtopSessionName.name(agtopId: host.id), path: host.cwd))
+                result.append(TmuxSession(name: AgtopSessionName.name(agtopId: host.id), path: host.cwd, agtopQueue: host.queue))
             }
         }
         var seen = Set(result.map(\.name))
