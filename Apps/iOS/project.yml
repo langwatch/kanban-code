@@ -57,7 +57,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSCameraUsageDescription: Scan the pairing QR code shown by Kanban Code on your Mac.
+        NSCameraUsageDescription: Scan the pairing QR code shown by Kanban Code on your Mac, and take photos to send to a session.
         NSLocalNetworkUsageDescription: Connect to Kanban Code on your Mac.
         CFBundleURLTypes:
           - CFBundleURLName: io.kanbancode.mobile

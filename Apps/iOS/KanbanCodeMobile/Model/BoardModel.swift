@@ -19,6 +19,8 @@ final class BoardModel {
     let client: RemoteClient?
     private(set) var board: RemoteBoard?
     private(set) var device: RemoteDevice?
+    /// What the Mac supports beyond API version 1 (`RemoteAPI.Feature`).
+    private(set) var features: Set<String> = []
     private(set) var link: Link = .connecting
     private(set) var loadError: String?
 
@@ -36,7 +38,10 @@ final class BoardModel {
         self.board = board
         device = RemoteDevice(id: "d1", name: "iPhone", scope: scope, createdAt: .now)
         link = .offline
+        features = Set(RemoteAPI.features)
     }
+
+    func supports(_ feature: String) -> Bool { features.contains(feature) }
 
     var scope: RemoteScope { device?.scope ?? .full }
     var canUseTerminal: Bool { scope == .full }
@@ -50,8 +55,10 @@ final class BoardModel {
         eventsTask = Task { [weak self] in
             guard let model = self else { return }
             async let me = try? client.me()
+            async let health = try? client.health()
             await model.refresh()
             model.device = await me
+            model.features = Set(await health?.features ?? [])
             let stream = client.events { state in
                 Task { @MainActor in model.apply(state) }
             }

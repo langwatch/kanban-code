@@ -2,9 +2,37 @@ import SwiftUI
 import SwiftTerm
 import KanbanCodeRemoteKit
 
+/// SwiftTerm's view for a remote terminal. With mouse reporting on, SwiftTerm
+/// turns a pan into a button-1 drag, which agtop reads as a click where the
+/// finger landed; `TerminalController` scrolls on a pan instead. It also
+/// reads the screen out to accessibility.
+final class RemoteTerminalView: TerminalView {
+    override func mouseModeChanged(source: Terminal) {}
+
+    override var isAccessibilityElement: Bool {
+        get { true }
+        set {}
+    }
+
+    override var accessibilityLabel: String? {
+        get { "Terminal" }
+        set {}
+    }
+
+    override var accessibilityValue: String? {
+        get {
+            let term = getTerminal()
+            return (0..<term.rows).compactMap { term.getLine(row: $0)?.translateToString(trimRight: true) }
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        set {}
+    }
+}
+
 /// One terminal viewer of a card: a SwiftTerm view fed from the terminal socket.
 @Observable
-final class TerminalController: NSObject, TerminalViewDelegate {
+final class TerminalController: NSObject, TerminalViewDelegate, UIGestureRecognizerDelegate {
     enum State: Equatable {
         case idle
         case connecting
@@ -21,11 +49,40 @@ final class TerminalController: NSObject, TerminalViewDelegate {
     @ObservationIgnored let view: TerminalView
     @ObservationIgnored private var connection: RemoteTerminalConnection?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    /// The Mac scrolls tmux history on a `scroll` frame (`RemoteAPI.Feature.terminalScroll`).
+    @ObservationIgnored private var serverScroll = false
+    @ObservationIgnored private var scrollPan: UIPanGestureRecognizer!
+    @ObservationIgnored private var scrollMode: ScrollMode?
+    /// Finger travel not yet turned into whole lines.
+    @ObservationIgnored private var scrollRemainder: CGFloat = 0
+    /// Lines not yet turned into whole wheel events.
+    @ObservationIgnored private var wheelRemainder = 0
+    @ObservationIgnored private var pendingServerLines = 0
+    @ObservationIgnored private var serverFlush: Task<Void, Never>?
+
+    /// How a vertical pan scrolls the terminal.
+    enum ScrollMode {
+        /// The program reads the mouse (agtop, or tmux with mouse on): wheel
+        /// events at the finger.
+        case wheel
+        /// A tmux client on the alternate screen: the Mac scrolls its history.
+        case server
+    }
+
+    /// Lines agtop scrolls per wheel event, so the content follows the finger.
+    static let linesPerWheel = 3
 
     override init() {
-        view = TerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 500))
+        view = RemoteTerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 500))
         super.init()
         view.terminalDelegate = self
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
+        pan.delegate = self
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+        // Local scrollback scrolls natively, but only when this pan passes.
+        view.panGestureRecognizer.require(toFail: pan)
+        scrollPan = pan
         // Same colors as the card terminal on the Mac.
         view.nativeBackgroundColor = UIColor(white: 0.07, alpha: 1)
         view.nativeForegroundColor = UIColor(white: 0.93, alpha: 1)
@@ -47,8 +104,9 @@ final class TerminalController: NSObject, TerminalViewDelegate {
         view.font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 
-    func connect(client: RemoteClient, cardId: String, session: String?) {
+    func connect(client: RemoteClient, cardId: String, session: String?, serverScroll: Bool) {
         disconnect()
+        self.serverScroll = serverScroll
         state = .connecting
         connectedSession = session
         let term = view.getTerminal()
@@ -89,6 +147,85 @@ final class TerminalController: NSObject, TerminalViewDelegate {
             _ = view.resignFirstResponder()
         } else {
             _ = view.becomeFirstResponder()
+        }
+    }
+
+    // MARK: Scrolling
+
+    /// What a vertical pan does right now; nil leaves it to the scroll view,
+    /// which moves through local scrollback.
+    var currentScrollMode: ScrollMode? {
+        let term = view.getTerminal()
+        if term.mouseMode != .off { return .wheel }
+        if term.isCurrentBufferAlternate, serverScroll, connection != nil { return .server }
+        return nil
+    }
+
+    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture === scrollPan, let pan = gesture as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: view)
+        guard abs(velocity.y) > abs(velocity.x) else { return false }
+        scrollMode = currentScrollMode
+        return scrollMode != nil
+    }
+
+    private var cellSize: CGSize {
+        let term = view.getTerminal()
+        return CGSize(width: view.bounds.width / CGFloat(max(term.cols, 1)),
+                      height: view.bounds.height / CGFloat(max(term.rows, 1)))
+    }
+
+    @objc private func handleScrollPan(_ pan: UIPanGestureRecognizer) {
+        let lineHeight = max(cellSize.height, 1)
+        switch pan.state {
+        case .began:
+            scrollRemainder = 0
+            wheelRemainder = 0
+        case .changed:
+            scrollRemainder += pan.translation(in: view).y
+            pan.setTranslation(.zero, in: view)
+            let lines = Int(scrollRemainder / lineHeight)
+            scrollRemainder -= CGFloat(lines) * lineHeight
+            scroll(lines: lines, at: pan.location(in: view))
+        case .ended:
+            // A flick carries on a little past the finger.
+            let flick = pan.velocity(in: view).y / lineHeight * 0.15
+            scroll(lines: max(-40, min(40, Int(flick))), at: pan.location(in: view))
+            scrollMode = nil
+        default:
+            scrollMode = nil
+        }
+    }
+
+    /// Scrolls by `lines`: positive shows older output, as a finger moving down does.
+    func scroll(lines: Int, at point: CGPoint) {
+        guard lines != 0, let mode = scrollMode ?? currentScrollMode else { return }
+        switch mode {
+        case .wheel:
+            wheelRemainder += lines
+            let events = wheelRemainder / Self.linesPerWheel
+            wheelRemainder -= events * Self.linesPerWheel
+            guard events != 0 else { return }
+            let term = view.getTerminal()
+            let cell = cellSize
+            let col = min(max(Int(point.x / max(cell.width, 1)), 0), term.cols - 1)
+            let row = min(max(Int((point.y - view.contentOffset.y) / max(cell.height, 1)), 0), term.rows - 1)
+            let flags = term.encodeButton(button: events > 0 ? 4 : 5, release: false, shift: false, meta: false, control: false)
+            for _ in 0..<abs(events) {
+                term.sendEvent(buttonFlags: flags, x: col, y: row)
+            }
+        case .server:
+            pendingServerLines += lines
+            guard serverFlush == nil else { return }
+            // One frame per 60 ms: each one runs tmux commands on the Mac.
+            serverFlush = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(60))
+                guard let self else { return }
+                let lines = self.pendingServerLines
+                self.pendingServerLines = 0
+                self.serverFlush = nil
+                self.connection?.scroll(lines: lines)
+            }
         }
     }
 
@@ -155,6 +292,8 @@ struct TerminalHost: UIViewRepresentable {
 struct TerminalPane: View {
     let card: RemoteCard
     let client: RemoteClient?
+    /// The Mac takes `scroll` frames for tmux terminals.
+    var serverScroll = false
     let controller: TerminalController
     @Binding var session: String?
     var isFullScreen = false
@@ -183,7 +322,7 @@ struct TerminalPane: View {
         let target = selectedSession
         if !force, controller.connectedSession == target,
            controller.state == .connected || controller.state == .connecting { return }
-        controller.connect(client: client, cardId: card.id, session: target)
+        controller.connect(client: client, cardId: card.id, session: target, serverScroll: serverScroll)
     }
 
     private var bar: some View {
@@ -274,12 +413,13 @@ struct TerminalPane: View {
 struct FullScreenTerminal: View {
     let card: RemoteCard
     let client: RemoteClient?
+    var serverScroll = false
     let controller: TerminalController
     @Binding var session: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        TerminalPane(card: card, client: client, controller: controller, session: $session,
+        TerminalPane(card: card, client: client, serverScroll: serverScroll, controller: controller, session: $session,
                      isFullScreen: true, onClose: { dismiss() })
             .environment(\.colorScheme, .dark)
             .statusBarHidden()

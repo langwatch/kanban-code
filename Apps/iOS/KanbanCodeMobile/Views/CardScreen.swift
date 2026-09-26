@@ -14,11 +14,15 @@ struct CardScreen: View {
     @State private var showFullTerminal = false
     @State private var terminalSession: String?
     @State private var terminal = TerminalController()
+    @State private var draft: ComposerDraft
 
     init(cardId: String, board: BoardModel, transcript: TranscriptModel? = nil) {
         self.cardId = cardId
         self.board = board
         _transcript = State(initialValue: transcript ?? TranscriptModel(cardId: cardId, client: board.client))
+        _draft = State(initialValue: board.client == nil
+                       ? ComposerDraft(preview: "")
+                       : ComposerDraft(server: board.server.id, cardId: cardId))
     }
 
     private var card: RemoteCard? { board.card(id: cardId) }
@@ -44,12 +48,14 @@ struct CardScreen: View {
                 Divider()
                 switch tab {
                 case .chat:
-                    ChatPane(card: card, transcript: transcript, board: board, onResume: resume)
+                    ChatPane(card: card, transcript: transcript, board: board, draft: draft, onResume: resume,
+                             onInterrupt: { Task { await interrupt(card) } })
                 case .terminal:
                     if showFullTerminal {
                         Color(white: 0.07)
                     } else {
-                        TerminalPane(card: card, client: board.client, controller: terminal,
+                        TerminalPane(card: card, client: board.client,
+                                     serverScroll: board.supports(RemoteAPI.Feature.terminalScroll), controller: terminal,
                                      session: $terminalSession, onFullScreen: { showFullTerminal = true })
                     }
                 }
@@ -69,7 +75,9 @@ struct CardScreen: View {
         }
         .fullScreenCover(isPresented: $showFullTerminal) {
             if let card {
-                FullScreenTerminal(card: card, client: board.client, controller: terminal, session: $terminalSession)
+                FullScreenTerminal(card: card, client: board.client,
+                                   serverScroll: board.supports(RemoteAPI.Feature.terminalScroll),
+                                   controller: terminal, session: $terminalSession)
             }
         }
         .onChange(of: showsTerminal) { _, shows in
