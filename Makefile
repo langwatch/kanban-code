@@ -1,4 +1,4 @@
-.PHONY: build test run app app-debug run-app run-release clean cli install-cli web ios-project ios ios-run ios-test
+.PHONY: build test run app app-debug run-app run-release clean cli install-cli web ios-project ios ios-run ios-test ios-device ios-autoinstall ios-autoinstall-remove
 
 BUNDLE_NAME = KanbanCode.app
 BUNDLE_DIR = build/$(BUNDLE_NAME)
@@ -135,3 +135,33 @@ ios-run: ios
 
 ios-test: ios-project
 	$(IOS_XCODEBUILD) test
+
+IOS_AGENT = io.kanbancode.ios-device-refresh
+IOS_AGENT_PLIST = $(HOME)/Library/LaunchAgents/$(IOS_AGENT).plist
+
+# Build and install on every connected, paired iPhone now.
+ios-device: ios-project
+	scripts/ios-device-refresh.sh --force
+
+# Every 10 minutes, reinstall on a connected iPhone when the app is missing,
+# its profile ends within a week, or the iOS sources changed.
+ios-autoinstall:
+	@mkdir -p $(HOME)/Library/LaunchAgents
+	@printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+		'<plist version="1.0"><dict>' \
+		'<key>Label</key><string>$(IOS_AGENT)</string>' \
+		'<key>ProgramArguments</key><array><string>$(CURDIR)/scripts/ios-device-refresh.sh</string></array>' \
+		'<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>' \
+		'<key>StartInterval</key><integer>600</integer>' \
+		'<key>RunAtLoad</key><true/>' \
+		'<key>LowPriorityIO</key><true/>' \
+		'<key>Nice</key><integer>10</integer>' \
+		'</dict></plist>' > $(IOS_AGENT_PLIST)
+	@launchctl bootout gui/$$(id -u)/$(IOS_AGENT) 2>/dev/null || true
+	@launchctl bootstrap gui/$$(id -u) $(IOS_AGENT_PLIST)
+	@echo "Installed $(IOS_AGENT); log: ~/.kanban-code/logs/ios-device-refresh.log"
+
+ios-autoinstall-remove:
+	@launchctl bootout gui/$$(id -u)/$(IOS_AGENT) 2>/dev/null || true
+	@/bin/rm -f $(IOS_AGENT_PLIST)

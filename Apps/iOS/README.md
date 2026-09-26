@@ -44,7 +44,9 @@ SIMCTL_CHILD_KANBANCODE_PAIR_LINK='kanbancode://pair?...' xcrun simctl launch bo
 3. Plug in the phone (or pair it over Wi-Fi in Window > Devices and Simulators), choose it as the run destination and press Run.
 4. On the phone, turn on Settings > Privacy & Security > Developer Mode the first time, and trust your developer certificate under Settings > General > VPN & Device Management.
 
-Apps signed with a free personal team expire after 7 days; run from Xcode again to renew.
+From the command line, with Xcode signed in to your Apple account: `make ios-device` builds and installs on every connected, paired iPhone.
+
+`make ios-autoinstall` adds a LaunchAgent that runs `scripts/ios-device-refresh.sh` every 10 minutes. When an iPhone is connected (USB, or Wi-Fi once paired), it reinstalls the app if it is missing, if its provisioning profile ends within 7 days, or if the iOS sources changed since the last install. The log is `~/.kanban-code/logs/ios-device-refresh.log`. `make ios-autoinstall-remove` takes it out.
 
 ## Connect to the Mac
 
