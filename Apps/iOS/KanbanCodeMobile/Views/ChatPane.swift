@@ -12,6 +12,7 @@ struct ChatPane: View {
 
     @State private var isSending = false
     @State private var sendError: String?
+    @State private var notice: String?
     @State private var sentCount = 0
     @State private var queueActions: Set<String> = []
     @State private var showPhotoPicker = false
@@ -53,8 +54,9 @@ struct ChatPane: View {
                         prompt: prompt,
                         isWorking: queueActions.contains(prompt.id),
                         canAct: supportsQueue && card.isLive,
-                        onSendNow: { queueAction(prompt, send: true) },
-                        onRemove: { queueAction(prompt, send: false) }
+                        onSendNow: { queueAction(prompt, .sendNow) },
+                        onEdit: { queueAction(prompt, .edit) },
+                        onDelete: { queueAction(prompt, .delete) }
                     )
                     .id("queued-\(prompt.id)")
                 }
@@ -161,6 +163,17 @@ struct ChatPane: View {
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let notice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("composerNotice")
+                    .task(id: notice) {
+                        try? await Task.sleep(for: .seconds(4))
+                        self.notice = nil
+                    }
+            }
             if card.isLive {
                 composer
             } else {
@@ -185,7 +198,7 @@ struct ChatPane: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
             if card.isBusy && !draft.isEmpty {
-                Text("Sends when this turn ends. Touch and hold send to send now.")
+                Text("Sends when this turn ends. Touch and hold send to send now or stash.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 6)
@@ -201,9 +214,12 @@ struct ChatPane: View {
                     .padding(.horizontal, 6)
                     .padding(.top, 4)
                     .accessibilityIdentifier("composer")
-                HStack {
+                HStack(spacing: 8) {
                     if supportsImages {
                         attachButton
+                    }
+                    if !draft.stashes.isEmpty {
+                        stashButton
                     }
                     Spacer()
                     sendButton
@@ -238,26 +254,64 @@ struct ChatPane: View {
             .accessibilityIdentifier("stop")
         } else {
             let enabled = !draft.isEmpty && !isSending
-            Image(systemName: isSending ? "ellipsis" : "arrow.up")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(enabled ? Color(.systemBackground) : Color(.tertiaryLabel))
-                .frame(width: 34, height: 34)
-                .background(enabled ? Color(.label) : Color(.tertiarySystemFill), in: Circle())
-                .contentShape(Circle())
-                .onTapGesture { if enabled { send(.queue) } }
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    guard enabled else { return }
-                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-                    send(.now)
+            Menu {
+                Button("Send now", systemImage: "bolt.fill") { send(.now) }
+                Button("Stash", systemImage: "tray.and.arrow.down") {
+                    withAnimation(.snappy) { draft.stash() }
                 }
-                .accessibilityElement()
-                .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Send")
-                .accessibilityHint(card.isBusy ? "Sends when this turn ends. Touch and hold to send now." : "")
-                .accessibilityAction(named: "Send now") { if enabled { send(.now) } }
-                .accessibilityIdentifier("send")
-                .disabled(!enabled)
+            } label: {
+                Image(systemName: isSending ? "ellipsis" : "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(enabled ? Color(.systemBackground) : Color(.tertiaryLabel))
+                    .frame(width: 34, height: 34)
+                    .background(enabled ? Color(.label) : Color(.tertiarySystemFill), in: Circle())
+            } primaryAction: {
+                send(.queue)
+            }
+            .disabled(!enabled)
+            .accessibilityLabel("Send")
+            .accessibilityHint(card.isBusy ? "Sends when this turn ends. Touch and hold to send now or stash." : "Touch and hold to send now or stash.")
+            .accessibilityIdentifier("send")
         }
+    }
+
+    /// Brings back the latest stash; touch and hold to pick or delete one.
+    private var stashButton: some View {
+        Menu {
+            ForEach(draft.stashes.reversed()) { stash in
+                Menu(stash.preview) {
+                    Button("Restore", systemImage: "arrow.uturn.backward") {
+                        withAnimation(.snappy) { draft.restore(stash.id) }
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        withAnimation(.snappy) { draft.deleteStash(stash.id) }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "tray.and.arrow.up")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color(.label))
+                .frame(width: 34, height: 34)
+                .background(Color(.tertiarySystemFill), in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if draft.stashes.count > 1 {
+                        Text("\(draft.stashes.count)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color(.systemBackground))
+                            .padding(.horizontal, 4)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(Color(.label), in: Capsule())
+                            .offset(x: 4, y: -4)
+                    }
+                }
+        } primaryAction: {
+            withAnimation(.snappy) { draft.restore() }
+        }
+        .tint(Color(.label))
+        .accessibilityLabel(draft.stashes.count == 1 ? "Restore stashed message" : "Restore stashed message, \(draft.stashes.count) stashed")
+        .accessibilityHint("Touch and hold to pick or delete a stash.")
+        .accessibilityIdentifier("unstash")
     }
 
     private var attachButton: some View {
@@ -345,21 +399,35 @@ struct ChatPane: View {
         }
     }
 
-    private func queueAction(_ prompt: RemoteQueuedPrompt, send: Bool) {
+    private enum QueueAction { case sendNow, edit, delete }
+
+    private func queueAction(_ prompt: RemoteQueuedPrompt, _ action: QueueAction) {
         guard let client = board.client, !queueActions.contains(prompt.id) else { return }
         queueActions.insert(prompt.id)
         sendError = nil
         Task {
             defer { queueActions.remove(prompt.id) }
             do {
-                if send {
+                switch action {
+                case .sendNow:
                     try await client.sendQueuedPromptNow(cardId: card.id, promptId: prompt.id)
                     UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-                } else {
+                case .delete:
                     try await client.removeQueuedPrompt(cardId: card.id, promptId: prompt.id)
+                case .edit:
+                    try await client.removeQueuedPrompt(cardId: card.id, promptId: prompt.id)
+                    // Whatever is typed now waits in a stash.
+                    draft.stash()
+                    draft.load(text: prompt.text, images: [])
+                    if prompt.imageCount > 0 {
+                        notice = prompt.imageCount == 1
+                            ? "Its image stays on the Mac; attach it again to send it."
+                            : "Its \(prompt.imageCount) images stay on the Mac; attach them again to send them."
+                    }
+                    composerFocused = true
                 }
             } catch RemoteClientError.notFound {
-                // Already sent or removed on the Mac.
+                if action == .edit { notice = "Already sent." }
             } catch {
                 sendError = error.localizedDescription
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -369,18 +437,20 @@ struct ChatPane: View {
     }
 }
 
-/// A prompt waiting on the Mac for the turn to end.
+/// A prompt waiting on the Mac for the turn to end. Touch and hold for
+/// Send now, Edit and Delete.
 struct QueuedPromptView: View {
     let prompt: RemoteQueuedPrompt
     let isWorking: Bool
     let canAct: Bool
     let onSendNow: () -> Void
-    let onRemove: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack {
             Spacer(minLength: 48)
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(TranscriptModel.displayText(prompt.text, imageCount: prompt.imageCount))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
@@ -388,32 +458,25 @@ struct QueuedPromptView: View {
                         RoundedRectangle(cornerRadius: 18)
                             .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                     )
-                HStack(spacing: 10) {
-                    Label("Queued", systemImage: "clock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if canAct {
-                        if isWorking {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Button(action: onSendNow) {
-                                Label("Send now", systemImage: "bolt.fill")
-                                    .font(.caption.weight(.semibold))
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .tint(.orange)
-                            .accessibilityIdentifier("queuedSendNow")
-                            Button(role: .destructive, action: onRemove) {
-                                Image(systemName: "trash")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel("Remove queued message")
-                            .accessibilityIdentifier("queuedRemove")
+                    .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18))
+                    .contextMenu {
+                        if canAct {
+                            Button("Send now", systemImage: "bolt.fill", action: onSendNow)
+                            Button("Edit", systemImage: "pencil", action: onEdit)
+                            Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
                         }
                     }
+                    .accessibilityIdentifier("queuedBubble")
+                HStack(spacing: 4) {
+                    if isWorking {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "clock")
+                    }
+                    Text("Queued")
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .contain)

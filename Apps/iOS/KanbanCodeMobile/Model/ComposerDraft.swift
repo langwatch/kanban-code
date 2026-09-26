@@ -5,6 +5,7 @@ import KanbanCodeRemoteKit
 
 /// What is typed and attached for one card, kept per Mac and card until it
 /// is sent: across leaving the card, switching tabs and relaunching the app.
+/// Stashes set a message aside for later, as agtop's ctrl+s does.
 @Observable
 final class ComposerDraft {
     let key: String
@@ -12,6 +13,24 @@ final class ComposerDraft {
         didSet { if text != oldValue { save() } }
     }
     private(set) var images: [DraftImage]
+    /// Messages set aside, oldest first.
+    private(set) var stashes: [Stash]
+
+    struct Stash: Codable, Identifiable, Equatable {
+        let id: UUID
+        var text: String
+        /// JPEGs, as in the composer.
+        var images: [Data]
+        var at: Date
+
+        /// One line for a menu.
+        var preview: String {
+            let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let images = images.isEmpty ? "" : (images.count == 1 ? "1 image" : "\(images.count) images")
+            return [line.isEmpty ? nil : String(line.prefix(60)), images.isEmpty ? nil : images]
+                .compactMap { $0 }.joined(separator: " + ")
+        }
+    }
 
     struct DraftImage: Identifiable, Equatable {
         let id: UUID
@@ -31,6 +50,7 @@ final class ComposerDraft {
             .appendingPathComponent(Self.fileSafe(key), isDirectory: true)
         text = UserDefaults.standard.string(forKey: Self.textKey(key)) ?? ""
         images = Self.loadImages(from: directory)
+        stashes = Self.loadStashes(from: directory)
     }
 
     /// A draft that is never saved, for previews.
@@ -39,6 +59,7 @@ final class ComposerDraft {
         directory = nil
         self.text = text
         images = []
+        stashes = []
     }
 
     var isEmpty: Bool {
@@ -68,6 +89,38 @@ final class ComposerDraft {
         saveImages()
     }
 
+    /// Puts a message into the composer, as if typed and attached.
+    func load(text: String, images: [Data]) {
+        self.text = text
+        self.images = images.map { DraftImage(id: UUID(), data: $0) }
+        saveImages()
+    }
+
+    /// Sets the composer's message aside and clears the composer.
+    func stash() {
+        guard !isEmpty else { return }
+        stashes.append(Stash(id: UUID(), text: text, images: images.map(\.data), at: .now))
+        saveStashes()
+        clear()
+    }
+
+    /// Brings a stash back into the composer (the latest when `id` is nil).
+    /// Whatever the composer holds is stashed in its place.
+    func restore(_ id: UUID? = nil) {
+        guard let target = id.flatMap({ id in stashes.first { $0.id == id } }) ?? stashes.last else { return }
+        stashes.removeAll { $0.id == target.id }
+        if !isEmpty {
+            stashes.append(Stash(id: UUID(), text: text, images: images.map(\.data), at: .now))
+        }
+        saveStashes()
+        load(text: target.text, images: target.images)
+    }
+
+    func deleteStash(_ id: UUID) {
+        stashes.removeAll { $0.id == id }
+        saveStashes()
+    }
+
     var remoteImages: [RemoteImage] {
         images.map { RemoteImage(bytes: $0.data, mediaType: "image/jpeg") }
     }
@@ -86,20 +139,51 @@ final class ComposerDraft {
     private func saveImages() {
         guard let directory else { return }
         let fm = FileManager.default
-        try? fm.removeItem(at: directory)
+        let folder = directory.appendingPathComponent("images", isDirectory: true)
+        try? fm.removeItem(at: folder)
+        Self.removeLooseImages(in: directory)
         guard !images.isEmpty else { return }
-        try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         for (index, image) in images.enumerated() {
-            try? image.data.write(to: directory.appendingPathComponent(String(format: "%02d.jpg", index)))
+            try? image.data.write(to: folder.appendingPathComponent(String(format: "%02d.jpg", index)))
         }
     }
 
-    private static func loadImages(from directory: URL?) -> [DraftImage] {
-        guard let directory,
-              let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return [] }
-        return names.filter { $0.hasSuffix(".jpg") }.sorted().compactMap { name in
-            (try? Data(contentsOf: directory.appendingPathComponent(name))).map { DraftImage(id: UUID(), data: $0) }
+    private func saveStashes() {
+        guard let directory else { return }
+        let file = directory.appendingPathComponent("stashes.json")
+        guard !stashes.isEmpty else {
+            try? FileManager.default.removeItem(at: file)
+            return
         }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(stashes).write(to: file, options: .atomic)
+    }
+
+    private static func loadImages(from directory: URL?) -> [DraftImage] {
+        guard let directory else { return [] }
+        // Drafts from before images had their own folder keep them loose.
+        for folder in [directory.appendingPathComponent("images", isDirectory: true), directory] {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { continue }
+            let images = names.filter { $0.hasSuffix(".jpg") }.sorted().compactMap { name in
+                (try? Data(contentsOf: folder.appendingPathComponent(name))).map { DraftImage(id: UUID(), data: $0) }
+            }
+            if !images.isEmpty { return images }
+        }
+        return []
+    }
+
+    private static func removeLooseImages(in directory: URL) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+        for name in names where name.hasSuffix(".jpg") {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
+    }
+
+    private static func loadStashes(from directory: URL?) -> [Stash] {
+        guard let directory,
+              let data = try? Data(contentsOf: directory.appendingPathComponent("stashes.json")) else { return [] }
+        return (try? JSONDecoder().decode([Stash].self, from: data)) ?? []
     }
 
     private static func textKey(_ key: String) -> String { "draft.text.\(key)" }

@@ -56,40 +56,93 @@ final class ChatAndTerminalTests: KanbanUITestCase {
 
     // MARK: Queued prompts
 
-    func testQueuedPromptsShowSendNowAndRemove() throws {
+    func testQueuedPromptsMenuSendsNowEditsAndDeletes() throws {
         openCard("card_busy")
         let queued = app.descendants(matching: .any).matching(identifier: "queuedPrompt")
+        let bubble = app.descendants(matching: .any).matching(identifier: "queuedBubble").firstMatch
         XCTAssertTrue(queued.firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["queuedSendNow"].firstMatch.isHittable)
-
         // Busy with nothing typed: send is a stop button.
         XCTAssertTrue(app.buttons["stop"].waitForExistence(timeout: 5))
-        composer.tap()
-        composer.typeText("Queue this one too")
-        XCTAssertTrue(app.staticTexts["queueHint"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["stop"].exists)
-        shot("23-busy-composer")
-        app.buttons["send"].tap()
-        XCTAssertTrue(waitFor(10) { queued.count == 2 })
-        tapConversation()
-        sleep(1)
-        shot("24-queued-send-now")
 
-        // Remove the one just queued, then send the other now.
-        app.buttons.matching(identifier: "queuedRemove").element(boundBy: 1).tap()
-        XCTAssertTrue(waitFor(10) { queued.count == 1 })
-        app.buttons["queuedSendNow"].firstMatch.tap()
+        // Edit takes it off the queue and into the composer.
+        bubble.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Send now"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Delete"].exists)
+        shot("23-queued-menu")
+        app.buttons["Edit"].tap()
         XCTAssertTrue(waitFor(10) { queued.count == 0 })
-        XCTAssertTrue(waitFor(10) { message(containing: "Also run the e2e suite").exists })
-        XCTAssertFalse(message(containing: "Queue this one too").exists)
+        XCTAssertEqual(composer.value as? String, "Also run the e2e suite once it passes")
+        XCTAssertTrue(app.staticTexts["queueHint"].exists)
+        shot("24-queued-edit")
+
+        // Sending it again queues it again; Delete drops it.
+        app.buttons["send"].tap()
+        XCTAssertTrue(waitFor(10) { queued.count == 1 })
+        tapConversation()
+        bubble.press(forDuration: 1.0)
+        app.buttons["Delete"].tap()
+        XCTAssertTrue(waitFor(10) { queued.count == 0 })
+
+        // Send now from the menu delivers it.
+        composer.tap()
+        composer.typeText("Now this one")
+        app.buttons["send"].tap()
+        XCTAssertTrue(waitFor(10) { queued.count == 1 })
+        tapConversation()
+        bubble.press(forDuration: 1.0)
+        app.buttons["Send now"].tap()
+        XCTAssertTrue(waitFor(10) { queued.count == 0 })
+        XCTAssertTrue(waitFor(10) { message(containing: "Now this one").exists })
+        XCTAssertFalse(message(containing: "Also run the e2e suite").exists)
         shot("25-queued-sent")
 
-        // Touch and hold send: sent now, never queued.
+        // Touch and hold send, then Send now: sent now, never queued.
         composer.tap()
         composer.typeText("Stop and do this instead")
         app.buttons["send"].press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Stash"].waitForExistence(timeout: 5))
+        app.buttons["Send now"].tap()
         XCTAssertTrue(waitFor(10) { message(containing: "Stop and do this instead").exists })
         XCTAssertEqual(queued.count, 0)
+    }
+
+    // MARK: Stash
+
+    func testStashSetsAMessageAsideAndBringsItBack() throws {
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let unstash = app.buttons["unstash"]
+        // Stashes are kept per card; start from none.
+        for _ in 0..<5 where unstash.exists {
+            clearComposer()
+            unstash.tap()
+            clearComposer()
+        }
+        XCTAssertFalse(unstash.exists)
+
+        composer.tap()
+        composer.typeText("Stashed idea")
+        app.buttons["send"].press(forDuration: 1.0)
+        app.buttons["Stash"].tap()
+        XCTAssertTrue(unstash.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitFor(5) { (composer.value as? String).map { $0.isEmpty || $0 == "Message" } ?? true })
+        tapConversation()
+        sleep(1)
+        shot("43-composer-unstash")
+
+        // Tapping it swaps: the typed text is stashed, the stash comes back.
+        composer.tap()
+        composer.typeText("Current text")
+        unstash.tap()
+        XCTAssertEqual(composer.value as? String, "Stashed idea")
+        XCTAssertTrue(unstash.exists)
+
+        // Touch and hold lists the stashes to restore or delete.
+        unstash.press(forDuration: 1.0)
+        app.buttons["Current text"].firstMatch.tap()
+        app.buttons["Delete"].firstMatch.tap()
+        XCTAssertTrue(waitFor(5) { !unstash.exists })
+        clearComposer()
     }
 
     // MARK: Composer
