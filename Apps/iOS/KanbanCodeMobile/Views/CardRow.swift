@@ -36,6 +36,8 @@ struct StatusDot: View {
 
 struct CardRow: View {
     let card: RemoteCard
+    /// Names the card's column, for rows outside their column (the Live section).
+    var showsColumn = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -75,6 +77,16 @@ struct CardRow: View {
 
     private var badges: some View {
         HStack(spacing: 8) {
+            if showsColumn {
+                Text(card.column.displayName)
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+            }
             if let date = card.lastActivity {
                 Text(date.relativeShort)
                     .font(.caption2)
@@ -87,9 +99,7 @@ struct CardRow: View {
                     .foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
-            ForEach(card.prs, id: \.number) { pr in
-                PRBadge(pr: pr)
-            }
+            PRBadges(prs: card.prs)
         }
     }
 }
@@ -98,8 +108,10 @@ struct PRBadge: View {
     let pr: RemotePR
 
     var body: some View {
-        Text("#\(pr.number)")
+        Text(verbatim: "#\(pr.number)")
             .font(.caption2.monospacedDigit().weight(.semibold))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.18), in: Capsule())
@@ -113,6 +125,32 @@ struct PRBadge: View {
         case "closed": .red
         case "draft": .gray
         default: .green
+        }
+    }
+}
+
+/// The newest PRs of a card, then "+N" for the rest.
+struct PRBadges: View {
+    let prs: [RemotePR]
+    var limit = 2
+    var linked = false
+
+    var body: some View {
+        let shown = Array(prs.sorted { $0.number > $1.number }.prefix(limit))
+        HStack(spacing: 4) {
+            ForEach(shown, id: \.number) { pr in
+                if linked, let url = pr.url.flatMap(URL.init(string:)) {
+                    Link(destination: url) { PRBadge(pr: pr) }
+                } else {
+                    PRBadge(pr: pr)
+                }
+            }
+            if prs.count > shown.count {
+                Text(verbatim: "+\(prs.count - shown.count)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
         }
     }
 }

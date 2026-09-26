@@ -8,14 +8,19 @@ struct BoardScreen: View {
     @State private var search = ""
     @State private var showNewTask = false
     @State private var showAddMac = false
-    @State private var expandedColumns: Set<RemoteColumn> = []
+    @State private var expandedSections: Set<String> = []
+    /// Project path the board is narrowed to, "" for every project. Kept per Mac.
+    @State private var projectFilter = ""
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
 
     init(server: SavedServer, client: RemoteClient?) {
         _model = State(initialValue: BoardModel(server: server, client: client))
+        _projectFilter = State(initialValue: UserDefaults.standard.string(forKey: Self.filterKey(server)) ?? "")
     }
+
+    private static func filterKey(_ server: SavedServer) -> String { "projectFilter.\(server.id.uuidString)" }
 
     init(server: SavedServer) {
         self.init(server: server, client: ServerStore.client(for: server))
@@ -29,7 +34,10 @@ struct BoardScreen: View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle(model.server.name)
-                .navigationSubtitle(linkText)
+                .navigationSubtitle(subtitle)
+                .onChange(of: projectFilter) { _, value in
+                    UserDefaults.standard.set(value, forKey: Self.filterKey(model.server))
+                }
                 .searchable(text: $search, prompt: "Search cards")
                 .refreshable { await model.refresh() }
                 .toolbar { toolbar }
@@ -78,30 +86,30 @@ struct BoardScreen: View {
                 }
             } else {
                 List {
-                    ForEach(sections, id: \.column) { section in
+                    ForEach(sections, id: \.id) { section in
                         Section {
-                            let collapsed = search.isEmpty && !expandedColumns.contains(section.column)
+                            let collapsed = search.isEmpty && !expandedSections.contains(section.id)
                                 && section.cards.count > Self.columnPreviewCount
                             ForEach(collapsed ? Array(section.cards.prefix(Self.columnPreviewCount)) : section.cards) { card in
                                 NavigationLink(value: card.id) {
-                                    CardRow(card: card)
+                                    CardRow(card: card, showsColumn: section.id == Self.liveSectionID)
                                 }
                                 .accessibilityIdentifier("card-\(card.id)")
                             }
                             if search.isEmpty && section.cards.count > Self.columnPreviewCount {
                                 Button {
                                     withAnimation {
-                                        if collapsed { expandedColumns.insert(section.column) } else { expandedColumns.remove(section.column) }
+                                        if collapsed { expandedSections.insert(section.id) } else { expandedSections.remove(section.id) }
                                     }
                                 } label: {
                                     Text(collapsed ? "Show all \(section.cards.count)" : "Show fewer")
                                         .font(.subheadline.weight(.medium))
                                 }
-                                .accessibilityIdentifier("showAll-\(section.column.rawValue)")
+                                .accessibilityIdentifier("showAll-\(section.id)")
                             }
                         } header: {
                             HStack {
-                                Text(section.column.displayName)
+                                Text(section.title)
                                 Spacer()
                                 Text("\(section.cards.count)")
                                     .monospacedDigit()
@@ -153,6 +161,21 @@ struct BoardScreen: View {
             .accessibilityIdentifier("macsMenu")
         }
         ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Picker("Project", selection: $projectFilter) {
+                    Text("All projects").tag("")
+                    ForEach(projects) { project in
+                        Text(project.name).tag(project.path)
+                    }
+                }
+            } label: {
+                Label("Project", systemImage: projectFilter.isEmpty
+                      ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            }
+            .disabled(projects.isEmpty)
+            .accessibilityIdentifier("projectFilter")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             Button {
                 showNewTask = true
             } label: {
@@ -173,26 +196,60 @@ struct BoardScreen: View {
         }
     }
 
-    private struct ColumnSection {
-        let column: RemoteColumn
+    private var subtitle: String {
+        guard let name = filteredProjectName else { return linkText }
+        return "\(linkText) · \(name)"
+    }
+
+    private var projects: [RemoteProject] {
+        (model.board?.projects ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var filteredProjectName: String? {
+        guard !projectFilter.isEmpty else { return nil }
+        return projects.first { $0.path == projectFilter }?.name
+            ?? URL(fileURLWithPath: projectFilter).lastPathComponent
+    }
+
+    private static let liveSectionID = "live"
+
+    private struct BoardSection {
+        let id: String
+        let title: String
         let cards: [RemoteCard]
     }
 
-    private func sections(of board: RemoteBoard) -> [ColumnSection] {
+    /// Live sessions first, whatever their column (busy ones on top), then
+    /// the columns without them.
+    private func sections(of board: RemoteBoard) -> [BoardSection] {
         let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let filterName = filteredProjectName
         let visible = board.cards.filter { card in
             guard !card.archived else { return false }
+            if !projectFilter.isEmpty,
+               card.projectPath != projectFilter, card.projectName == nil || card.projectName != filterName {
+                return false
+            }
             guard !query.isEmpty else { return true }
             return [card.title, card.projectName, card.branch]
                 .compactMap { $0?.lowercased() }
                 .contains { $0.contains(query) }
                 || card.prs.contains { "#\($0.number)".contains(query) }
         }
-        return RemoteColumn.phoneOrder.compactMap { column in
-            let cards = visible.filter { $0.column == column }
-                .sorted { ($0.lastActivity ?? $0.updatedAt) > ($1.lastActivity ?? $1.updatedAt) }
-            return cards.isEmpty ? nil : ColumnSection(column: column, cards: cards)
+        func recent(_ a: RemoteCard, _ b: RemoteCard) -> Bool {
+            (a.lastActivity ?? a.updatedAt) > (b.lastActivity ?? b.updatedAt)
         }
+        let live = visible.filter(\.isLive).sorted { a, b in
+            a.isBusy != b.isBusy ? a.isBusy : recent(a, b)
+        }
+        var out: [BoardSection] = []
+        if !live.isEmpty { out.append(BoardSection(id: Self.liveSectionID, title: "Live", cards: live)) }
+        let rest = visible.filter { !$0.isLive }
+        for column in RemoteColumn.phoneOrder {
+            let cards = rest.filter { $0.column == column }.sorted(by: recent)
+            if !cards.isEmpty { out.append(BoardSection(id: column.rawValue, title: column.displayName, cards: cards)) }
+        }
+        return out
     }
 }
 

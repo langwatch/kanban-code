@@ -54,12 +54,27 @@ final class FlowTests: XCTestCase {
     func test1bLongColumnsCollapse() throws {
         app.terminate()
         try launch(linkKey: "KC_PAIR_LINK", extraEnv: ["KANBANCODE_COLUMN_PREVIEW": "1"])
-        let showAll = app.buttons["showAll-in_progress"]
+        let showAll = app.buttons["showAll-live"]
         XCTAssertTrue(showAll.waitForExistence(timeout: 15))
         XCTAssertTrue(showAll.label.hasPrefix("Show all"))
         shot("01b-board-collapsed")
         showAll.tap()
-        XCTAssertTrue(app.buttons["showAll-in_progress"].label == "Show fewer")
+        XCTAssertTrue(app.buttons["showAll-live"].label == "Show fewer")
+    }
+
+    func test1cProjectFilter() throws {
+        let filter = app.buttons["projectFilter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 15))
+        XCTAssertTrue(waitEnabled(filter))
+        filter.tap()
+        app.buttons["acme-api"].firstMatch.tap()
+        sleep(1)
+        shot("01c-board-filtered")
+        XCTAssertFalse(app.buttons["card-card_wait"].exists)
+        XCTAssertTrue(app.buttons["card-card_agtop"].exists)
+        filter.tap()
+        app.buttons["All projects"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["card-card_wait"].waitForExistence(timeout: 5))
     }
 
     func test2bOlderMessages() throws {

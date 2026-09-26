@@ -287,6 +287,8 @@ struct MarkdownText: View {
             } else if trimmed.isEmpty {
                 flush()
             } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                // A list starts its own block after a paragraph.
+                if let last = paragraph.last, !last.trimmingCharacters(in: .whitespaces).hasPrefix("• ") { flush() }
                 let indent = String(raw.prefix { $0 == " " })
                 paragraph.append(indent + "• " + trimmed.dropFirst(2))
             } else {

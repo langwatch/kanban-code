@@ -91,19 +91,14 @@ struct CardScreen: View {
             HStack(spacing: 10) {
                 if let project = card.projectName {
                     Label(project, systemImage: "folder")
+                        .layoutPriority(1)
                 }
                 if let branch = card.branch, !branch.isEmpty {
                     Label(branch, systemImage: "arrow.triangle.branch")
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
-                ForEach(card.prs, id: \.number) { pr in
-                    if let url = pr.url.flatMap(URL.init(string:)) {
-                        Link(destination: url) { PRBadge(pr: pr) }
-                    } else {
-                        PRBadge(pr: pr)
-                    }
-                }
+                PRBadges(prs: card.prs, linked: true)
             }
             .labelStyle(CompactLabelStyle())
             .font(.caption)
