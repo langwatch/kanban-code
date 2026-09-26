@@ -76,6 +76,7 @@ final class TerminalController: NSObject, TerminalViewDelegate, UIGestureRecogni
         view = RemoteTerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 500))
         super.init()
         view.terminalDelegate = self
+        view.accessibilityIdentifier = "terminalView"
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
         pan.delegate = self
         pan.maximumNumberOfTouches = 1

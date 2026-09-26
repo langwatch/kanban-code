@@ -217,10 +217,20 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         XCTAssertTrue(copy.waitForExistence(timeout: 5), "no edit menu after a long press")
         shot("28-text-selected")
         copy.tap()
-        let copied = UIPasteboard.general.string ?? ""
-        XCTAssertFalse(copied.isEmpty)
+        // Paste it into the composer: the app reads its own copy with no
+        // paste prompt, where the test runner would get one.
+        clearComposer()
+        composer.tap()
+        composer.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let copied = (composer.value as? String) ?? ""
+        XCTAssertFalse(copied.isEmpty || copied == "Message")
+        XCTAssertTrue("Done. The change is in place and the tests pass.".contains(copied.trimmingCharacters(in: .whitespaces)))
         XCTAssertLessThan(copied.count, "Done. The change is in place and the tests pass.".count,
                           "the whole message was copied, not a part: \(copied)")
+        clearComposer()
     }
 
     // MARK: Blank chat
@@ -248,7 +258,7 @@ final class ChatAndTerminalTests: KanbanUITestCase {
     func testTerminalScrollsTmuxHistory() throws {
         openCard("card_wait")
         app.segmentedControls["cardTabs"].buttons["Terminal"].tap()
-        let terminal = app.descendants(matching: .any)["Terminal"].firstMatch
+        let terminal = app.descendants(matching: .any)["terminalView"].firstMatch
         XCTAssertTrue(terminal.waitForExistence(timeout: 10))
         sleep(2)
         app.buttons["terminalKeyboard"].tap()

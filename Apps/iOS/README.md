@@ -16,12 +16,19 @@ The UI tests need a server to talk to. Start the demo server and pass its pairin
 
 ```bash
 swift build --product kanban-code-remote-demo
-.build/debug/kanban-code-remote-demo --port 7790 --pair iPhone &
+.build/debug/kanban-code-remote-demo --port 7790 --pair iPhone --tmux-socket kc-demo &
 .build/debug/kanban-code-remote-demo --port 7791 --pair agent --scope agent --devices .claude/tmp/agent-devices.json &
 TEST_RUNNER_KC_PAIR_LINK='<link printed on 7790>' \
 TEST_RUNNER_KC_AGENT_PAIR_LINK='<link printed on 7791>' \
 TEST_RUNNER_KC_SHOT_DIR="$PWD/.claude/tmp/ios-shots" make ios-test
 ```
+
+Pass links with `url=http://127.0.0.1:...`: the printed ones use the Tailscale address, which the Mac cannot reach from itself.
+
+- `--tmux-socket kc-demo` makes the demo's tmux cards real tmux sessions on a server of their own (`tmux -L kc-demo`), which the terminal scroll test needs.
+- The demo changes as the tests use it (queued prompts get sent), so restart it before a full run.
+- The keyboard tests need the software keyboard: turn off Simulator > I/O > Keyboard > Connect Hardware Keyboard (`defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false` before booting).
+- The image test picks the first photo in the library: `xcrun simctl addmedia booted <png>` once.
 
 `IOS_SIM="iPhone 17"` picks another simulator. The project file is generated from `project.yml` and not committed; run `make ios-project` after pulling.
 
