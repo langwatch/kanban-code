@@ -53,7 +53,7 @@ SIMCTL_CHILD_KANBANCODE_PAIR_LINK='kanbancode://pair?...' xcrun simctl launch bo
 
 From the command line, with Xcode signed in to your Apple account: `make ios-device` builds and installs on every connected, paired iPhone.
 
-`make ios-autoinstall` adds a LaunchAgent that runs `scripts/ios-device-refresh.sh` every 10 minutes. When a paired iPhone is reachable (USB, or awake on the same Wi-Fi), it reinstalls the app if it is missing, if its provisioning profile ends within 7 days, or if the iOS sources changed since the last install. The log is `~/.kanban-code/logs/ios-device-refresh.log`. `make ios-autoinstall-remove` takes it out.
+`make ios-autoinstall` adds a LaunchAgent that runs `Scripts/ios-device-refresh.sh` every 10 minutes. When a paired iPhone is reachable (USB, or awake on the same Wi-Fi), it reinstalls the app if it is missing, if its provisioning profile ends within 7 days, or if the iOS sources changed since the last install. The log is `~/.kanban-code/logs/ios-device-refresh.log`. `make ios-autoinstall-remove` takes it out.
 
 ## Connect to the Mac
 

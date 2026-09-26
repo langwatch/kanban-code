@@ -141,7 +141,7 @@ IOS_AGENT_PLIST = $(HOME)/Library/LaunchAgents/$(IOS_AGENT).plist
 
 # Build and install on every connected, paired iPhone now.
 ios-device: ios-project
-	scripts/ios-device-refresh.sh --force
+	Scripts/ios-device-refresh.sh --force
 
 # Every 10 minutes, reinstall on a connected iPhone when the app is missing,
 # its profile ends within a week, or the iOS sources changed.
@@ -151,7 +151,7 @@ ios-autoinstall:
 		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 		'<plist version="1.0"><dict>' \
 		'<key>Label</key><string>$(IOS_AGENT)</string>' \
-		'<key>ProgramArguments</key><array><string>$(CURDIR)/scripts/ios-device-refresh.sh</string></array>' \
+		'<key>ProgramArguments</key><array><string>$(CURDIR)/Scripts/ios-device-refresh.sh</string></array>' \
 		'<key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>' \
 		'<key>StartInterval</key><integer>600</integer>' \
 		'<key>RunAtLoad</key><true/>' \
