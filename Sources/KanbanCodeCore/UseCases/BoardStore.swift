@@ -886,7 +886,7 @@ public enum Reducer {
         case .createTerminal(let cardId):
             guard var link = state.links[cardId] else { return [] }
             let projectName = link.projectPath.map { ($0 as NSString).lastPathComponent } ?? "shell"
-            let tmuxName = "\(projectName)-\(link.id)"
+            let tmuxName = LaunchSession.tmuxSafeName("\(projectName)-\(link.id)")
             link.tmuxLink = TmuxLink(sessionName: tmuxName, isShellOnly: true)
             // Do NOT change column. Terminal ≠ in progress.
             link.updatedAt = .now
@@ -932,9 +932,9 @@ public enum Reducer {
             guard var link = state.links[cardId] else { return [] }
             let projectName = (projectPath as NSString).lastPathComponent
             let effectiveName = (worktreeName?.isEmpty == false) ? worktreeName! : nil
-            let tmuxName = effectiveName != nil
+            let tmuxName = LaunchSession.tmuxSafeName(effectiveName != nil
                 ? "\(projectName)-\(effectiveName!)"
-                : "\(projectName)-\(cardId)"
+                : "\(projectName)-\(cardId)")
             // Preserve existing shell sessions as extras
             var extras = link.tmuxLink?.extraSessions ?? []
             if link.tmuxLink?.isShellOnly == true, let oldPrimary = link.tmuxLink?.sessionName {

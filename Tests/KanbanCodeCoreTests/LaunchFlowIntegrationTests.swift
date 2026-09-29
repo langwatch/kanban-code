@@ -606,6 +606,22 @@ struct LaunchFlowIntegrationTests {
         #expect(name == "my-project")
     }
 
+    @Test("LaunchSession.tmuxSessionName replaces the tmux target separators")
+    func tmuxSessionNameWithDots() {
+        let name = LaunchSession.tmuxSessionName(project: "/test/foo.bar", worktree: "v1.2:fix")
+        #expect(name == "foo_bar-v1_2_fix")
+    }
+
+    @Test("launchCard names the session of a dotted project so tmux can find it")
+    func launchCardDottedProjectName() {
+        var state = stateWith([makeLink(id: "card_dots", column: .backlog)])
+        let _ = Reducer.reduce(state: &state, action: .launchCard(
+            cardId: "card_dots", prompt: "test", projectPath: "/tmp/foo.bar",
+            worktreeName: nil, runRemotely: false, commandOverride: nil
+        ))
+        #expect(state.links["card_dots"]?.tmuxLink?.sessionName == "foo_bar-card_dots")
+    }
+
     // MARK: - End-to-end: launch + reconcile + cleanup
 
     @Test("End-to-end: launch card, reconcile, then kill session → tmuxLink cleared")
