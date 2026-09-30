@@ -34,17 +34,11 @@ enum CardDropIntent: Equatable {
             }
             return .move
 
-        case .done:
-            let hasMergedPR = card.link.prLinks.contains { $0.status == .merged }
-            if !hasMergedPR {
-                return .invalid("Cannot move to Done - no merged pull request")
-            }
-            return .move
-
         case .allSessions:
             return .archive
 
-        case .backlog, .waiting:
+        // Done accepts any card: work merged locally never has a PR to prove it.
+        case .backlog, .waiting, .done:
             return .move
         }
     }

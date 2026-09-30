@@ -14,7 +14,8 @@ public enum DialogState: Equatable, Sendable {
     case confirmArchive(cardId: String)
     case confirmFork(cardId: String)
     case confirmCheckpoint(cardId: String, turnIndex: Int, turnLineNumber: Int)
-    case confirmWorktreeCleanup(cardId: String)
+    /// `status` is nil when the worktree could not be inspected (e.g. it lives on a remote).
+    case confirmWorktreeCleanup(cardId: String, status: WorktreeCleanupStatus? = nil)
     case confirmMoveToProject(cardId: String, projectPath: String, projectName: String)
     case confirmMoveToFolder(cardId: String, folderPath: String, parentProjectPath: String, displayName: String)
     case confirmMigration(cardId: String, targetAssistant: CodingAssistant, recentTurnLimit: Int?)

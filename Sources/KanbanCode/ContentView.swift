@@ -1174,13 +1174,16 @@ struct ContentView: View {
                 Task { await performCheckpoint(cardId: cardId, turnLineNumber: turnLineNumber) }
                 dismissDialog()
             }
-        case .confirmWorktreeCleanup(let cardId):
+        case .confirmWorktreeCleanup(let cardId, let status):
+            // Return removes only when nothing would be lost; otherwise it keeps.
+            let safe = status?.isSafeToRemove == true
             Button("Keep Worktree", role: .cancel) { dismissDialog() }
+                .keyboardShortcut(safe ? nil : .defaultAction)
             Button("Remove Worktree", role: .destructive) {
                 Task { await cleanupWorktree(cardId: cardId) }
                 dismissDialog()
             }
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(safe ? .defaultAction : nil)
         case .confirmMoveToProject(let cardId, let projectPath, _):
             Button("Cancel", role: .cancel) { dismissDialog() }
             Button("Move") {
@@ -1267,7 +1270,7 @@ struct ContentView: View {
                 Text("This creates a duplicate session you can resume independently.")
             }
         case .confirmCheckpoint: Text("Everything after this point will be removed. A .bkp backup will be created.")
-        case .confirmWorktreeCleanup: Text("This card has a worktree. Do you want to remove it?")
+        case .confirmWorktreeCleanup(_, let status): Text(worktreeCleanupMessage(status))
         case .confirmMoveToProject(_, _, let name): Text("Move this card to \(name)?")
         case .confirmMoveToFolder(_, let folderPath, let parentProjectPath, let displayName):
             let relative = folderPath.hasPrefix(parentProjectPath + "/")
@@ -1304,15 +1307,38 @@ struct ContentView: View {
         hasRunningTerminals(cardId: cardId) ? "Archive & Kill Terminals" : "Archive"
     }
 
-    /// Offer worktree cleanup after archive/delete if applicable.
+    /// Offer worktree cleanup after archive/delete/Done if applicable. The
+    /// dialog says whether the worktree is merged and clean, since removal is
+    /// forced and cannot be undone.
     private func offerWorktreeCleanupIfNeeded(card: KanbanCodeCard?) {
         guard let card, let wt = card.link.worktreeLink,
               !wt.path.isEmpty, wt.path.contains("/.claude/worktrees/"),
               canCleanupWorktree(branch: wt.branch, manuallyArchived: true) else { return }
         Task { @MainActor in
+            async let status = GitWorktreeAdapter().cleanupStatus(worktreePath: wt.path)
             try? await Task.sleep(for: .milliseconds(300))
-            presentDialog(.confirmWorktreeCleanup(cardId: card.id))
+            presentDialog(.confirmWorktreeCleanup(cardId: card.id, status: await status))
         }
+    }
+
+    private func worktreeCleanupMessage(_ status: WorktreeCleanupStatus?) -> String {
+        guard let status else { return "This card has a worktree. Do you want to remove it?" }
+        let base = status.baseBranch ?? "the base branch"
+        var lines: [String] = []
+        switch status.mergeState {
+        case .merged: lines.append("✓ Branch is merged into \(base).")
+        case .notMerged: lines.append("⚠ Branch has commits that are not in \(base).")
+        case .unknown: lines.append("⚠ Could not tell whether the branch is merged.")
+        }
+        switch status.uncommittedFileCount {
+        case 0: lines.append("✓ No uncommitted changes.")
+        case let count?: lines.append("⚠ \(count) uncommitted file\(count == 1 ? "" : "s") will be lost.")
+        case nil: lines.append("⚠ Could not check for uncommitted changes.")
+        }
+        lines.append(status.isSafeToRemove
+            ? "Removing the worktree loses nothing."
+            : "Removing the worktree deletes this work permanently.")
+        return lines.joined(separator: "\n")
     }
 
     func presentDialog(_ dialog: DialogState) {
@@ -2956,6 +2982,8 @@ struct ContentView: View {
             archiveCard(cardId: cardId)
         case .move:
             store.dispatch(.moveCard(cardId: cardId, to: column))
+            // Done means finished: offer to drop the checkout along with it.
+            if column == .done { offerWorktreeCleanupIfNeeded(card: card) }
         case .invalid(let message):
             store.dispatch(.setNotice(message, kind: .warning))
         }

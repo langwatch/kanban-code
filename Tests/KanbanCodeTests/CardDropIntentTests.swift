@@ -37,8 +37,8 @@ struct CardDropIntentTests {
         )
     }
 
-    @Test("Cards without merged pull requests cannot be dropped into Done")
-    func cardWithoutMergedPRCannotMoveToDone() {
+    @Test("Cards with an open pull request can be dropped into Done")
+    func cardWithOpenPRMovesToDone() {
         let card = KanbanCodeCard(
             link: Link(
                 id: "card_review",
@@ -50,10 +50,23 @@ struct CardDropIntentTests {
             )
         )
 
-        #expect(
-            CardDropIntent.resolve(card, to: .done)
-                == .invalid("Cannot move to Done - no merged pull request")
+        #expect(CardDropIntent.resolve(card, to: .done) == .move)
+    }
+
+    /// Work merged into main locally never has a PR, and Done is where it goes.
+    @Test("Cards without any pull request can be dropped into Done")
+    func cardWithoutPRMovesToDone() {
+        let card = KanbanCodeCard(
+            link: Link(
+                id: "card_local",
+                name: "Merged locally",
+                projectPath: "/test/project",
+                column: .waiting,
+                source: .manual
+            )
         )
+
+        #expect(CardDropIntent.resolve(card, to: .done) == .move)
     }
 
     @Test("Archived cards can be restored to Backlog")
