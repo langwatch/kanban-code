@@ -141,6 +141,44 @@ struct SecretScrubberTests {
         #expect(scan("sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", with: s).isEmpty)
     }
 
+    @Test("only a key that reads as minted is taken from a format match")
+    func plausibleKeys() {
+        let run = "Qm7Xw2Lp9Vt4Zk8Rb3Nc6Hd1Fy5Gj0UsAeTiOoPqWxYz12Cv"
+        let minted = [
+            Self.vendor,
+            "sk-" + "lw-" + run,
+            "vk-" + "lw-" + String(run.prefix(26)),
+            "sk-" + "proj-" + run + "_" + run + "-" + run,
+            "sk-" + run,
+            "gh" + "p_" + String(run.prefix(36)),
+            "sk_" + "live_" + String(run.prefix(24)),
+            "re_" + String(run.prefix(8)) + "_" + String(run.suffix(24)),
+            Self.slack,
+        ]
+        for value in minted { #expect(ScrubScanner.plausibleKey(value), "minted \(value.prefix(8))") }
+
+        let made = [
+            "sk-" + "lw-test-key-9f8e7d6c5b4a3f2e1d0c",
+            "sk-" + "lw-my-secret-key-Qm7Xw2Lp9Vt4Zk8Rb3Nc",
+            "sk-" + "proj-abc123def456ghi789jkl012mno345",
+            "sk-" + "some-long-slug-with-2-words-in-it-2026",
+            "sk-" + String(run.prefix(24)),
+            "re_" + "3NxQm7Xw2Lp9Vt4Zk8Rb3Nc6Hd",
+            "sk-" + "lw-" + String(repeating: "ab12", count: 12),
+            String(repeating: "x", count: 301),
+        ]
+        for value in made { #expect(!ScrubScanner.plausibleKey(value), "made up \(value.prefix(12))") }
+        #expect(!ScrubScanner.plausibleKey(Self.vendor, cutShort: true))
+
+        // A key shown shortened or masked is not a key.
+        let s = scanner([], key: key())
+        #expect(scan("key \(Self.vendor) end", with: s).count == 1)
+        #expect(scan("key \(Self.vendor)... end", with: s).isEmpty)
+        #expect(scan("key \(Self.vendor)*** end", with: s).isEmpty)
+        #expect(scan("key \(Self.vendor)\u{2026} end", with: s).isEmpty)
+        #expect(scan("ANTHROPIC_API_KEY=sk-" + "ant-api03-test-key-0123-not-a-real-one-4567 end", with: s).isEmpty)
+    }
+
     @Test("a sealed secret keeps the fingerprints of the save that set it, and masters share them")
     func indexOutlivesSealing() async throws {
         let dir = NSTemporaryDirectory() + "scrub-index-\(UUID().uuidString.prefix(8))"
@@ -288,6 +326,67 @@ struct SecretScrubberTests {
         #expect(report.skipped == 2)
         #expect(try String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.slack))
         #expect(try await f.vault.store.list().count == 1)
+    }
+
+    @Test("an extra path of the settings is read, with ~ as this machine's home")
+    func extraPaths() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        try FileManager.default.createDirectory(atPath: f.home + "/notes", withIntermediateDirectories: true)
+        let log = f.home + "/notes/log.txt"
+        try Data("0001 token \(Self.slack) end\n0002 nothing\n".utf8).write(to: URL(fileURLWithPath: log))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: log)
+
+        // Not read until it is listed.
+        #expect(!ScrubTargets.standard(home: f.home, kanbanHome: f.home + "/.kanban-code").files().contains { $0.path.hasSuffix("/log.txt") })
+        await f.scrubber.setSchedule(ScrubSchedule(paths: [log, " ~/notes/log.txt ", "~/missing"]), share: false)
+        #expect(await f.scrubber.schedule().paths == ["~/notes/log.txt", "~/missing"])
+
+        let before = try attributes(log)
+        let report = await f.scrubber.run(dryRun: false)
+        #expect(report.errors.isEmpty)
+        let text = try String(contentsOfFile: log, encoding: .utf8)
+        #expect(!text.contains(Self.slack))
+        #expect(text.contains("{{vault:SLACK_BOT_TOKEN}}"))
+        #expect(try attributes(log).size == before.size)
+        #expect(text.hasSuffix("end\n0002 nothing\n"))
+    }
+
+    @Test("settings saved before extra paths existed still load")
+    func scheduleWithoutPaths() throws {
+        let old = try JSONDecoder().decode(ScrubSchedule.self, from: Data(#"{"enabled":false,"hour":3,"minute":15}"#.utf8))
+        #expect(old == ScrubSchedule(enabled: false, hour: 3, minute: 15, paths: []))
+    }
+
+    @Test("a real run drops the report of the dry run before it")
+    func dryRunReportGoes() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        _ = await f.scrubber.run(dryRun: true, targets: f.targets)
+        #expect(await f.scrubber.status().lastDryRun != nil)
+        _ = await f.scrubber.run(dryRun: false, targets: f.targets)
+        let status = await f.scrubber.status()
+        #expect(status.lastDryRun == nil)
+        #expect(status.lastRun?.replacements == 2)
+    }
+
+    @Test("with patterns off only vault values are replaced and nothing is saved")
+    func patternsOff() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        await f.scrubber.setSchedule(ScrubSchedule(patterns: false), share: false)
+        let report = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(report.replacements == 1)
+        #expect(report.newSecrets == 0)
+        let text = try String(contentsOfFile: f.transcript, encoding: .utf8)
+        #expect(!text.contains(Self.slack) && text.contains(Self.vendor))
+        #expect(try await f.vault.store.list().count == 1)
+
+        // Turned on again, the file is read again.
+        await f.scrubber.setSchedule(ScrubSchedule(patterns: true), share: false)
+        let again = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(again.replacements == 1)
+        #expect(again.newSecrets == 1)
     }
 
     @Test("backups go after a week")

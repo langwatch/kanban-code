@@ -33,6 +33,18 @@ Feature: Secret scrubber
     Then the vault has a secret "scrubbed/found/ANTHROPIC_API_KEY_<fingerprint>" of tier ask
     And the transcript holds a reference to it
 
+  Scenario: A made up key in a vendor's format is left alone
+    Given a transcript that holds "sk-lw-test-key-..." style fixtures, a key shown as "sk-ant-...***" and an identifier that starts with "sk-"
+    When the scrubber runs
+    Then none of them is saved to the vault
+    And none of them is replaced
+
+  Scenario: Format patterns can be turned off
+    Given I ran "kv scrub --patterns off"
+    When the scrubber runs
+    Then values the vault holds are replaced
+    And a key the vault does not hold stays in the file and is not saved
+
   Scenario: The scan never reads a value from the vault
     When the scrubber scans
     Then it compares fingerprints from "vault/scrub-index.json"
@@ -73,8 +85,13 @@ Feature: Secret scrubber
     Then the Mac saves it
     And each paired master receives it and runs at that time over its own files
 
-  Scenario: OptMem records keep their width
-    Given a memory in the OptMem log that holds a vault value
+  Scenario: Extra paths are read on every master
+    Given I add "~/notes/log.txt" under Paths in Settings > Vault
     When the scrubber runs
-    Then the record has the same width
-    And memo reads every memory as before
+    Then the file is read on each master where it exists, with "~" as that master's home folder
+    And a line of the file keeps its length when a value in it is replaced
+
+  Scenario: A dry run result does not stay in the settings
+    When I press Dry Run in Settings > Vault
+    Then its counts show under the buttons, with a Details button that lists counts per file and no value
+    And after I close and reopen the settings only the last real run of each master shows

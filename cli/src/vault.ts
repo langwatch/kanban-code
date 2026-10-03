@@ -692,6 +692,8 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv scrub [--dry-run] [--status] [--all] [--json]          replace secrets in this machine's transcripts with
                                                             {{vault:NAME}} references (dry run: counts only)
   kv scrub --at HH:MM | --on | --off                        the daily run, on every master
+  kv scrub --add <path> | --remove <path>                   extra files and folders it reads, on every master
+  kv scrub --patterns on|off                                off: replace only values the vault holds, save nothing new
   kv exec-provider                                          OpenClaw exec SecretRef provider (JSON on stdin)
   kv import [--apply] [--secrets-only] [--only <dir>]..   plan (then do) the migration of plaintext secrets
 

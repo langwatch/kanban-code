@@ -136,6 +136,9 @@ struct ScrubScanner: Sendable {
                     guard ScrubIndex.looksSecret(secret.value), ScrubIndex.entropyBits(Array(secret.value.utf8)) >= 3.5 else { continue }
                     let offset = start + token.utf8.distance(from: token.utf8.startIndex, to: secret.range.lowerBound)
                     let bytes = Array(secret.value.utf8)
+                    let end = offset + bytes.count
+                    let following = UnsafeRawBufferPointer(start: base + end, count: min(3, n - end))
+                    guard Self.plausibleKey(secret.value, cutShort: Self.marksCut(following)) else { continue }
                     if taken.contains(where: { $0.offset < offset + bytes.count && offset < $0.offset + $0.length }) { continue }
                     if let known = byMac[key.macHex(bytes)] {
                         out.append(ScrubMatch(offset: offset, length: bytes.count, name: known.name, tag: known.tag))
@@ -150,6 +153,76 @@ struct ScrubScanner: Sendable {
             }
         }
         return out
+    }
+}
+
+// MARK: - Minted keys and the rest
+
+extension ScrubScanner {
+    /// Whether the bytes after a value say it was shortened or masked
+    /// (`sk-abc123...`, `sk-abc123***`): what is left is not a usable key.
+    static func marksCut(_ following: UnsafeRawBufferPointer) -> Bool {
+        guard let first = following.first else { return false }
+        if first == 0x2A { return true }
+        if following.count >= 3 {
+            if following[0] == 0x2E, following[1] == 0x2E, following[2] == 0x2E { return true }
+            if following[0] == 0xE2, following[1] == 0x80, following[2] == 0xA6 { return true }
+        }
+        return false
+    }
+
+    /// Words a made up key carries and a minted one does not.
+    private static let fixtureWords = [
+        "test", "fake", "mock", "demo", "dumm", "examp", "sampl", "secret", "token", "invalid", "expired", "wrong",
+        "local", "stub", "fixture", "foobar", "hello", "passw", "abc123", "123456", "abcdef", "qwert",
+    ]
+    private static let fixtureSegments: Set<String> = [
+        "my", "your", "foo", "bar", "baz", "abc", "xyz", "key", "new", "old", "dev", "bad", "none", "null", "api", "app", "id",
+    ]
+    /// `sk-` families whose body is not one plain run.
+    private static let knownProviderPrefixes = ["sk-proj-", "sk-ant-", "sk-lw-", "sk-or-", "sk-svcacct-", "sk-admin-"]
+    private static let resend = try! NSRegularExpression(pattern: "^re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}$")
+
+    /// Whether a value in a vendor's format reads as a key some service
+    /// minted, and not as a fixture, an example or an identifier that
+    /// happens to share the prefix. Only such a value is saved and replaced.
+    static func plausibleKey(_ value: String, cutShort: Bool = false) -> Bool {
+        guard !cutShort, value.utf8.count <= 300 else { return false }
+        var body = Substring(value)
+        // The vendor's own words come first and are not judged.
+        for prefix in ["sk_live_", "sk_test_", "rk_live_", "rk_test_", "secret_", "key-", "github_pat_", "dckr_pat_", "lin_api_"]
+        where body.hasPrefix(prefix) {
+            body = body.dropFirst(prefix.count)
+        }
+        let lower = body.lowercased()
+        if fixtureWords.contains(where: { lower.contains($0) }) { return false }
+        let segments = body.split(whereSeparator: { "-_.:".contains($0) })
+        // After the vendor prefix (two segments at most), a word is a sign of a hand written value.
+        for segment in segments.dropFirst(min(2, max(segments.count - 1, 0))) {
+            if fixtureSegments.contains(segment.lowercased()) { return false }
+            if segment.count >= 4, segment.count <= 12, segment.allSatisfy({ $0 >= "a" && $0 <= "z" }) { return false }
+        }
+        // The random part: one run of letters and digits, long enough and varied.
+        var longest = Substring(), current = body.startIndex
+        var index = body.startIndex
+        while true {
+            let atEnd = index == body.endIndex
+            if atEnd || !(body[index].isASCII && (body[index].isLetter || body[index].isNumber)) {
+                if body.distance(from: current, to: index) > longest.count { longest = body[current..<index] }
+                if atEnd { break }
+                current = body.index(after: index)
+            }
+            index = body.index(after: index)
+        }
+        guard longest.count >= 12, Set(longest).count >= 8 else { return false }
+        if value.hasPrefix("sk-"), !knownProviderPrefixes.contains(where: { value.hasPrefix($0) }) {
+            // A bare `sk-` key is one run: `sk-<48 letters and digits>`, `sk-<32 hex>`.
+            guard longest.count == value.count - 3, longest.count >= 32 else { return false }
+        }
+        if value.hasPrefix("re_") {
+            return resend.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)) != nil
+        }
+        return true
     }
 }
 

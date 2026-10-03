@@ -4,16 +4,43 @@ import FoundationNetworking
 #endif
 import KanbanCodeRemoteKit
 
-/// When the scrubber runs on its own: once a day at `hour:minute`, local time.
+/// The scrubber's settings: when it runs on its own (once a day at
+/// `hour:minute`, local time) and what it reads beyond the standard files.
 public struct ScrubSchedule: Codable, Sendable, Equatable {
     public var enabled: Bool
     public var hour: Int
     public var minute: Int
+    /// Extra files and folders to read, with `~` for the home folder, so
+    /// one list fits every master. A path missing on a machine is skipped there.
+    public var paths: [String]
+    /// Whether a key in a vendor's format that the vault does not hold is
+    /// saved and replaced too. Off, only values the vault holds are replaced.
+    public var patterns: Bool
 
-    public init(enabled: Bool = true, hour: Int = 4, minute: Int = 30) {
+    public init(enabled: Bool = true, hour: Int = 4, minute: Int = 30, paths: [String] = [], patterns: Bool = true) {
+        self.patterns = patterns
         self.enabled = enabled
         self.hour = min(max(hour, 0), 23)
         self.minute = min(max(minute, 0), 59)
+        var seen = Set<String>()
+        self.paths = paths.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    enum CodingKeys: String, CodingKey { case enabled, hour, minute, paths, patterns }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(enabled: try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true,
+                  hour: try c.decodeIfPresent(Int.self, forKey: .hour) ?? 4,
+                  minute: try c.decodeIfPresent(Int.self, forKey: .minute) ?? 30,
+                  paths: try c.decodeIfPresent([String].self, forKey: .paths) ?? [],
+                  patterns: try c.decodeIfPresent(Bool.self, forKey: .patterns) ?? true)
+    }
+
+    /// A path as the list keeps it: under the home folder it starts with `~`.
+    public static func portable(_ path: String, home: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix(home + "/") ? "~" + trimmed.dropFirst(home.count) : trimmed
     }
 }
 
@@ -111,7 +138,9 @@ public actor SecretScrubber {
     /// Saves the schedule; `share` also sends it to the peer masters, so
     /// one setting covers every machine.
     public func setSchedule(_ schedule: ScrubSchedule, share: Bool) async {
-        let clean = ScrubSchedule(enabled: schedule.enabled, hour: schedule.hour, minute: schedule.minute)
+        let clean = ScrubSchedule(enabled: schedule.enabled, hour: schedule.hour, minute: schedule.minute,
+                                  paths: schedule.paths.map { ScrubSchedule.portable($0, home: home) },
+                                  patterns: schedule.patterns)
         if let data = try? JSONEncoder().encode(clean) {
             try? VaultFiles.writeAtomically(data, to: schedulePath, mode: 0o600)
         }
@@ -269,10 +298,11 @@ public actor SecretScrubber {
             report.note = "this machine has no vault key: nothing was scanned"
             return finish(report)
         }
-        let scanner = ScrubScanner(entries: entries, key: key)
+        let settings = schedule()
+        let scanner = ScrubScanner(entries: entries, key: key, patterns: settings.patterns)
         var state = loadState()
         let known = state.generation == scanner.generation ? state.files : [:]
-        let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome)).files()
+        let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
         report.filesSeen = files.count
 
         // Scan.
@@ -395,7 +425,7 @@ public actor SecretScrubber {
             state.files = clean
             // What the vault holds now, the saved finds included.
             if let (entries, key) = await index.current() {
-                state.generation = ScrubScanner(entries: entries, key: key).generation
+                state.generation = ScrubScanner(entries: entries, key: key, patterns: settings.patterns).generation
             }
             if firstRun { state.firstRealRunAt = now }
             if let data = try? JSONEncoder.remote.encode(state) {
@@ -409,6 +439,8 @@ public actor SecretScrubber {
         var report = report
         report.finishedAt = Date()
         let name = report.dryRun ? "last-dry-run" : "last-run"
+        // A dry run describes the files as they were before the next real run.
+        if !report.dryRun { try? FileManager.default.removeItem(atPath: "\(directory)/last-dry-run.json") }
         let encoder = JSONEncoder.remote
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(report) {
@@ -462,8 +494,8 @@ public struct ScrubTargets: Sendable {
 
     /// Transcripts and histories of Claude Code (the default config folder
     /// and every rush account's), Codex sessions, rush's drafts and cache,
-    /// Kanban's own stores, and the OptMem memory.
-    public static func standard(home: String, kanbanHome: String) -> ScrubTargets {
+    /// Kanban's own stores, and the `extra` paths of the settings.
+    public static func standard(home: String, kanbanHome: String, extra: [String] = []) -> ScrubTargets {
         var roots: [String] = []
         var configs = [home + "/.claude"]
         let accounts = home + "/.config/rush/claude"
@@ -480,7 +512,7 @@ public struct ScrubTargets: Sendable {
         roots += kanban.filter { $0.hasPrefix("links.json") }.map { kanbanHome + "/" + $0 }
         roots += ["human-messages", "logs", "channels", "chat-drafts", "peers", "context", "commands", "hook-events.jsonl"]
             .map { kanbanHome + "/" + $0 }
-        roots += [home + "/.optmem/memory", home + "/.optmem/WAKE.md", home + "/.optmem/spool", home + "/.optmem/audit"]
+        roots += extra.map { SyncHome.expand($0, home: home) }.filter { $0.hasPrefix("/") }
         return ScrubTargets(roots: roots, excluded: [kanbanHome + "/vault", kanbanHome + "/scrub", kanbanHome + "/scrub-backups"])
     }
 
@@ -539,7 +571,8 @@ struct ScrubFilePlan: Sendable {
         var plan = ScrubFilePlan(file: file, kind: ScrubFileKind.of(path: file.path))
         plan.live = now.timeIntervalSince(file.modified) < liveWindow
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: file.path), options: .alwaysMapped) else {
-            plan.error = "could not be read"
+            // A file deleted since it was listed (a rotated log) is not an error.
+            if FileManager.default.fileExists(atPath: file.path) { plan.error = "could not be read" }
             return plan
         }
         data.withUnsafeBytes { buf in

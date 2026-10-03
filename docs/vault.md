@@ -337,13 +337,15 @@ rush's own message boxes (a Session's box and the Prompt) get the same check fro
 
 A secret pasted into a chat, or printed by a command, stays in the transcript. The scrubber replaces it there with a `{{vault:NAME}}` reference. Each master runs it over its own files, once a day (04:30 unless changed) and on demand. A master that was off at that time runs when it starts; one that has never run waits for the time itself. It cleans local files only: what already reached a model provider, a remote log or a backup elsewhere is not touched, so a key that leaked still needs rotating.
 
-Settings > Vault has the switch, the time, Dry Run, Run Now and the last result of every master. The schedule set there is sent to the peers (`PUT /v1/scrub/schedule`); each master keeps it in `~/.kanban-code/scrub/schedule.json`. From a shell:
+Settings > Vault has the switch, the time, Dry Run, Run Now, the extra paths, and one line per master with its last real run. The result of a dry run shows there only until the settings window closes, with a Details button that lists the counts per file. These settings are sent to the peers (`PUT /v1/scrub/schedule`); each master keeps them in `~/.kanban-code/scrub/schedule.json`. From a shell:
 
 ```
 kv scrub --dry-run     counts per folder and per secret name, nothing changes
 kv scrub               a run now
 kv scrub --status      schedule and the last run
 kv scrub --at 03:00 | --on | --off
+kv scrub --add ~/notes/log.txt | --remove ~/notes/log.txt
+kv scrub --patterns off   replace only values the vault holds; nothing new is saved (on by default)
 ```
 
 ### What it reads
@@ -352,14 +354,14 @@ kv scrub --at 03:00 | --on | --off
 - Codex: `~/.codex/sessions`, `archived_sessions`, `history.jsonl`.
 - rush: `~/.config/rush/drafts.json`, `box-drafts`, and its cache folder.
 - Kanban Code: `links.json` and its backups, `human-messages`, `logs`, `channels`, `chat-drafts`, `peers` (transcript copies of the other masters' cards), `context`, `commands`, `hook-events.jsonl`. Never `vault/`, `settings.json` or the device and sync files.
-- OptMem: `~/.optmem/memory`, `WAKE.md`, `spool`, `audit`. Its log and tree are fixed-width records with no checksum, and a replacement keeps every record's width, so memo reads them as before.
+- Extra paths: the files and folders added in Settings > Vault > Paths or with `kv scrub --add`. One list covers every master: a path under the home folder is kept as `~/...`, and a path missing on a machine is skipped there. Line lengths are kept, so a log of fixed-width records stays readable; a format that carries its own checksums does not belong in this list.
 
 Images, archives, databases and files that start with a zero byte are skipped. A file written in the last 10 minutes belongs to a session in progress and waits for the next run; Kanban's current `links.json` and log are always in that state, so they are cleaned once they rotate into a backup.
 
 ### What it finds
 
 1. Values the vault holds, by fingerprint. `vault/scrub-index.json` has, for each secret, the length of its value, a keyed 32-bit fingerprint of its first eight bytes and a keyed HMAC of the whole (`ScrubIndex`), under a key derived from the vault key. A scan reads only this index, so it never handles a value of any tier. A secret is fingerprinted when the vault is saved with its value in plain: for an owner-only secret that is the save that sets it, before the value is sealed, and its fingerprints stay while the secret lives. Masters share their indexes at the start of a run (`GET /v1/scrub/index`), so a value set on one master is found on the others. An owner-only secret that was sealed before any master fingerprinted it is not found until its value is set again. Each value is indexed as stored and as JSON writes it (escaped once, twice, and with `\/`); a JSON value also by its long members, a URL by its credential parts. Values under 16 bytes, and ones that do not look minted (no digits, a word, a path, a host), are left out, so a vault entry holding `eu-central-1` does not rewrite the transcripts.
-2. Keys in a vendor's format the vault does not hold: the `SecretDetector` rules the composers use for pasted keys, limited to the fixed formats (`sk-...`, `ghp_...`, `xoxb-...`, `AIza...` and the vendor list), with placeholders and low-entropy identifiers left out. Each is saved first as `scrubbed/found/<VENDOR_NAME>_<fingerprint>`, tier ask, tag `scrubbed`, then replaced. The name comes from the key's format and its fingerprint, so two masters that find the same key save it under the same name. `kv ls --project scrubbed` lists them; rename the ones worth keeping (`kv mv`) and delete the rest (`kv rm`).
+2. Keys in a vendor's format the vault does not hold: the `SecretDetector` rules the composers use for pasted keys, limited to the fixed formats (`sk-...`, `ghp_...`, `xoxb-...`, `AIza...` and the vendor list). A match is taken only when it reads as a key a service minted (`ScrubScanner.plausibleKey`): not shortened or masked (`sk-abc...`, `sk-abc***`), no fixture word in it (`test`, `fake`, `secret`, `my`, a lowercase word between separators), a random run of at least 12 letters and digits, at most 300 bytes; a bare `sk-` key must be one run of 32 or more, and `re_` must have the exact Resend shape. What fails this is left in the file and not saved. Each key that passes is saved first as `scrubbed/found/<VENDOR_NAME>_<fingerprint>`, tier ask, tag `scrubbed`, then replaced. The name comes from the key's format and its fingerprint, so two masters that find the same key save it under the same name. `kv ls --project scrubbed` lists them; rename the ones worth keeping (`kv mv`) and delete the rest (`kv rm`).
 
 JWTs, bearer tokens, URL passwords, PEM keys and `password=` style assignments that are not in the vault are not replaced: without a human looking they match too much that is not a secret.
 
@@ -375,7 +377,7 @@ In place, and every line keeps its byte length: the file keeps its size, its ino
 
 - A dry run changes nothing and reports counts per folder, per file and per secret name.
 - The first real run on a machine first copies every file it is about to change into `~/.kanban-code/scrub-backups/<date>/` with a `manifest.json` of the original paths. On a Mac the copy is an APFS clone (`cp <file> <path>` restores one), which takes disk only for the blocks the run changes. On Linux it is a gzip (`gunzip -c <file> > <path>`), and a file is left unchanged when the disk has less than 2 GB free beyond its size. These copies hold the secrets: they are deleted after 7 days, and no sync entry covers that folder.
-- Reports (`scrub/last-run.json`, `last-dry-run.json`) and the `[scrub]` log lines carry names, paths and counts, never a value.
+- Reports (`scrub/last-run.json`, `last-dry-run.json`) and the `[scrub]` log lines carry names, paths and counts, never a value. The dry run report is deleted by the next real run.
 - Files the last run left clean are skipped by size and time until the vault changes.
 
 ## Remote API

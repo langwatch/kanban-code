@@ -36,7 +36,7 @@ export interface ScrubReport {
 
 export interface ScrubStatus {
   machine: string;
-  schedule: { enabled: boolean; hour: number; minute: number };
+  schedule: { enabled: boolean; hour: number; minute: number; paths?: string[]; patterns?: boolean };
   running: boolean;
   progress?: string;
   nextRun?: string;
@@ -94,13 +94,15 @@ export function formatScrubStatus(s: ScrubStatus): string {
     `${s.machine}: scrubber ${s.schedule.enabled ? `on, daily at ${two(s.schedule.hour)}:${two(s.schedule.minute)}` : "off"}` +
       (s.running ? `, running (${s.progress ?? "starting"})` : ""),
   ];
+  if (s.schedule.patterns === false) lines.push("  format patterns off: only values the vault holds are replaced");
+  if (s.schedule.paths?.length) lines.push(`  extra paths: ${s.schedule.paths.join(", ")}`);
   let text = lines.join("\n") + "\n";
   if (s.lastRun) text += formatScrubReport(s.lastRun, 5);
   else text += "  no run yet\n";
   return text;
 }
 
-/** `kv scrub [--dry-run] [--status] [--json] [--all] | --at HH:MM | --on | --off` */
+/** `kv scrub [--dry-run] [--status] [--json] [--all] | --at HH:MM | --on | --off | --add PATH | --remove PATH | --patterns on|off` */
 export async function runScrub(
   args: string[],
   client: ScrubClient,
@@ -120,15 +122,27 @@ export async function runScrub(
   const at = args.indexOf("--at");
   const on = has("--on");
   const off = has("--off");
-  if (at >= 0 || on || off) {
+  const add = args.indexOf("--add");
+  const remove = args.indexOf("--remove");
+  const patterns = args.indexOf("--patterns");
+  if (patterns >= 0 && !["on", "off"].includes(args[patterns + 1] ?? "")) throw new Error("kv scrub --patterns on|off");
+  if (at >= 0 || on || off || add >= 0 || remove >= 0 || patterns >= 0) {
     const current = (await status()).schedule;
-    const next = { ...current };
+    const next = { ...current, paths: [...(current.paths ?? [])] };
+    for (const [i, flag] of [[add, "--add"], [remove, "--remove"]] as const) {
+      if (i < 0) continue;
+      const path = args[i + 1];
+      if (!path || path.startsWith("--")) throw new Error(`kv scrub ${flag} <file or folder>`);
+      next.paths = next.paths.filter((p) => p !== path);
+      if (flag === "--add") next.paths.push(path);
+    }
     if (at >= 0) {
       const m = /^(\d{1,2}):(\d{2})$/.exec(args[at + 1] ?? "");
       if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error("kv scrub --at HH:MM");
       next.hour = Number(m[1]);
       next.minute = Number(m[2]);
     }
+    if (patterns >= 0) next.patterns = args[patterns + 1] === "on";
     if (on) next.enabled = true;
     if (off) next.enabled = false;
     const { body } = await client.call<ScrubStatus>("PUT", "../scrub/schedule", next);

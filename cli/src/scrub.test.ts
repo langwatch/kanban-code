@@ -70,6 +70,21 @@ describe("kv scrub", () => {
     const c = client([{ machine: "box", schedule, running: false }]);
     await runScrub(["--at", "03:15"], c, () => {}, async () => {});
     const put = c.calls.find((x) => x.method === "PUT");
-    assert.deepEqual(put, { method: "PUT", path: "../scrub/schedule", body: { enabled: true, hour: 3, minute: 15 } });
+    assert.deepEqual(put, { method: "PUT", path: "../scrub/schedule", body: { enabled: true, hour: 3, minute: 15, paths: [] } });
+  });
+
+  test("--patterns off keeps the rest of the settings", async () => {
+    const c = client([{ machine: "box", schedule: { ...schedule, paths: ["~/notes"] }, running: false }]);
+    await runScrub(["--patterns", "off"], c, () => {}, async () => {});
+    const put = c.calls.find((x) => x.method === "PUT");
+    assert.deepEqual(put?.body, { enabled: true, hour: 4, minute: 30, paths: ["~/notes"], patterns: false });
+    await assert.rejects(runScrub(["--patterns", "maybe"], c, () => {}, async () => {}), /on\|off/);
+  });
+
+  test("--add and --remove edit the extra paths and keep the rest", async () => {
+    const c = client([{ machine: "box", schedule: { ...schedule, paths: ["~/notes", "~/old"] }, running: false }]);
+    await runScrub(["--add", "~/work/log.txt", "--remove", "~/old"], c, () => {}, async () => {});
+    const put = c.calls.find((x) => x.method === "PUT");
+    assert.deepEqual(put?.body, { enabled: true, hour: 4, minute: 30, paths: ["~/notes", "~/work/log.txt"] });
   });
 });
