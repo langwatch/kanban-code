@@ -22,13 +22,13 @@ struct ScrubScanner: Sendable {
     private let byMac: [String: ScrubFingerprint]
     /// One bit per prefix fingerprint (its low 24 bits), checked before the dictionary.
     private let bitmap: [UInt64]
-    let patterns: Bool
+    let patterns: ScrubPatterns
 
     /// The group new finds are saved under.
     static let foundProject = "scrubbed"
     static let foundEnvironment = "found"
 
-    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: Bool = true) {
+    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: ScrubPatterns = .on) {
         self.key = key
         self.patterns = patterns
         var byPrefix: [UInt32: [ScrubFingerprint]] = [:]
@@ -49,13 +49,13 @@ struct ScrubScanner: Sendable {
     /// What changes the result of a scan: the fingerprints and the rules.
     var generation: String {
         let macs = byMac.keys.sorted().joined()
-        return "v1:\(patterns):" + key.macHex(Array(macs.utf8))
+        return "v2:\(patterns.rawValue):" + key.macHex(Array(macs.utf8))
     }
 
     /// Matches in file order, none overlapping another, none across a line break.
     func scan(_ buf: UnsafeRawBufferPointer) -> [ScrubMatch] {
         var found = exact(buf)
-        if patterns { found += vendorKeys(buf, taken: found) }
+        if patterns != .off { found += vendorKeys(buf, taken: found) }
         found.sort { $0.offset < $1.offset }
         var out: [ScrubMatch] = []
         var end = 0

@@ -10,7 +10,7 @@ struct ScrubSettingsSection: View {
     @State private var enabled = true
     @State private var time = Date()
     @State private var paths: [String] = []
-    @State private var patterns = true
+    @State private var patterns = ScrubPatterns.typed
     /// When Dry Run was pressed in this view; older dry runs are not shown.
     @State private var dryRunSince: Date?
     @State private var details: [Named]?

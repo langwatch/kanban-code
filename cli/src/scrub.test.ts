@@ -94,8 +94,10 @@ describe("kv scrub", () => {
     const c = client([{ machine: "box", schedule: { ...schedule, paths: ["~/notes"] }, running: false }]);
     await runScrub(["--patterns", "off"], c, () => {}, async () => {});
     const put = c.calls.find((x) => x.method === "PUT");
-    assert.deepEqual(put?.body, { enabled: true, hour: 4, minute: 30, paths: ["~/notes"], patterns: false });
-    await assert.rejects(runScrub(["--patterns", "maybe"], c, () => {}, async () => {}), /on\|off/);
+    assert.deepEqual(put?.body, { enabled: true, hour: 4, minute: 30, paths: ["~/notes"], patterns: "off" });
+    await runScrub(["--patterns", "typed"], c, () => {}, async () => {});
+    assert.equal((c.calls.filter((x) => x.method === "PUT")[1]?.body as { patterns: string }).patterns, "typed");
+    await assert.rejects(runScrub(["--patterns", "maybe"], c, () => {}, async () => {}), /typed\|on\|off/);
   });
 
   test("--add and --remove edit the extra paths and keep the rest", async () => {

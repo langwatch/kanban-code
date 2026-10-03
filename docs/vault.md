@@ -345,7 +345,7 @@ kv scrub               a run now
 kv scrub --status      schedule and the last run
 kv scrub --at 03:00 | --on | --off
 kv scrub --add ~/notes/log.txt | --remove ~/notes/log.txt
-kv scrub --patterns off   replace only values the vault holds; nothing new is saved (on by default)
+kv scrub --patterns typed|on|off   which keys the vault does not hold are saved and replaced (typed by default)
 kv scrub --restore <file>...   write back what the runs of the last week replaced in these files
 ```
 
@@ -353,7 +353,7 @@ kv scrub --restore <file>...   write back what the runs of the last week replace
 
 - Claude Code: `projects/`, `history.jsonl` and `paste-cache/` of `~/.claude` and of every rush account folder (`~/.config/rush/claude/*`; folders that link to the same place are read once).
 - Codex: `~/.codex/sessions`, `archived_sessions`, `history.jsonl`.
-- rush: `~/.config/rush/drafts.json`, `box-drafts`, and its cache folder.
+- rush: `~/.config/rush/drafts.json`, `box-drafts`, each session's `human.jsonl`, and its cache folder.
 - Kanban Code: `links.json` and its backups, `human-messages`, `logs`, `channels`, `chat-drafts`, `peers` (transcript copies of the other masters' cards), `context`, `commands`, `hook-events.jsonl`. Never `vault/`, `settings.json` or the device and sync files.
 - Extra paths: the files and folders added in Settings > Vault > Paths or with `kv scrub --add`. One list covers every master: a path under the home folder is kept as `~/...`, and a path missing on a machine is skipped there. Line lengths are kept, so a log of fixed-width records stays readable; a format that carries its own checksums does not belong in this list.
 
@@ -362,7 +362,15 @@ Images, archives, databases and files that start with a zero byte are skipped. A
 ### What it finds
 
 1. Values the vault holds, by fingerprint. `vault/scrub-index.json` has, for each secret, the length of its value, a keyed 32-bit fingerprint of its first eight bytes and a keyed HMAC of the whole (`ScrubIndex`), under a key derived from the vault key. A scan reads only this index, so it never handles a value of any tier. A secret is fingerprinted when the vault is saved with its value in plain: for an owner-only secret that is the save that sets it, before the value is sealed, and its fingerprints stay while the secret lives. Masters share their indexes at the start of a run (`GET /v1/scrub/index`), so a value set on one master is found on the others. An owner-only secret that was sealed before any master fingerprinted it is not found until its value is set again. Each value is indexed as stored and as JSON writes it (escaped once, twice, and with `\/`); a JSON value also by its long members, a URL by its credential parts. Values under 16 bytes, and ones that do not look minted (no digits, a word, a path, a host), are left out, so a vault entry holding `eu-central-1` does not rewrite the transcripts.
-2. Keys in a vendor's format the vault does not hold: the `SecretDetector` rules the composers use for pasted keys, limited to the fixed formats (`sk-...`, `ghp_...`, `xoxb-...`, `AIza...` and the vendor list). A match is taken only when it reads as a key a service minted (`ScrubScanner.plausibleKey`): not shortened or masked (`sk-abc...`, `sk-abc***`), no fixture word in it (`test`, `fake`, `secret`, `my`, a lowercase word between separators), a random run of at least 12 letters and digits, at most 300 bytes; a bare `sk-` key must be one run of 32 or more, and `re_` must have the exact Resend shape. What fails this is left in the file and not saved. Each key that passes is saved first as `scrubbed/found/<VENDOR_NAME>_<fingerprint>`, tier ask, tag `scrubbed`, then replaced. The name comes from the key's format and its fingerprint, so two masters that find the same key save it under the same name. `kv ls --project scrubbed` lists them; rename the ones worth keeping (`kv mv`) and delete the rest (`kv rm`).
+2. Keys in a vendor's format the vault does not hold, as the patterns mode says (below): the `SecretDetector` rules the composers use for pasted keys, limited to the fixed formats (`sk-...`, `ghp_...`, `xoxb-...`, `AIza...` and the vendor list). A match is taken only when it reads as a key a service minted (`ScrubScanner.plausibleKey`): not shortened or masked (`sk-abc...`, `sk-abc***`), no fixture word in it (`test`, `fake`, `secret`, `my`, a lowercase word between separators), a random run of at least 12 letters and digits, at most 300 bytes; a bare `sk-` key must be one run of 32 or more, and `re_` must have the exact Resend shape. What fails this is left in the file and not saved. Each key that passes is saved first as `scrubbed/found/<VENDOR_NAME>_<fingerprint>`, tier ask, tag `scrubbed`, then replaced. The name comes from the key's format and its fingerprint, so two masters that find the same key save it under the same name. `kv ls --project scrubbed` lists them; rename the ones worth keeping (`kv mv`) and delete the rest (`kv rm`).
+
+The patterns mode (`kv scrub --patterns`, sent to the peers with the other settings) decides which of those keys are taken:
+
+- `typed` (the default): only a key found in text you typed. That is a line of Kanban's record of your messages (`~/.kanban-code/human-messages`), a line of rush's `human.jsonl`, or, in the transcript of a session rush keeps no record for, a user record with no delivery marker, task notification or harness wrapper (the rule of the side chat's catch-up, [side-chat.md](side-chat.md)). Such a key is saved and then replaced in every file that holds it, assistant and tool lines included, also in files an earlier run left clean. A key that only agents or tools wrote, such as the ones a local dev stack mints, is left in place and not saved.
+- `on`: every key that passes the check above, wherever it is.
+- `off`: none. Only values the vault holds are replaced.
+
+A prompt an agent wrote for a session it started itself (`claude -p`, a subagent card started without a marker) reads as typed in a transcript, so a key in such a prompt is taken in `typed` mode too.
 
 JWTs, bearer tokens, URL passwords, PEM keys and `password=` style assignments that are not in the vault are not replaced: without a human looking they match too much that is not a secret.
 

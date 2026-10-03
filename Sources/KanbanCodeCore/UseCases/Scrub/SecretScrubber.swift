@@ -4,6 +4,18 @@ import FoundationNetworking
 #endif
 import KanbanCodeRemoteKit
 
+/// What the scrubber does with a key in a vendor's format that the vault
+/// does not hold.
+public enum ScrubPatterns: String, Codable, Sendable, CaseIterable {
+    /// Left alone: only values the vault holds are replaced.
+    case off
+    /// Saved and replaced everywhere when the human typed it into a chat;
+    /// a key that only an agent or a tool wrote is left alone.
+    case typed
+    /// Saved and replaced wherever it is.
+    case on
+}
+
 /// The scrubber's settings: when it runs on its own (once a day at
 /// `hour:minute`, local time) and what it reads beyond the standard files.
 public struct ScrubSchedule: Codable, Sendable, Equatable {
@@ -13,11 +25,9 @@ public struct ScrubSchedule: Codable, Sendable, Equatable {
     /// Extra files and folders to read, with `~` for the home folder, so
     /// one list fits every master. A path missing on a machine is skipped there.
     public var paths: [String]
-    /// Whether a key in a vendor's format that the vault does not hold is
-    /// saved and replaced too. Off, only values the vault holds are replaced.
-    public var patterns: Bool
+    public var patterns: ScrubPatterns
 
-    public init(enabled: Bool = true, hour: Int = 4, minute: Int = 30, paths: [String] = [], patterns: Bool = true) {
+    public init(enabled: Bool = true, hour: Int = 4, minute: Int = 30, paths: [String] = [], patterns: ScrubPatterns = .typed) {
         self.patterns = patterns
         self.enabled = enabled
         self.hour = min(max(hour, 0), 23)
@@ -34,7 +44,14 @@ public struct ScrubSchedule: Codable, Sendable, Equatable {
                   hour: try c.decodeIfPresent(Int.self, forKey: .hour) ?? 4,
                   minute: try c.decodeIfPresent(Int.self, forKey: .minute) ?? 30,
                   paths: try c.decodeIfPresent([String].self, forKey: .paths) ?? [],
-                  patterns: try c.decodeIfPresent(Bool.self, forKey: .patterns) ?? true)
+                  patterns: Self.patterns(in: c))
+    }
+
+    /// The mode by name; a file of an older build holds true or false.
+    private static func patterns(in c: KeyedDecodingContainer<CodingKeys>) -> ScrubPatterns {
+        if let mode = try? c.decodeIfPresent(ScrubPatterns.self, forKey: .patterns) { return mode }
+        if let flag = try? c.decodeIfPresent(Bool.self, forKey: .patterns) { return flag ? .on : .off }
+        return .typed
     }
 
     /// A path as the list keeps it: under the home folder it starts with `~`.
@@ -315,6 +332,7 @@ public actor SecretScrubber {
         var state = loadState()
         let known = state.generation == scanner.generation ? state.files : [:]
         let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
+        let typedText = settings.patterns == .typed ? ScrubTypedText(home: home, kanbanHome: kanbanHome) : nil
         report.filesSeen = files.count
 
         // Scan.
@@ -322,10 +340,12 @@ public actor SecretScrubber {
         var plans: [ScrubFilePlan] = []
         var clean: [String: String] = [:]
         var pending: [ScrubTargets.File] = []
+        var unchanged: [ScrubTargets.File] = []
         for file in files {
             if known[file.path] == file.stamp {
                 report.filesUnchanged += 1
                 clean[file.path] = file.stamp
+                unchanged.append(file)
             } else {
                 pending.append(file)
             }
@@ -337,7 +357,9 @@ public actor SecretScrubber {
                 guard next < pending.count else { return }
                 let file = pending[next]
                 next += 1
-                group.addTask(priority: .utility) { ScrubFilePlan.scan(file, scanner: scanner, now: now, liveWindow: window) }
+                group.addTask(priority: .utility) {
+                    ScrubFilePlan.scan(file, scanner: scanner, now: now, liveWindow: window, typedText: typedText)
+                }
             }
             for _ in 0..<width { add() }
             var done = 0
@@ -354,6 +376,47 @@ public actor SecretScrubber {
                     plans.append(plan)
                 }
                 add()
+            }
+        }
+        if settings.patterns == .typed {
+            // Only a key the human typed somewhere is taken, and then in every file.
+            let typed = plans.reduce(into: Set<String>()) { $0.formUnion($1.typed) }
+            plans = plans.compactMap { plan in
+                var plan = plan
+                plan.matches.removeAll { $0.newValue.map { !typed.contains($0) } ?? false }
+                if plan.matches.isEmpty {
+                    if !plan.live, plan.error == nil { clean[plan.file.path] = plan.file.stamp }
+                    return nil
+                }
+                return plan
+            }
+            // Files the last run left clean were not read: they may hold the key too.
+            var byName: [String: String] = [:]
+            for plan in plans {
+                for m in plan.matches { if let value = m.newValue { byName[m.name] = value } }
+            }
+            let entries = byName.compactMap { name, value in
+                key.fingerprint(name: name, tag: key.tagHex(value), bytes: Array(value.utf8))
+            }
+            if !entries.isEmpty, !unchanged.isEmpty {
+                progress = "looking for \(entries.count) typed keys in \(unchanged.count) unchanged files"
+                let only = ScrubScanner(entries: entries, key: key, patterns: .off)
+                var next = 0
+                await withTaskGroup(of: ScrubFilePlan.self) { group in
+                    func add() {
+                        guard next < unchanged.count else { return }
+                        let file = unchanged[next]
+                        next += 1
+                        group.addTask(priority: .utility) { ScrubFilePlan.scan(file, scanner: only, now: now, liveWindow: window) }
+                    }
+                    for _ in 0..<width { add() }
+                    for await var plan in group {
+                        add()
+                        guard !plan.matches.isEmpty else { continue }
+                        for i in plan.matches.indices { plan.matches[i].newValue = byName[plan.matches[i].name] }
+                        plans.append(plan)
+                    }
+                }
             }
         }
         plans.sort { $0.file.path < $1.file.path }
@@ -403,12 +466,14 @@ public actor SecretScrubber {
                 report.errors.append("stopped at file \(done) of \(plans.count): less than 1 GB of disk free")
             }
             if outOfDisk, !plan.live {
+                clean[plan.file.path] = nil
                 report.skipped += plan.matches.count
                 continue
             }
             var entry = ScrubFileReport(path: plan.file.path, known: 0, new: 0, live: plan.live ? true : nil)
             var applied = plan.matches
             if !dryRun {
+                clean[plan.file.path] = nil
                 if plan.live {
                     applied = []
                 } else {
@@ -542,6 +607,8 @@ public struct ScrubTargets: Sendable {
         }
         roots += ["sessions", "archived_sessions", "history.jsonl"].map { home + "/.codex/" + $0 }
         roots += ["drafts.json", "drafts.json.bak", "box-drafts"].map { home + "/.config/rush/" + $0 }
+        let sessions = home + "/.config/rush/sessions"
+        roots += ((try? FileManager.default.contentsOfDirectory(atPath: sessions)) ?? []).map { "\(sessions)/\($0)/human.jsonl" }
         roots += [home + "/Library/Caches/rush", home + "/.cache/rush"]
         let kanban = (try? FileManager.default.contentsOfDirectory(atPath: kanbanHome)) ?? []
         roots += kanban.filter { $0.hasPrefix("links.json") }.map { kanbanHome + "/" + $0 }
@@ -594,6 +661,78 @@ public struct ScrubTargets: Sendable {
     }
 }
 
+/// Tells the text the human typed from what an agent or a tool wrote, the
+/// way the side chat's catch-up does (docs/side-chat.md): Kanban's record of
+/// his messages and rush's `human.jsonl` hold only his text. A transcript
+/// of a session rush keeps a record for adds nothing to those; in any other
+/// transcript a user record with no delivery marker, task notification or
+/// harness wrapper counts as typed.
+struct ScrubTypedText: Sendable {
+    let kanbanRecords: String
+    let rushSessions: String
+    /// Session ids, and rush's short ids, of the sessions with a rush record.
+    let rushRecorded: Set<String>
+
+    init(home: String, kanbanHome: String) {
+        kanbanRecords = ((kanbanHome + "/human-messages") as NSString).resolvingSymlinksInPath + "/"
+        let sessions = ((home + "/.config/rush/sessions") as NSString).resolvingSymlinksInPath
+        rushSessions = sessions + "/"
+        var recorded = Set<String>()
+        let fm = FileManager.default
+        for id in (try? fm.contentsOfDirectory(atPath: sessions)) ?? [] where fm.fileExists(atPath: "\(sessions)/\(id)/human.jsonl") {
+            recorded.insert(id)
+            for name in ["info.json", "config.json"] {
+                if let data = fm.contents(atPath: "\(sessions)/\(id)/\(name)"),
+                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let session = obj["sessionId"] as? String, !session.isEmpty {
+                    recorded.insert(session)
+                }
+            }
+        }
+        rushRecorded = recorded
+    }
+
+    func isRecord(_ path: String) -> Bool {
+        path.hasPrefix(kanbanRecords) || (path.hasPrefix(rushSessions) && path.hasSuffix("/human.jsonl"))
+    }
+
+    func hasRushRecord(_ path: String) -> Bool {
+        let id = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        return rushRecorded.contains(id) || rushRecorded.contains(String(id.prefix(8)))
+    }
+
+    /// The values of the new finds in `matches` that sit in typed text.
+    func typedKeys(in buf: UnsafeRawBufferPointer, matches: [ScrubMatch], path: String, kind: ScrubFileKind) -> Set<String> {
+        guard kind == .jsonl, matches.contains(where: { $0.newValue != nil }) else { return [] }
+        let record = isRecord(path)
+        if !record, hasRushRecord(path) { return [] }
+        var out = Set<String>()
+        var lineEnd = -1
+        var text: String?
+        for m in matches {
+            guard let value = m.newValue else { continue }
+            if m.offset >= lineEnd {
+                var start = m.offset
+                while start > 0, buf[start - 1] != 0x0A { start -= 1 }
+                lineEnd = m.offset + m.length
+                while lineEnd < buf.count, buf[lineEnd] != 0x0A { lineEnd += 1 }
+                text = Self.typedText(UnsafeRawBufferPointer(rebasing: buf[start..<lineEnd]), record: record)
+            }
+            if let text, text.contains(value) { out.insert(value) }
+        }
+        return out
+    }
+
+    /// What the human typed in one line: the text of a record, or the
+    /// prompt of a transcript's user record.
+    static func typedText(_ line: UnsafeRawBufferPointer, record: Bool) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { return nil }
+        if record { return obj["text"] as? String }
+        if case .typed(let text)? = CardPromptReader.entry(record: obj) { return text }
+        return nil
+    }
+}
+
 /// The secrets found in one file, and how they are replaced.
 struct ScrubFilePlan: Sendable {
     var file: ScrubTargets.File
@@ -601,8 +740,11 @@ struct ScrubFilePlan: Sendable {
     var matches: [ScrubMatch] = []
     var live = false
     var error: String?
+    /// New keys of this file that sit in text the human typed.
+    var typed: Set<String> = []
 
-    static func scan(_ file: ScrubTargets.File, scanner: ScrubScanner, now: Date, liveWindow: TimeInterval) -> ScrubFilePlan {
+    static func scan(_ file: ScrubTargets.File, scanner: ScrubScanner, now: Date, liveWindow: TimeInterval,
+                     typedText: ScrubTypedText? = nil) -> ScrubFilePlan {
         var plan = ScrubFilePlan(file: file, kind: ScrubFileKind.of(path: file.path))
         plan.live = now.timeIntervalSince(file.modified) < liveWindow
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: file.path), options: .alwaysMapped) else {
@@ -614,6 +756,7 @@ struct ScrubFilePlan: Sendable {
             // A file with a zero byte at its start is not text.
             if buf.prefix(1024).contains(0) { return }
             plan.matches = scanner.scan(buf)
+            if let typedText { plan.typed = typedText.typedKeys(in: buf, matches: plan.matches, path: file.path, kind: plan.kind) }
         }
         return plan
     }

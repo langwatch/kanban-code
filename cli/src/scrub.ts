@@ -36,9 +36,11 @@ export interface ScrubReport {
   note?: string;
 }
 
+export type ScrubPatterns = "on" | "off" | "typed";
+
 export interface ScrubStatus {
   machine: string;
-  schedule: { enabled: boolean; hour: number; minute: number; paths?: string[]; patterns?: boolean };
+  schedule: { enabled: boolean; hour: number; minute: number; paths?: string[]; patterns?: ScrubPatterns | boolean };
   running: boolean;
   progress?: string;
   nextRun?: string;
@@ -96,7 +98,9 @@ export function formatScrubStatus(s: ScrubStatus): string {
     `${s.machine}: scrubber ${s.schedule.enabled ? `on, daily at ${two(s.schedule.hour)}:${two(s.schedule.minute)}` : "off"}` +
       (s.running ? `, running (${s.progress ?? "starting"})` : ""),
   ];
-  if (s.schedule.patterns === false) lines.push("  format patterns off: only values the vault holds are replaced");
+  const patterns = s.schedule.patterns;
+  if (patterns === false || patterns === "off") lines.push("  format patterns off: only values the vault holds are replaced");
+  if (patterns === true || patterns === "on") lines.push("  format patterns on: every key in a vendor's format is saved and replaced");
   if (s.schedule.paths?.length) lines.push(`  extra paths: ${s.schedule.paths.join(", ")}`);
   let text = lines.join("\n") + "\n";
   if (s.lastRun) text += formatScrubReport(s.lastRun, 5);
@@ -104,7 +108,7 @@ export function formatScrubStatus(s: ScrubStatus): string {
   return text;
 }
 
-/** `kv scrub [--dry-run] [--status] [--json] [--all] | --at HH:MM | --on | --off | --add PATH | --remove PATH | --patterns on|off | --restore FILE...` */
+/** `kv scrub [--dry-run] [--status] [--json] [--all] | --at HH:MM | --on | --off | --add PATH | --remove PATH | --patterns typed|on|off | --restore FILE...` */
 export async function runScrub(
   args: string[],
   client: ScrubClient,
@@ -127,7 +131,7 @@ export async function runScrub(
   const add = args.indexOf("--add");
   const remove = args.indexOf("--remove");
   const patterns = args.indexOf("--patterns");
-  if (patterns >= 0 && !["on", "off"].includes(args[patterns + 1] ?? "")) throw new Error("kv scrub --patterns on|off");
+  if (patterns >= 0 && !["on", "off", "typed"].includes(args[patterns + 1] ?? "")) throw new Error("kv scrub --patterns typed|on|off");
   if (at >= 0 || on || off || add >= 0 || remove >= 0 || patterns >= 0) {
     const current = (await status()).schedule;
     const next = { ...current, paths: [...(current.paths ?? [])] };
@@ -144,7 +148,7 @@ export async function runScrub(
       next.hour = Number(m[1]);
       next.minute = Number(m[2]);
     }
-    if (patterns >= 0) next.patterns = args[patterns + 1] === "on";
+    if (patterns >= 0) next.patterns = args[patterns + 1] as ScrubPatterns;
     if (on) next.enabled = true;
     if (off) next.enabled = false;
     const { body } = await client.call<ScrubStatus>("PUT", "../scrub/schedule", next);

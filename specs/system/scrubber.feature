@@ -39,6 +39,37 @@ Feature: Secret scrubber
     Then none of them is saved to the vault
     And none of them is replaced
 
+  Scenario: By default only a key I typed is saved
+    Given the patterns mode is "typed"
+    And I pasted an OpenAI key into a card's chat
+    And an agent printed a key its local dev stack minted
+    When the scrubber runs
+    Then the key I pasted is saved under "scrubbed/found" with tier ask
+    And it is replaced in my message and in every assistant and tool line that repeats it
+    And the key the dev stack minted stays in the file and is not saved
+
+  Scenario: Typed text comes from the records of my messages
+    Given a session rush keeps a "human.jsonl" for
+    When the scrubber looks for keys I typed
+    Then it reads that record and Kanban's "human-messages" record
+    And a user record of that session's transcript does not count on its own
+
+  Scenario: A session with no record falls back to its user records
+    Given a transcript of a session with no rush record
+    When the scrubber looks for keys I typed
+    Then a user record with no delivery marker, task notification or harness wrapper counts as typed
+    And a message delivered by another agent does not
+
+  Scenario: A key typed later is replaced in older files too
+    Given an earlier run left a transcript alone that holds a key only an agent wrote
+    When I type that key into a chat and the scrubber runs
+    Then the key is replaced in the older transcript as well
+
+  Scenario: Every key in a vendor's format can be taken
+    Given I ran "kv scrub --patterns on"
+    When the scrubber runs
+    Then a key the vault does not hold is saved and replaced wherever it is
+
   Scenario: Format patterns can be turned off
     Given I ran "kv scrub --patterns off"
     When the scrubber runs

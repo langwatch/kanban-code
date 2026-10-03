@@ -438,7 +438,7 @@ struct SecretScrubberTests {
     func patternsOff() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(atPath: f.home) }
-        await f.scrubber.setSchedule(ScrubSchedule(patterns: false), share: false)
+        await f.scrubber.setSchedule(ScrubSchedule(patterns: .off), share: false)
         let report = await f.scrubber.run(dryRun: false, targets: f.targets)
         #expect(report.replacements == 1)
         #expect(report.newSecrets == 0)
@@ -447,10 +447,104 @@ struct SecretScrubberTests {
         #expect(try await f.vault.store.list().count == 1)
 
         // Turned on again, the file is read again.
-        await f.scrubber.setSchedule(ScrubSchedule(patterns: true), share: false)
+        await f.scrubber.setSchedule(ScrubSchedule(patterns: .on), share: false)
         let again = await f.scrubber.run(dryRun: false, targets: f.targets)
         #expect(again.replacements == 1)
         #expect(again.newSecrets == 1)
+    }
+
+    static let agentOnly = "sk-ant-" + "api03-Hd1Fy5Gj0UsQm7Xw2Lp9Vt4Zk8Rb3Nc6_Ae-TiOoPqWxYz"
+
+    private func write(_ lines: [String], to path: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: URL(fileURLWithPath: path))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: path)
+    }
+
+    @Test("typed mode takes a key the human typed, in every file, and leaves a key only agents wrote")
+    func typedMode() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        #expect(await f.scrubber.schedule().patterns == .typed)
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        try write([
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"I will export \#(Self.vendor) now"}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"KEY=\#(Self.agentOnly)"}]}}"#,
+            #"{"type":"user","message":{"content":"[Message from @worker]: use \#(Self.agentOnly)"}}"#,
+            #"{"type":"user","isSidechain":true,"message":{"content":"take \#(Self.agentOnly)"}}"#,
+            #"{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"done \#(Self.agentOnly)"}}"#,
+        ], to: other)
+
+        let dry = await f.scrubber.run(dryRun: true, targets: f.targets)
+        #expect(dry.newSecrets == 1)
+        let report = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(report.newSecrets == 1)
+        #expect(report.replacements == 3)
+        let text = try String(contentsOfFile: other, encoding: .utf8)
+        #expect(!text.contains(Self.vendor))
+        #expect(text.components(separatedBy: Self.agentOnly).count == 5)
+        #expect(try !String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
+        let names = try await f.vault.store.list().map(\.name)
+        #expect(names.count == 2)
+        #expect(names.contains { $0.hasPrefix("scrubbed/found/ANTHROPIC_API_KEY_") })
+    }
+
+    @Test("typed mode reads Kanban's and rush's records, and trusts them over the transcript of a recorded session")
+    func typedRecords() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        try FileManager.default.removeItem(atPath: f.transcript)
+        let third = "sk-ant-" + "api03-Zk8Rb3Nc6Hd1Fy5Gj0UsQm7Xw2Lp9Vt4_Ae-TiOoPqWxAb"
+        let session = "0a1b2c3d-1111-2222-3333-444455556666"
+        // rush keeps a record for this session: its user records were not all typed by the human.
+        try write([#"{"type":"user","message":{"content":"an agent sent \#(Self.agentOnly)"}}"#],
+                  to: f.home + "/.claude/projects/-p/\(session).jsonl")
+        try write([#"{"at":"2026-01-01T00:00:00.000Z","text":"use \#(Self.vendor) please"}"#],
+                  to: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl")
+        try write([#"{"at":"2026-01-01T00:00:00Z","text":"and \#(third)"}"#],
+                  to: f.home + "/.kanban-code/human-messages/card_1.jsonl")
+        try write([#"{"type":"assistant","message":{"content":"got \#(Self.vendor) and \#(third) and \#(Self.agentOnly)"}}"#],
+                  to: f.home + "/.claude/projects/-p/reply.jsonl")
+
+        let report = await f.scrubber.run(dryRun: false, targets: ScrubTargets.standard(home: f.home, kanbanHome: f.home + "/.kanban-code"))
+        #expect(report.newSecrets == 2)
+        #expect(report.replacements == 4)
+        let reply = try String(contentsOfFile: f.home + "/.claude/projects/-p/reply.jsonl", encoding: .utf8)
+        #expect(!reply.contains(Self.vendor) && !reply.contains(third) && reply.contains(Self.agentOnly))
+        #expect(try !String(contentsOfFile: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl", encoding: .utf8).contains(Self.vendor))
+    }
+
+    @Test("a key typed later is also replaced in files an earlier run left clean")
+    func typedLaterReachesCleanFiles() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let old = f.home + "/.claude/projects/-p/old.jsonl"
+        try write([#"{"type":"assistant","message":{"content":"minted \#(Self.agentOnly)"}}"#], to: old)
+        let first = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(first.newSecrets == 1)
+        #expect(try String(contentsOfFile: old, encoding: .utf8).contains(Self.agentOnly))
+
+        try write([#"{"type":"user","message":{"content":"here it is: \#(Self.agentOnly)"}}"#], to: f.home + "/.claude/projects/-p/new.jsonl")
+        let second = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(second.filesUnchanged == 2)
+        #expect(second.newSecrets == 1)
+        #expect(second.replacements == 2)
+        #expect(try !String(contentsOfFile: old, encoding: .utf8).contains(Self.agentOnly))
+        let third = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(third.filesUnchanged == 3)
+        #expect(third.replacements == 0)
+    }
+
+    @Test("the patterns setting of an older build reads as on or off")
+    func oldPatternsSetting() throws {
+        func mode(_ json: String) throws -> ScrubPatterns {
+            try JSONDecoder().decode(ScrubSchedule.self, from: Data(json.utf8)).patterns
+        }
+        #expect(try mode(#"{"patterns":true}"#) == .on)
+        #expect(try mode(#"{"patterns":false}"#) == .off)
+        #expect(try mode(#"{"patterns":"typed"}"#) == .typed)
+        #expect(try mode("{}") == .typed)
+        #expect(String(decoding: try JSONEncoder().encode(ScrubSchedule(patterns: .on)), as: UTF8.self).contains(#""patterns":"on""#))
     }
 
     @Test("backups go after a week")
