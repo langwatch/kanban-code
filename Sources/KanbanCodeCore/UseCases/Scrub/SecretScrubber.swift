@@ -661,51 +661,26 @@ public struct ScrubTargets: Sendable {
     }
 }
 
-/// Tells the text the human typed from what an agent or a tool wrote, the
-/// way the side chat's catch-up does (docs/side-chat.md): Kanban's record of
-/// his messages and rush's `human.jsonl` hold only his text. A transcript
-/// of a session rush keeps a record for adds nothing to those; in any other
-/// transcript a user record with no delivery marker, task notification or
-/// harness wrapper counts as typed.
+/// Tells the text the human typed from what an agent or a tool wrote:
+/// Kanban's record of his messages and rush's `human.jsonl` hold only his
+/// text (docs/side-chat.md). A transcript never counts on its own, since a
+/// prompt an agent wrote reads there the same as one he typed.
 struct ScrubTypedText: Sendable {
     let kanbanRecords: String
     let rushSessions: String
-    /// Session ids, and rush's short ids, of the sessions with a rush record.
-    let rushRecorded: Set<String>
 
     init(home: String, kanbanHome: String) {
         kanbanRecords = ((kanbanHome + "/human-messages") as NSString).resolvingSymlinksInPath + "/"
-        let sessions = ((home + "/.config/rush/sessions") as NSString).resolvingSymlinksInPath
-        rushSessions = sessions + "/"
-        var recorded = Set<String>()
-        let fm = FileManager.default
-        for id in (try? fm.contentsOfDirectory(atPath: sessions)) ?? [] where fm.fileExists(atPath: "\(sessions)/\(id)/human.jsonl") {
-            recorded.insert(id)
-            for name in ["info.json", "config.json"] {
-                if let data = fm.contents(atPath: "\(sessions)/\(id)/\(name)"),
-                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let session = obj["sessionId"] as? String, !session.isEmpty {
-                    recorded.insert(session)
-                }
-            }
-        }
-        rushRecorded = recorded
+        rushSessions = ((home + "/.config/rush/sessions") as NSString).resolvingSymlinksInPath + "/"
     }
 
     func isRecord(_ path: String) -> Bool {
         path.hasPrefix(kanbanRecords) || (path.hasPrefix(rushSessions) && path.hasSuffix("/human.jsonl"))
     }
 
-    func hasRushRecord(_ path: String) -> Bool {
-        let id = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-        return rushRecorded.contains(id) || rushRecorded.contains(String(id.prefix(8)))
-    }
-
-    /// The values of the new finds in `matches` that sit in typed text.
+    /// The values of the new finds in `matches` that sit in a record's text.
     func typedKeys(in buf: UnsafeRawBufferPointer, matches: [ScrubMatch], path: String, kind: ScrubFileKind) -> Set<String> {
-        guard kind == .jsonl, matches.contains(where: { $0.newValue != nil }) else { return [] }
-        let record = isRecord(path)
-        if !record, hasRushRecord(path) { return [] }
+        guard kind == .jsonl, isRecord(path), matches.contains(where: { $0.newValue != nil }) else { return [] }
         var out = Set<String>()
         var lineEnd = -1
         var text: String?
@@ -716,20 +691,12 @@ struct ScrubTypedText: Sendable {
                 while start > 0, buf[start - 1] != 0x0A { start -= 1 }
                 lineEnd = m.offset + m.length
                 while lineEnd < buf.count, buf[lineEnd] != 0x0A { lineEnd += 1 }
-                text = Self.typedText(UnsafeRawBufferPointer(rebasing: buf[start..<lineEnd]), record: record)
+                let line = Data(UnsafeRawBufferPointer(rebasing: buf[start..<lineEnd]))
+                text = ((try? JSONSerialization.jsonObject(with: line)) as? [String: Any])?["text"] as? String
             }
             if let text, text.contains(value) { out.insert(value) }
         }
         return out
-    }
-
-    /// What the human typed in one line: the text of a record, or the
-    /// prompt of a transcript's user record.
-    static func typedText(_ line: UnsafeRawBufferPointer, record: Bool) -> String? {
-        guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { return nil }
-        if record { return obj["text"] as? String }
-        if case .typed(let text)? = CardPromptReader.entry(record: obj) { return text }
-        return nil
     }
 }
 

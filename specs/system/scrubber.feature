@@ -48,17 +48,10 @@ Feature: Secret scrubber
     And it is replaced in my message and in every assistant and tool line that repeats it
     And the key the dev stack minted stays in the file and is not saved
 
-  Scenario: Typed text comes from the records of my messages
-    Given a session rush keeps a "human.jsonl" for
+  Scenario: Typed text comes only from the records of my messages
     When the scrubber looks for keys I typed
-    Then it reads that record and Kanban's "human-messages" record
-    And a user record of that session's transcript does not count on its own
-
-  Scenario: A session with no record falls back to its user records
-    Given a transcript of a session with no rush record
-    When the scrubber looks for keys I typed
-    Then a user record with no delivery marker, task notification or harness wrapper counts as typed
-    And a message delivered by another agent does not
+    Then it reads Kanban's "human-messages" record and rush's "human.jsonl"
+    And a user record of a transcript does not count on its own
 
   Scenario: A key typed later is replaced in older files too
     Given an earlier run left a transcript alone that holds a key only an agent wrote

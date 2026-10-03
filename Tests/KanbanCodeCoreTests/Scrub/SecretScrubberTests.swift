@@ -227,7 +227,7 @@ struct SecretScrubberTests {
         var targets: ScrubTargets
     }
 
-    private func fixture() async throws -> Fixture {
+    private func fixture(patterns: ScrubPatterns = .on) async throws -> Fixture {
         let home = NSTemporaryDirectory() + "scrub-\(UUID().uuidString.prefix(8))"
         let kanban = home + "/.kanban-code"
         let vault = VaultService(
@@ -246,6 +246,7 @@ struct SecretScrubberTests {
         let old = Date().addingTimeInterval(-3600)
         try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: transcript)
         let scrubber = SecretScrubber(vault: vault, home: home, machine: "test")
+        await scrubber.setSchedule(ScrubSchedule(patterns: patterns), share: false)
         return Fixture(home: home, scrubber: scrubber, vault: vault, transcript: transcript,
                        targets: ScrubTargets(roots: [home + "/.claude/projects"]))
     }
@@ -461,77 +462,69 @@ struct SecretScrubberTests {
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: path)
     }
 
-    @Test("typed mode takes a key the human typed, in every file, and leaves a key only agents wrote")
-    func typedMode() async throws {
-        let f = try await fixture()
-        defer { try? FileManager.default.removeItem(atPath: f.home) }
-        #expect(await f.scrubber.schedule().patterns == .typed)
-        let other = f.home + "/.claude/projects/-p/other.jsonl"
-        try write([
-            #"{"type":"assistant","message":{"content":[{"type":"text","text":"I will export \#(Self.vendor) now"}]}}"#,
-            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"KEY=\#(Self.agentOnly)"}]}}"#,
-            #"{"type":"user","message":{"content":"[Message from @worker]: use \#(Self.agentOnly)"}}"#,
-            #"{"type":"user","isSidechain":true,"message":{"content":"take \#(Self.agentOnly)"}}"#,
-            #"{"type":"user","origin":{"kind":"task-notification"},"message":{"content":"done \#(Self.agentOnly)"}}"#,
-        ], to: other)
-
-        let dry = await f.scrubber.run(dryRun: true, targets: f.targets)
-        #expect(dry.newSecrets == 1)
-        let report = await f.scrubber.run(dryRun: false, targets: f.targets)
-        #expect(report.newSecrets == 1)
-        #expect(report.replacements == 3)
-        let text = try String(contentsOfFile: other, encoding: .utf8)
-        #expect(!text.contains(Self.vendor))
-        #expect(text.components(separatedBy: Self.agentOnly).count == 5)
-        #expect(try !String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
-        let names = try await f.vault.store.list().map(\.name)
-        #expect(names.count == 2)
-        #expect(names.contains { $0.hasPrefix("scrubbed/found/ANTHROPIC_API_KEY_") })
+    private func record(_ f: Fixture, _ text: String, card: String = "card_1") throws {
+        try write([#"{"at":"2026-01-01T00:00:00Z","text":"\#(text)"}"#], to: f.home + "/.kanban-code/human-messages/\(card).jsonl")
     }
 
-    @Test("typed mode reads Kanban's and rush's records, and trusts them over the transcript of a recorded session")
-    func typedRecords() async throws {
-        let f = try await fixture()
-        defer { try? FileManager.default.removeItem(atPath: f.home) }
-        try FileManager.default.removeItem(atPath: f.transcript)
-        let third = "sk-ant-" + "api03-Zk8Rb3Nc6Hd1Fy5Gj0UsQm7Xw2Lp9Vt4_Ae-TiOoPqWxAb"
-        let session = "0a1b2c3d-1111-2222-3333-444455556666"
-        // rush keeps a record for this session: its user records were not all typed by the human.
-        try write([#"{"type":"user","message":{"content":"an agent sent \#(Self.agentOnly)"}}"#],
-                  to: f.home + "/.claude/projects/-p/\(session).jsonl")
-        try write([#"{"at":"2026-01-01T00:00:00.000Z","text":"use \#(Self.vendor) please"}"#],
-                  to: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl")
-        try write([#"{"at":"2026-01-01T00:00:00Z","text":"and \#(third)"}"#],
-                  to: f.home + "/.kanban-code/human-messages/card_1.jsonl")
-        try write([#"{"type":"assistant","message":{"content":"got \#(Self.vendor) and \#(third) and \#(Self.agentOnly)"}}"#],
-                  to: f.home + "/.claude/projects/-p/reply.jsonl")
+    private func standard(_ f: Fixture) -> ScrubTargets {
+        ScrubTargets.standard(home: f.home, kanbanHome: f.home + "/.kanban-code")
+    }
 
-        let report = await f.scrubber.run(dryRun: false, targets: ScrubTargets.standard(home: f.home, kanbanHome: f.home + "/.kanban-code"))
+    @Test("typed mode takes a key in the record of the human's messages, in every file, and leaves any other")
+    func typedMode() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        #expect(ScrubSchedule().patterns == .typed)
+        let third = "sk-ant-" + "api03-Zk8Rb3Nc6Hd1Fy5Gj0UsQm7Xw2Lp9Vt4_Ae-TiOoPqWxAb"
+        // A user record of a transcript does not count on its own: an agent may have written it.
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        try write([
+            #"{"type":"user","message":{"content":"a prompt with \#(Self.agentOnly)"}}"#,
+            #"{"type":"assistant","message":{"content":"got \#(Self.vendor) and \#(third) and \#(Self.agentOnly)"}}"#,
+        ], to: other)
+        try record(f, "use \(Self.vendor) please")
+        try write([#"{"at":"2026-01-01T00:00:00.000Z","text":"and \#(third)"}"#], to: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl")
+
+        let dry = await f.scrubber.run(dryRun: true, targets: standard(f))
+        #expect(dry.newSecrets == 2)
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f))
         #expect(report.newSecrets == 2)
-        #expect(report.replacements == 4)
-        let reply = try String(contentsOfFile: f.home + "/.claude/projects/-p/reply.jsonl", encoding: .utf8)
-        #expect(!reply.contains(Self.vendor) && !reply.contains(third) && reply.contains(Self.agentOnly))
-        #expect(try !String(contentsOfFile: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl", encoding: .utf8).contains(Self.vendor))
+        // The slack token, the key in the fixture transcript, two records, two in the reply.
+        #expect(report.replacements == 6)
+        let text = try String(contentsOfFile: other, encoding: .utf8)
+        #expect(!text.contains(Self.vendor) && !text.contains(third))
+        #expect(text.components(separatedBy: Self.agentOnly).count == 3)
+        #expect(try !String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
+        #expect(try !String(contentsOfFile: f.home + "/.config/rush/sessions/0a1b2c3d/human.jsonl", encoding: .utf8).contains(third))
+        let names = try await f.vault.store.list().map(\.name)
+        #expect(names.count == 3)
+        #expect(names.filter { $0.hasPrefix("scrubbed/found/ANTHROPIC_API_KEY_") }.count == 2)
+    }
+
+    @Test("typed mode saves nothing from transcripts alone")
+    func typedNeedsARecord() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(report.newSecrets == 0)
+        #expect(report.replacements == 1)
+        #expect(try String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
     }
 
     @Test("a key typed later is also replaced in files an earlier run left clean")
     func typedLaterReachesCleanFiles() async throws {
-        let f = try await fixture()
+        let f = try await fixture(patterns: .typed)
         defer { try? FileManager.default.removeItem(atPath: f.home) }
-        let old = f.home + "/.claude/projects/-p/old.jsonl"
-        try write([#"{"type":"assistant","message":{"content":"minted \#(Self.agentOnly)"}}"#], to: old)
-        let first = await f.scrubber.run(dryRun: false, targets: f.targets)
-        #expect(first.newSecrets == 1)
-        #expect(try String(contentsOfFile: old, encoding: .utf8).contains(Self.agentOnly))
-
-        try write([#"{"type":"user","message":{"content":"here it is: \#(Self.agentOnly)"}}"#], to: f.home + "/.claude/projects/-p/new.jsonl")
-        let second = await f.scrubber.run(dryRun: false, targets: f.targets)
-        #expect(second.filesUnchanged == 2)
+        let first = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(first.newSecrets == 0)
+        try record(f, "here it is: \(Self.vendor)")
+        let second = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(second.filesUnchanged == 1)
         #expect(second.newSecrets == 1)
         #expect(second.replacements == 2)
-        #expect(try !String(contentsOfFile: old, encoding: .utf8).contains(Self.agentOnly))
-        let third = await f.scrubber.run(dryRun: false, targets: f.targets)
-        #expect(third.filesUnchanged == 3)
+        #expect(try !String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
+        let third = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(third.filesUnchanged == 2)
         #expect(third.replacements == 0)
     }
 

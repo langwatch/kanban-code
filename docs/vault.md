@@ -366,11 +366,9 @@ Images, archives, databases and files that start with a zero byte are skipped. A
 
 The patterns mode (`kv scrub --patterns`, sent to the peers with the other settings) decides which of those keys are taken:
 
-- `typed` (the default): only a key found in text you typed. That is a line of Kanban's record of your messages (`~/.kanban-code/human-messages`), a line of rush's `human.jsonl`, or, in the transcript of a session rush keeps no record for, a user record with no delivery marker, task notification or harness wrapper (the rule of the side chat's catch-up, [side-chat.md](side-chat.md)). Such a key is saved and then replaced in every file that holds it, assistant and tool lines included, also in files an earlier run left clean. A key that only agents or tools wrote, such as the ones a local dev stack mints, is left in place and not saved.
+- `typed` (the default): only a key found in a record of what you typed: a line of Kanban's record of your messages (`~/.kanban-code/human-messages`, written by the card chat composers on the Mac and the iPhone) or of rush's `human.jsonl` ([side-chat.md](side-chat.md)). Such a key is saved and then replaced in every file that holds it, assistant and tool lines included, also in files an earlier run left clean. A transcript does not count on its own, since a prompt an agent wrote reads there the same as one you typed: a key pasted straight into a terminal session, or one that only agents or tools wrote (the ones a local dev stack mints), is left in place and not saved.
 - `on`: every key that passes the check above, wherever it is.
 - `off`: none. Only values the vault holds are replaced.
-
-A prompt an agent wrote for a session it started itself (`claude -p`, a subagent card started without a marker) reads as typed in a transcript, so a key in such a prompt is taken in `typed` mode too.
 
 JWTs, bearer tokens, URL passwords, PEM keys and `password=` style assignments that are not in the vault are not replaced: without a human looking they match too much that is not a secret.
 
