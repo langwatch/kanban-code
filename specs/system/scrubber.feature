@@ -73,12 +73,28 @@ Feature: Secret scrubber
     Then that file is not changed
     And the report counts it as live
 
-  Scenario: The first run keeps a backup for a week
-    Given no run has changed files on this machine yet
-    When the scrubber runs
-    Then each file it changes is first copied under "~/.kanban-code/scrub-backups/<date>/", as an APFS clone on a Mac and gzipped elsewhere
-    And a file whose copy fails is left unchanged
+  Scenario: A run keeps what it replaced for a week
+    When the scrubber replaces values in a file
+    Then the file, the offset and the bytes that were there are first recorded in "~/.kanban-code/scrub-backups/<date>/ranges.jsonl"
+    And the record takes a few bytes per value, whatever the size of the file
     And a backup folder older than 7 days is deleted
+
+  Scenario: Restore writes back what was replaced
+    Given a file the scrubber changed, with lines appended since
+    When I run "kv scrub --restore <file>"
+    Then the replaced bytes are back
+    And the appended lines are still there
+
+  Scenario: A compressed transcript on a Mac stays compressed
+    Given a transcript stored with APFS transparent compression
+    When the scrubber replaces a value in it
+    Then the file is compressed again, with the same name, size and times
+    And it is left alone when the disk has less than 1 GB free beyond its full size
+
+  Scenario: A run stops before the disk fills
+    Given the disk has less than 1 GB free
+    When the scrubber runs
+    Then it changes no more files and the report says why
 
   Scenario: The schedule covers every master
     When I set the daily time in Settings > Vault

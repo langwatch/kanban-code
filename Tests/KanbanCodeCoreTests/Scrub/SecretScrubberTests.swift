@@ -302,17 +302,13 @@ struct SecretScrubberTests {
         #expect(text.contains("{{vault:\(name)}}"))
         #expect(try await f.vault.store.secret(name)?.value == Self.vendor)
 
+        // The backup holds what was replaced, and puts it back.
         let backup = try #require(report.backupPath)
-        let manifest = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: backup + "/manifest.json")))
-        #expect(manifest.values.contains { $0.hasSuffix("/session.jsonl") })
         #expect(report.backupFiles == 1)
-        // The copy still holds the file as it was.
-        let copy = try #require(manifest.first { $0.value.hasSuffix("/session.jsonl") }?.key)
-        if !copy.hasSuffix(".gz") {
-            let kept = try String(contentsOfFile: backup + "/" + copy, encoding: .utf8)
-            #expect(kept.contains(Self.vendor))
-            #expect(kept.utf8.count == text.utf8.count)
-        }
+        let ranges = try String(contentsOfFile: backup + "/ranges.jsonl", encoding: .utf8)
+        #expect(ranges.split(separator: "\n").count == 2)
+        #expect(!ranges.contains(Self.slack))
+        #expect(try attributes(backup + "/ranges.jsonl").size < 1024)
 
         // Nothing to do the second time, and no second backup.
         let again = await f.scrubber.run(dryRun: false, targets: f.targets)
@@ -320,6 +316,68 @@ struct SecretScrubberTests {
         #expect(again.filesUnchanged == 1)
         #expect(again.backupPath == nil)
     }
+
+    @Test("restore writes back what a run replaced, and nothing else")
+    func restore() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let original = try Data(contentsOf: URL(fileURLWithPath: f.transcript))
+        let before = try attributes(f.transcript)
+        _ = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.transcript)) != original)
+
+        // A session that goes on appends to the file: the restore leaves that alone.
+        let handle = try #require(FileHandle(forWritingAtPath: f.transcript))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{\"type\":\"user\"}\n".utf8))
+        try handle.close()
+
+        let restored = await f.scrubber.restore(paths: [f.transcript])
+        #expect(restored.files == 1 && restored.errors.isEmpty)
+        let back = try Data(contentsOf: URL(fileURLWithPath: f.transcript))
+        #expect(back.prefix(original.count) == original)
+        #expect(back.count == original.count + 16)
+        #expect(try attributes(f.transcript).inode == before.inode)
+        #expect(await f.scrubber.restore(paths: [f.home + "/other.jsonl"]).errors.count == 1)
+    }
+
+    #if canImport(Darwin)
+    @Test("a transcript stored compressed on a Mac is compressed again after the run")
+    func compressedTranscript() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        // Long enough for transparent compression to apply.
+        let filler = String(repeating: #"{"type":"assistant","message":{"content":"nothing to see in this line"}}"# + "\n", count: 4000)
+        let handle = try #require(FileHandle(forWritingAtPath: f.transcript))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(filler.utf8))
+        try handle.close()
+        let packed = f.transcript + ".packed"
+        let ditto = try Process.run(URL(fileURLWithPath: "/usr/bin/ditto"), arguments: ["--hfsCompression", f.transcript, packed])
+        ditto.waitUntilExit()
+        try FileManager.default.removeItem(atPath: f.transcript)
+        try FileManager.default.moveItem(atPath: packed, toPath: f.transcript)
+        let old = Date().addingTimeInterval(-3600)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: f.transcript)
+        try #require(ScrubFilePlan.isCompressed(f.transcript))
+        let before = try attributes(f.transcript)
+
+        let report = await f.scrubber.run(dryRun: false, targets: f.targets)
+        #expect(report.replacements == 2 && report.errors.isEmpty)
+        #expect(ScrubFilePlan.isCompressed(f.transcript))
+        let after = try attributes(f.transcript)
+        #expect(after.size == before.size)
+        #expect(abs(after.modified.timeIntervalSince(before.modified)) < 0.001)
+        let text = try String(contentsOfFile: f.transcript, encoding: .utf8)
+        #expect(!text.contains(Self.slack) && text.contains("{{vault:SLACK_BOT_TOKEN}}"))
+        #expect(!FileManager.default.fileExists(atPath: f.transcript + ".scrub-tmp"))
+
+        // A restore leaves it compressed too.
+        _ = await f.scrubber.restore(paths: [f.transcript])
+        #expect(ScrubFilePlan.isCompressed(f.transcript))
+        #expect(try String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.slack))
+    }
+    #endif
 
     @Test("a file written in the last minutes is left for the next run")
     func liveFile() async throws {

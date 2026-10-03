@@ -51,7 +51,7 @@ describe("kv scrub", () => {
   test("a run report names the backup", () => {
     const text = formatScrubReport({ ...report(false), backupPath: "/home/.kanban-code/scrub-backups/2026-10-03", backupFiles: 7 });
     assert.match(text, /replaced 41 values/);
-    assert.match(text, /backup: 7 files in .*scrub-backups\/2026-10-03 \(deleted after 7 days\)/);
+    assert.match(text, /backup: what was replaced in 7 files, in .*scrub-backups\/2026-10-03 \(deleted after 7 days\)/);
   });
 
   test("--dry-run starts a dry run, waits for it and prints its report", async () => {
@@ -71,6 +71,23 @@ describe("kv scrub", () => {
     await runScrub(["--at", "03:15"], c, () => {}, async () => {});
     const put = c.calls.find((x) => x.method === "PUT");
     assert.deepEqual(put, { method: "PUT", path: "../scrub/schedule", body: { enabled: true, hour: 3, minute: 15, paths: [] } });
+  });
+
+  test("--restore sends absolute paths and fails when a file could not be restored", async () => {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    const c = {
+      async call<T>(method: string, path: string, body?: unknown) {
+        calls.push({ method, path, body });
+        return { status: 200, body: { files: 1, errors: ["/x/b.jsonl: no backup holds it"] } as T };
+      },
+    };
+    let printed = "";
+    const code = await runScrub(["--restore", "/x/a.jsonl", "/x/b.jsonl"], c, (t) => (printed += t), async () => {});
+    assert.equal(code, 1);
+    assert.deepEqual(calls, [{ method: "POST", path: "../scrub/restore", body: { paths: ["/x/a.jsonl", "/x/b.jsonl"] } }]);
+    assert.match(printed, /restored 1 file\n/);
+    assert.match(printed, /no backup holds it/);
+    await assert.rejects(runScrub(["--restore"], c, () => {}, async () => {}), /--restore/);
   });
 
   test("--patterns off keeps the rest of the settings", async () => {

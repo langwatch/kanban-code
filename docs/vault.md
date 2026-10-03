@@ -346,6 +346,7 @@ kv scrub --status      schedule and the last run
 kv scrub --at 03:00 | --on | --off
 kv scrub --add ~/notes/log.txt | --remove ~/notes/log.txt
 kv scrub --patterns off   replace only values the vault holds; nothing new is saved (on by default)
+kv scrub --restore <file>...   write back what the runs of the last week replaced in these files
 ```
 
 ### What it reads
@@ -367,17 +368,18 @@ JWTs, bearer tokens, URL passwords, PEM keys and `password=` style assignments t
 
 ### How it replaces
 
-In place, and every line keeps its byte length: the file keeps its size, its inode and the offset of every line, so the transcript copies on the other master, cached offsets and a process appending to the file are not disturbed. The modification time is put back.
+In place, and every line keeps its byte length: the file keeps its size, its inode (except a compressed file on a Mac, see Safety) and the offset of every line, so the transcript copies on the other master, cached offsets and a process appending to the file are not disturbed. The modification time is put back.
 
 - The value becomes `{{vault:NAME}}`. When that is longer than the value, it becomes `{{vault:#<start of the secret's fingerprint>}}`; `kv ls --json` shows each secret's `fingerprint`.
-- The bytes left over become spaces right after the reference, so no other byte of the file moves and only the bytes of the value are written. An APFS clone of the file then shares every other block with it.
+- The bytes left over become spaces right after the reference, so no other byte of the file moves and only the bytes of the value are written.
 - A `.jsonl` line that parsed before must parse after, and a `.json` file likewise, or it is left alone. A value that starts right after a backslash is left alone.
 
 ### Safety
 
 - A dry run changes nothing and reports counts per folder, per file and per secret name.
 - A run stops changing files when the disk has less than 1 GB free; what is left waits for the next run.
-- The first real run on a machine first copies every file it is about to change into `~/.kanban-code/scrub-backups/<date>/` with a `manifest.json` of the original paths, written as the copies are made. On a Mac the copy is an APFS clone (`cp <file> <path>` restores one), which takes disk only for the blocks the run changes. On Linux it is a gzip (`gunzip -c <file> > <path>`), and a file is left unchanged when the disk has less than 2 GB free beyond its size. These copies hold the secrets: they are deleted after 7 days, and no sync entry covers that folder.
+- Before a run writes a file it records what it is about to replace in `~/.kanban-code/scrub-backups/<date>/ranges.jsonl`: the file, the offset and the bytes that were there, a few bytes per value whatever the size of the file. `kv scrub --restore <file>...` (or `--restore --all-files`) writes them back; bytes appended to the file since stay. These folders hold the secrets: they are deleted after 7 days, and no sync entry covers them.
+- On a Mac, a transcript stored with APFS transparent compression is inflated by macOS when it is written. The run compresses it again (`ditto --hfsCompression`, a new file under the same name and times), and leaves it alone when the disk has less than 1 GB free beyond its full size.
 - Reports (`scrub/last-run.json`, `last-dry-run.json`) and the `[scrub]` log lines carry names, paths and counts, never a value. The dry run report is deleted by the next real run.
 - Files the last run left clean are skipped by size and time until the vault changes.
 

@@ -40,6 +40,7 @@ struct RemotePeerScopeTests {
     @Test("a peer token is refused terminals, secrets and any route not listed")
     func peerRefused() {
         let refused: [(String, [String])] = [
+            ("POST", ["scrub", "restore"]),
             ("GET", ["cards", "c1", "terminal"]),
             ("POST", ["vault", "release"]), ("POST", ["vault", "aws"]), ("POST", ["vault", "request"]),
             ("GET", ["vault", "secrets"]), ("POST", ["vault", "secrets"]), ("PATCH", ["vault", "secrets", "X"]),

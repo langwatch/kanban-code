@@ -261,6 +261,16 @@ public actor SecretScrubber {
         return true
     }
 
+    /// Writes back what the runs of the last week replaced in `paths`
+    /// (every file when nil). Nothing happens while a run is in progress.
+    public func restore(paths: [String]?) -> (files: Int, errors: [String]) {
+        guard !running else { return (0, ["a run is in progress"]) }
+        let wanted = paths.map { Set($0.map { SyncHome.expand($0, home: home) }) }
+        let result = ScrubBackup.restore(root: backupsDirectory, paths: wanted)
+        KanbanCodeLog.info("scrub", "restored \(result.files) files from the backups, \(result.errors.count) errors")
+        return result
+    }
+
     private struct State: Codable {
         var generation = ""
         var firstRealRunAt: Date?
@@ -376,7 +386,7 @@ public actor SecretScrubber {
         // Apply.
         let firstRun = state.firstRealRunAt == nil
         var backup: ScrubBackup?
-        if !dryRun, firstRun, plans.contains(where: { !$0.live }) {
+        if !dryRun, plans.contains(where: { !$0.live }) {
             backup = ScrubBackup(root: backupsDirectory, day: Self.day(now))
             report.backupPath = backup?.directory
         }
@@ -403,14 +413,9 @@ public actor SecretScrubber {
                     applied = []
                 } else {
                     let wanted = plan.matches.filter { !unsaved.contains($0.name) }
-                    if let backup, let failure = backup.add(plan.file.path) {
-                        entry.error = "not changed, the backup failed: \(failure)"
-                        applied = []
-                    } else {
-                        let result = plan.apply(wanted, scanner: scanner)
-                        applied = result.applied
-                        entry.error = result.error
-                    }
+                    let result = plan.apply(wanted, scanner: scanner, backup: backup)
+                    applied = result.applied
+                    entry.error = result.error
                     if applied.count == plan.matches.count {
                         // The file keeps its size and time, so it reads as clean next time.
                         clean[plan.file.path] = plan.file.stamp
@@ -429,8 +434,7 @@ public actor SecretScrubber {
             report.byFolder[folder, default: 0] += applied.count
             report.files.append(entry)
         }
-        // Times are checked again at the end: on a Mac the time of a large
-        // file can move after its descriptor closes.
+        // Times are checked again at the end.
         if !dryRun {
             var moved = 0
             for plan in plans where !plan.live {
@@ -443,8 +447,11 @@ public actor SecretScrubber {
             }
             if moved > 0 { KanbanCodeLog.warn("scrub", "put the modification time back on \(moved) files at the end of the run") }
         }
-        report.backupFiles = backup?.count
-        backup?.writeManifest()
+        if let backup, backup.files > 0 {
+            report.backupFiles = backup.files
+        } else {
+            report.backupPath = nil
+        }
         report.files.sort { ($0.known + $0.new, $1.path) > ($1.known + $1.new, $0.path) }
         report.files = Array(report.files.prefix(200))
         if report.errors.count > 50 { report.errors = Array(report.errors.prefix(50)) + ["and \(report.errors.count - 50) more"] }
@@ -615,13 +622,10 @@ struct ScrubFilePlan: Sendable {
     /// keeps its length, so the file keeps its size, its inode and the
     /// offset of every line, and a process appending to it loses nothing.
     /// The modification time is put back.
-    func apply(_ wanted: [ScrubMatch], scanner: ScrubScanner) -> (applied: [ScrubMatch], error: String?) {
+    func apply(_ wanted: [ScrubMatch], scanner: ScrubScanner, backup: ScrubBackup? = nil) -> (applied: [ScrubMatch], error: String?) {
         guard !wanted.isEmpty else { return ([], nil) }
-        let fd = open(file.path, O_RDWR)
-        guard fd >= 0 else { return ([], "could not be opened for writing") }
-        defer { close(fd) }
         var before = stat()
-        guard fstat(fd, &before) == 0, Int(before.st_size) == file.size else { return ([], "changed since it was scanned") }
+        guard lstat(file.path, &before) == 0, Int(before.st_size) == file.size else { return ([], "changed since it was scanned") }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: file.path), options: .alwaysMapped), data.count == file.size else {
             return ([], "could not be read")
         }
@@ -667,6 +671,14 @@ struct ScrubFilePlan: Sendable {
             }
         }
         guard !patches.isEmpty else { return ([], stale ? "changed since it was scanned" : nil) }
+        // macOS inflates a transparently compressed file when it is opened
+        // for writing, so it needs room for its full size until it is
+        // compressed again below.
+        let compressed = Self.isCompressed(file.path)
+        if compressed, let free = (try? FileManager.default.attributesOfFileSystem(forPath: file.path))?[.systemFreeSize] as? Int,
+           free < SecretScrubber.freeDiskFloor + file.size {
+            return ([], "left alone: not enough free disk to rewrite a compressed file")
+        }
         if kind == .json, data.count <= 512 << 20, (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) != nil {
             var copy = Data(data)
             for patch in patches { copy.replaceSubrange(patch.offset..<(patch.offset + patch.bytes.count), with: patch.bytes) }
@@ -674,33 +686,71 @@ struct ScrubFilePlan: Sendable {
                 return ([], "left alone: it would no longer parse as JSON")
             }
         }
+        if let backup {
+            let old = data.withUnsafeBytes { buf in
+                patches.map { (offset: $0.offset, bytes: Array(buf[$0.offset..<($0.offset + $0.bytes.count)])) }
+            }
+            if let failure = backup.add(file.path, ranges: old) { return ([], "not changed, the backup failed: \(failure)") }
+        }
+        let fd = open(file.path, O_RDWR)
+        guard fd >= 0 else { return ([], "could not be opened for writing") }
+        var times = Self.times(of: before)
+        var failure: String?
         for patch in patches {
             let written = patch.bytes.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, off_t(patch.offset)) }
-            guard written == patch.bytes.count else { return (applied, "a write failed part way: \(String(cString: strerror(errno)))") }
-        }
-        fsync(fd)
-        #if canImport(Darwin)
-        var times = [before.st_atimespec, before.st_mtimespec]
-        let wanted = before.st_mtimespec
-        #else
-        var times = [before.st_atim, before.st_mtim]
-        let wanted = before.st_mtim
-        #endif
-        futimens(fd, &times)
-        // Checked by path as well: a session list sorts by this time.
-        var after = stat()
-        if stat(file.path, &after) == 0 {
-            #if canImport(Darwin)
-            let now = after.st_mtimespec
-            #else
-            let now = after.st_mtim
-            #endif
-            if now.tv_sec != wanted.tv_sec {
-                utimensat(AT_FDCWD, file.path, &times, 0)
-                KanbanCodeLog.warn("scrub", "modification time set again for \(file.path)")
+            if written != patch.bytes.count {
+                failure = "a write failed part way: \(String(cString: strerror(errno)))"
+                break
             }
         }
-        return (applied, nil)
+        fsync(fd)
+        futimens(fd, &times)
+        close(fd)
+        if compressed { Self.recompress(file.path, times: times) }
+        return (applied, failure)
+    }
+
+    static func times(of s: stat) -> [timespec] {
+        #if canImport(Darwin)
+        return [s.st_atimespec, s.st_mtimespec]
+        #else
+        return [s.st_atim, s.st_mtim]
+        #endif
+    }
+
+    /// Whether the file is stored with APFS transparent compression.
+    static func isCompressed(_ path: String) -> Bool {
+        #if canImport(Darwin)
+        var s = stat()
+        return lstat(path, &s) == 0 && s.st_flags & UInt32(UF_COMPRESSED) != 0
+        #else
+        return false
+        #endif
+    }
+
+    /// Compresses a file again after a write inflated it: a compressed
+    /// copy takes its place, with the same times. Left inflated when the
+    /// copy fails or differs in size.
+    static func recompress(_ path: String, times: [timespec]) {
+        #if canImport(Darwin)
+        let copy = path + ".scrub-tmp"
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["--hfsCompression", path, copy]
+        ditto.standardOutput = FileHandle.nullDevice
+        ditto.standardError = FileHandle.nullDevice
+        var original = stat(), made = stat()
+        guard (try? ditto.run()) != nil else { return }
+        ditto.waitUntilExit()
+        guard ditto.terminationStatus == 0, lstat(path, &original) == 0, lstat(copy, &made) == 0,
+              made.st_size == original.st_size else {
+            unlink(copy)
+            return
+        }
+        var times = times
+        utimensat(AT_FDCWD, copy, &times, 0)
+        if rename(copy, path) != 0 { unlink(copy) }
+        #endif
     }
 
     /// Puts a file's modification time back when it moved after the run
@@ -712,74 +762,90 @@ struct ScrubFilePlan: Sendable {
     }
 }
 
-/// Copies of the files the first run changes, under `scrub-backups/<day>/`,
-/// with a manifest of where each came from. On APFS a copy is a clone, which
-/// takes no disk until the original changes and then only the changed
-/// blocks; elsewhere it is a gzip.
+/// The bytes a run replaced, under `scrub-backups/<day>/ranges.jsonl`: one
+/// line per replaced value with the file, the offset and the bytes that were
+/// there. It is all a restore needs, since a run changes nothing else, and
+/// it takes a few bytes per value whatever the size of the file.
 final class ScrubBackup {
     let directory: String
-    private var manifest: [String: String] = [:]
-    var count: Int { manifest.count }
+    private(set) var files = 0
+    static let fileName = "ranges.jsonl"
 
-    /// A gzip is not started with less free disk than this plus the file's size.
-    static let freeDiskFloor = 2 << 30
+    struct Entry: Codable {
+        /// The file.
+        var p: String
+        /// Offset of the bytes in it.
+        var o: Int
+        /// The bytes that were there, base64.
+        var b: String
+    }
 
     init(root: String, day: String) {
         directory = root + "/" + day
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        // A run that stopped early left copies here: they stay, and this one adds to them.
-        if let data = FileManager.default.contents(atPath: directory + "/manifest.json"),
-           let earlier = try? JSONDecoder().decode([String: String].self, from: data) {
-            manifest = earlier
-        }
     }
 
-    /// Copies a file in. Returns why it failed, or nil.
-    func add(_ path: String) -> String? {
-        let base = String(format: "%05d-", manifest.count) + (path as NSString).lastPathComponent
-        #if canImport(Darwin)
-        let clone = directory + "/" + base
-        if clonefile(path, clone, 0) == 0 {
-            chmod(clone, 0o600)
-            manifest[base] = path
-            writeManifest()
-            return nil
+    /// Records what a file held at each range, before the file is written.
+    /// Returns why it failed, or nil.
+    func add(_ path: String, ranges: [(offset: Int, bytes: [UInt8])]) -> String? {
+        var lines = Data()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        for range in ranges {
+            guard let line = try? encoder.encode(Entry(p: path, o: range.offset, b: Data(range.bytes).base64EncodedString())) else {
+                return "could not be encoded"
+            }
+            lines.append(line)
+            lines.append(0x0A)
         }
-        #endif
-        let name = base + ".gz"
-        let target = directory + "/" + name
-        let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
-        if let free = (try? FileManager.default.attributesOfFileSystem(forPath: directory))?[.systemFreeSize] as? Int,
-           free < Self.freeDiskFloor + size {
-            return "not enough free disk"
-        }
-        guard FileManager.default.createFile(atPath: target, contents: nil, attributes: [.posixPermissions: 0o600]),
-              let output = FileHandle(forWritingAtPath: target) else { return "could not create \(name)" }
-        defer { try? output.close() }
-        let gzip = Process()
-        gzip.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        gzip.arguments = ["gzip", "-c", "--", path]
-        gzip.standardOutput = output
-        gzip.standardError = FileHandle.nullDevice
-        do {
-            try gzip.run()
-            gzip.waitUntilExit()
-        } catch {
-            return "gzip did not start"
-        }
-        guard gzip.terminationStatus == 0 else {
-            try? FileManager.default.removeItem(atPath: target)
-            return "gzip exited \(gzip.terminationStatus)"
-        }
-        manifest[name] = path
-        writeManifest()
+        let fd = open(directory + "/" + Self.fileName, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+        guard fd >= 0 else { return "could not open \(Self.fileName)" }
+        defer { close(fd) }
+        let written = lines.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard written == lines.count, fsync(fd) == 0 else { return "could not write \(Self.fileName)" }
+        files += 1
         return nil
     }
 
-    func writeManifest() {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(manifest) else { return }
-        try? VaultFiles.writeAtomically(data, to: directory + "/manifest.json", mode: 0o600)
+    /// Writes the recorded bytes back into `paths` (every file when nil),
+    /// from every backup folder under `root`. A file shorter than a range
+    /// needs is left alone. Returns the files restored and what failed.
+    static func restore(root: String, paths: Set<String>?) -> (files: Int, errors: [String]) {
+        var byFile: [String: [(offset: Int, bytes: Data)]] = [:]
+        let days = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).sorted()
+        for day in days {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: "\(root)/\(day)/\(fileName)"), options: .alwaysMapped) else { continue }
+            for line in data.split(separator: 0x0A) {
+                guard let entry = try? JSONDecoder().decode(Entry.self, from: line), paths?.contains(entry.p) ?? true,
+                      let bytes = Data(base64Encoded: entry.b) else { continue }
+                byFile[entry.p, default: []].append((entry.o, bytes))
+            }
+        }
+        var restored = 0
+        var errors: [String] = []
+        for (path, ranges) in byFile.sorted(by: { $0.key < $1.key }) {
+            let compressed = ScrubFilePlan.isCompressed(path)
+            let fd = open(path, O_RDWR)
+            guard fd >= 0 else { errors.append("\(path): could not be opened"); continue }
+            var before = stat()
+            guard fstat(fd, &before) == 0, ranges.allSatisfy({ $0.offset + $0.bytes.count <= Int(before.st_size) }) else {
+                close(fd)
+                errors.append("\(path): shorter than it was, left alone")
+                continue
+            }
+            var failed = false
+            for range in ranges {
+                let n = range.bytes.withUnsafeBytes { pwrite(fd, $0.baseAddress, $0.count, off_t(range.offset)) }
+                if n != range.bytes.count { failed = true }
+            }
+            fsync(fd)
+            var times = ScrubFilePlan.times(of: before)
+            futimens(fd, &times)
+            close(fd)
+            if compressed { ScrubFilePlan.recompress(path, times: times) }
+            if failed { errors.append("\(path): a write failed") } else { restored += 1 }
+        }
+        for path in paths ?? [] where byFile[path] == nil { errors.append("\(path): no backup holds it") }
+        return (restored, errors)
     }
 }
