@@ -262,6 +262,13 @@ struct SecretScrubberTests {
         let manifest = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: backup + "/manifest.json")))
         #expect(manifest.values.contains { $0.hasSuffix("/session.jsonl") })
         #expect(report.backupFiles == 1)
+        // The copy still holds the file as it was.
+        let copy = try #require(manifest.first { $0.value.hasSuffix("/session.jsonl") }?.key)
+        if !copy.hasSuffix(".gz") {
+            let kept = try String(contentsOfFile: backup + "/" + copy, encoding: .utf8)
+            #expect(kept.contains(Self.vendor))
+            #expect(kept.utf8.count == text.utf8.count)
+        }
 
         // Nothing to do the second time, and no second backup.
         let again = await f.scrubber.run(dryRun: false, targets: f.targets)

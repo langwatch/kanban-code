@@ -626,22 +626,41 @@ struct ScrubFilePlan: Sendable {
     }
 }
 
-/// Compressed copies of the files the first run changes, under
-/// `scrub-backups/<day>/`, with a manifest of where each came from.
+/// Copies of the files the first run changes, under `scrub-backups/<day>/`,
+/// with a manifest of where each came from. On APFS a copy is a clone, which
+/// takes no disk until the original changes and then only the changed
+/// blocks; elsewhere it is a gzip.
 final class ScrubBackup {
     let directory: String
     private var manifest: [String: String] = [:]
     var count: Int { manifest.count }
+
+    /// A gzip is not started with less free disk than this plus the file's size.
+    static let freeDiskFloor = 2 << 30
 
     init(root: String, day: String) {
         directory = root + "/" + day
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
 
-    /// Copies a file in, gzipped. Returns why it failed, or nil.
+    /// Copies a file in. Returns why it failed, or nil.
     func add(_ path: String) -> String? {
-        let name = String(format: "%05d-", manifest.count) + (path as NSString).lastPathComponent + ".gz"
+        let base = String(format: "%05d-", manifest.count) + (path as NSString).lastPathComponent
+        #if canImport(Darwin)
+        let clone = directory + "/" + base
+        if clonefile(path, clone, 0) == 0 {
+            chmod(clone, 0o600)
+            manifest[base] = path
+            return nil
+        }
+        #endif
+        let name = base + ".gz"
         let target = directory + "/" + name
+        let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
+        if let free = (try? FileManager.default.attributesOfFileSystem(forPath: directory))?[.systemFreeSize] as? Int,
+           free < Self.freeDiskFloor + size {
+            return "not enough free disk"
+        }
         guard FileManager.default.createFile(atPath: target, contents: nil, attributes: [.posixPermissions: 0o600]),
               let output = FileHandle(forWritingAtPath: target) else { return "could not create \(name)" }
         defer { try? output.close() }

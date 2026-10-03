@@ -374,7 +374,7 @@ In place, and every line keeps its byte length: the file keeps its size, its ino
 ### Safety
 
 - A dry run changes nothing and reports counts per folder, per file and per secret name.
-- The first real run on a machine first copies every file it is about to change, gzipped, into `~/.kanban-code/scrub-backups/<date>/` with a `manifest.json` of the original paths (`gunzip -c <file> > <path>` restores one). These copies hold the secrets: they are deleted after 7 days, and no sync entry covers that folder.
+- The first real run on a machine first copies every file it is about to change into `~/.kanban-code/scrub-backups/<date>/` with a `manifest.json` of the original paths. On a Mac the copy is an APFS clone (`cp <file> <path>` restores one), which takes disk only for the blocks the run changes. On Linux it is a gzip (`gunzip -c <file> > <path>`), and a file is left unchanged when the disk has less than 2 GB free beyond its size. These copies hold the secrets: they are deleted after 7 days, and no sync entry covers that folder.
 - Reports (`scrub/last-run.json`, `last-dry-run.json`) and the `[scrub]` log lines carry names, paths and counts, never a value.
 - Files the last run left clean are skipped by size and time until the vault changes.
 

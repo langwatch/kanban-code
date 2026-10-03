@@ -64,7 +64,8 @@ Feature: Secret scrubber
   Scenario: The first run keeps a backup for a week
     Given no run has changed files on this machine yet
     When the scrubber runs
-    Then each file it changes is first copied, gzipped, under "~/.kanban-code/scrub-backups/<date>/"
+    Then each file it changes is first copied under "~/.kanban-code/scrub-backups/<date>/", as an APFS clone on a Mac and gzipped elsewhere
+    And a file whose copy fails is left unchanged
     And a backup folder older than 7 days is deleted
 
   Scenario: The schedule covers every master
