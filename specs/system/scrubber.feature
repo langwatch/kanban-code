@@ -38,6 +38,12 @@ Feature: Secret scrubber
     Then it compares fingerprints from "vault/scrub-index.json"
     And the index holds no value and no key
 
+  Scenario: An owner-only secret stays findable after it is sealed
+    Given the owner keys are active
+    When a secret of tier ask is set
+    Then it is fingerprinted in the save that sets it, before its value is sealed
+    And the other master takes the fingerprints from this one at its next run
+
   Scenario: Plain vault entries do not rewrite transcripts
     Given the vault has a secret whose value is "eu-central-1"
     When the scrubber runs

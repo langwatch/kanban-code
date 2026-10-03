@@ -141,6 +141,38 @@ struct SecretScrubberTests {
         #expect(scan("sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", with: s).isEmpty)
     }
 
+    @Test("a sealed secret keeps the fingerprints of the save that set it, and masters share them")
+    func indexOutlivesSealing() async throws {
+        let dir = NSTemporaryDirectory() + "scrub-index-\(UUID().uuidString.prefix(8))"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = VaultStore(directory: dir, keys: MemoryVaultKeyProvider(Age.Identity.generate()))
+        try await store.upsert(VaultSecret(name: "SLACK_BOT_TOKEN", value: Self.slack, tier: .ask))
+        let index = ScrubIndexStore(store: store)
+        let plain = try #require(await store.scrubDocument())
+        await index.absorb(plain)
+        let before = await index.export().secrets["SLACK_BOT_TOKEN"]
+        #expect(before?.fingerprints.isEmpty == false)
+
+        // The document as it reads once the value is sealed to the owner keys.
+        var sealed = plain
+        sealed.secrets["SLACK_BOT_TOKEN"]?.value = ""
+        sealed.secrets["SLACK_BOT_TOKEN"]?.sealed = "sealed-to-the-owner"
+        await index.absorb(sealed)
+        #expect(await index.export().secrets["SLACK_BOT_TOKEN"] == before)
+
+        // Another master that only ever saw it sealed takes the fingerprints from this one.
+        let other = ScrubIndexStore(store: VaultStore(directory: dir + "-other", keys: MemoryVaultKeyProvider(Age.Identity.generate())))
+        await other.merge(await index.export())
+        #expect(await other.export().secrets["SLACK_BOT_TOKEN"] == before)
+
+        var gone = sealed
+        gone.secrets["SLACK_BOT_TOKEN"] = nil
+        await index.absorb(gone)
+        #expect(await index.export().secrets.isEmpty)
+        let file = try String(contentsOfFile: dir + "/scrub-index.json", encoding: .utf8)
+        #expect(!file.contains(Self.slack))
+    }
+
     // MARK: - Runs
 
     private struct Fixture {

@@ -221,19 +221,10 @@ public enum ScrubIndex {
 }
 
 extension VaultStore {
-    /// Fingerprints of every live secret. The one place the scrubber's
-    /// index is built from values; a scan reads the index only.
-    func scrubFingerprints() throws -> [ScrubFingerprint]? {
-        guard let identity = currentIdentity() else { return nil }
-        let key = ScrubKey(identity: identity)
-        return try load().live.flatMap { ScrubIndex.fingerprints(name: $0.name, value: $0.value, key: key) }
-    }
-
-    /// The size and time of `vault.age`, to tell when the index is behind.
-    func vaultStamp() -> String {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: vaultPath) else { return "none" }
-        let time = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return "\(attrs[.size] as? Int ?? 0):\(time)"
+    /// The document as this master can read it: owner-only values that are
+    /// already sealed come back empty.
+    func scrubDocument() -> VaultDocument? {
+        try? load()
     }
 
     func scrubKey() -> ScrubKey? {
@@ -241,50 +232,120 @@ extension VaultStore {
     }
 }
 
-/// `vault/scrub-index.json`: the fingerprints of the vault's values, built
-/// whenever `vault.age` changes. It holds no value and no key.
+/// `vault/scrub-index.json`: the fingerprints of the vault's values, by
+/// secret name. It holds no value and no key.
+///
+/// A secret is fingerprinted whenever the vault is saved with its value in
+/// plain, which for an owner-only secret (tier ask or never, sealed to the
+/// owner keys) is only the save that sets it. Its fingerprints then stay
+/// while the secret lives. Masters share their indexes, so a value set on
+/// one is found on the others, which never saw it in plain.
 public actor ScrubIndexStore {
-    private struct File: Codable {
-        var version = 1
-        var vaultStamp: String
+    public struct Entry: Codable, Sendable, Equatable {
+        /// `updatedAt` of the secret when it was fingerprinted.
+        public var updatedAt: Date
+        public var fingerprints: [ScrubFingerprint]
+    }
+
+    public struct Index: Codable, Sendable, Equatable {
+        public var version = 2
+        public var secrets: [String: Entry] = [:]
+
+        public init(secrets: [String: Entry] = [:]) {
+            self.secrets = secrets
+        }
+    }
+
+    /// The first format: one flat list, rebuilt from the whole vault.
+    private struct FlatIndex: Codable {
         var entries: [ScrubFingerprint]
     }
 
     public let store: VaultStore
     let path: String
-    private var cached: File?
+    private var index: Index?
+    private var observing = false
 
     public init(store: VaultStore) {
         self.store = store
         path = store.directory + "/scrub-index.json"
     }
 
-    /// The index, rebuilt first when the vault changed since it was written.
-    /// Nil on a machine without the vault key.
-    public func current() async -> (entries: [ScrubFingerprint], key: ScrubKey)? {
-        guard let key = await store.scrubKey() else { return nil }
-        let stamp = await store.vaultStamp()
-        if cached == nil {
-            cached = FileManager.default.contents(atPath: path).flatMap { try? JSONDecoder().decode(File.self, from: $0) }
+    private func loaded() -> Index {
+        if let index { return index }
+        var fresh = Index()
+        if let data = FileManager.default.contents(atPath: path) {
+            if let current = try? JSONDecoder.vault.decode(Index.self, from: data) {
+                fresh = current
+            } else if let flat = try? JSONDecoder().decode(FlatIndex.self, from: data) {
+                for (name, prints) in Dictionary(grouping: flat.entries, by: \.name) {
+                    fresh.secrets[name] = Entry(updatedAt: .distantPast, fingerprints: prints)
+                }
+            }
         }
-        if let cached, cached.vaultStamp == stamp { return (cached.entries, key) }
-        guard let entries = try? await store.scrubFingerprints() else { return nil }
-        let file = File(vaultStamp: stamp, entries: entries)
-        cached = file
-        if let data = try? JSONEncoder().encode(file) {
-            try? VaultFiles.writeAtomically(data, to: path, mode: 0o600)
-        }
-        return (entries, key)
+        index = fresh
+        return fresh
     }
 
-    /// Adds the fingerprints of a value saved during a run.
-    public func record(name: String, value: String) async {
-        guard let key = await store.scrubKey(), var file = cached else { return }
-        file.entries += ScrubIndex.fingerprints(name: name, value: value, key: key)
-        file.vaultStamp = await store.vaultStamp()
-        cached = file
-        if let data = try? JSONEncoder().encode(file) {
+    private func persist(_ new: Index) {
+        guard new != index else { return }
+        index = new
+        if let data = try? JSONEncoder.vault.encode(new) {
             try? VaultFiles.writeAtomically(data, to: path, mode: 0o600)
         }
+    }
+
+    /// Follows the vault's saves from now on.
+    public func startObserving() async {
+        guard !observing else { return }
+        observing = true
+        await store.observeSaves { [weak self] doc in
+            Task { await self?.absorb(doc) }
+        }
+    }
+
+    /// Fingerprints every value the document holds in plain, keeps the
+    /// entries of sealed secrets, and drops those of secrets that are gone.
+    func absorb(_ doc: VaultDocument) async {
+        guard let key = await store.scrubKey() else { return }
+        var new = loaded()
+        let live = Dictionary(doc.live.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        for name in new.secrets.keys where live[name] == nil { new.secrets[name] = nil }
+        for (name, secret) in live where !secret.value.isEmpty {
+            if let entry = new.secrets[name], entry.updatedAt == secret.updatedAt { continue }
+            new.secrets[name] = Entry(updatedAt: secret.updatedAt,
+                                      fingerprints: ScrubIndex.fingerprints(name: name, value: secret.value, key: key))
+        }
+        persist(new)
+    }
+
+    /// Fingerprints a value this master is about to save itself.
+    func record(name: String, value: String) async {
+        guard let key = await store.scrubKey() else { return }
+        var new = loaded()
+        new.secrets[name] = Entry(updatedAt: .distantPast, fingerprints: ScrubIndex.fingerprints(name: name, value: value, key: key))
+        persist(new)
+    }
+
+    /// Takes from a peer's index what this one lacks or has older.
+    public func merge(_ peer: Index) {
+        var new = loaded()
+        for (name, theirs) in peer.secrets {
+            if let mine = new.secrets[name], mine.updatedAt >= theirs.updatedAt { continue }
+            new.secrets[name] = theirs
+        }
+        persist(new)
+    }
+
+    public func export() -> Index {
+        loaded()
+    }
+
+    /// The fingerprints to scan with, brought up to date with the vault
+    /// first. Nil on a machine without the vault key.
+    public func current() async -> (entries: [ScrubFingerprint], key: ScrubKey)? {
+        guard let key = await store.scrubKey() else { return nil }
+        if let doc = await store.scrubDocument() { await absorb(doc) }
+        return (loaded().secrets.values.flatMap(\.fingerprints), key)
     }
 }

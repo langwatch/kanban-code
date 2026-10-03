@@ -142,7 +142,8 @@ struct ScrubScanner: Sendable {
                         continue
                     }
                     let tag = key.tagHex(secret.value)
-                    let name = VaultSecretName(key: "\(secret.suggestedName)_\(tag.prefix(8))",
+                    // Named by the value alone, so every master and every run gives it the same name.
+                    let name = VaultSecretName(key: "\(SecretDetector.vendorName(of: secret))_\(tag.prefix(8))",
                                                project: Self.foundProject, environment: Self.foundEnvironment).canonical
                     out.append(ScrubMatch(offset: offset, length: bytes.count, name: name, tag: tag, newValue: secret.value))
                 }

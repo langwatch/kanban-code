@@ -69,7 +69,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 | `POST /v1/cli` | full, peer | `RemoteCLIRequest` → `RemoteCLIResult` (`kanban channel`/`dm` only) |
 | `GET /v1/channels/files`, `GET /v1/channels/files/{path}?offset=` | any | channel files, for the mirror |
 | `PUT /v1/channels/files/{path}` | full, peer | creates a missing channel file, 204 or 409 |
-| `GET /v1/scrub/status`, `POST /v1/scrub/run`, `PUT /v1/scrub/schedule` | full, peer | the secret scrubber (see [`vault.md`](vault.md)) |
+| `GET /v1/scrub/status`, `GET /v1/scrub/index`, `POST /v1/scrub/run`, `PUT /v1/scrub/schedule` | full, peer | the secret scrubber (see [`vault.md`](vault.md)) |
 | `GET /v1/events?all=1` (WebSocket) | any | `RemoteEvent` text frames |
 | `GET /v1/cards/{id}/terminal?session=<name>&cols=80&rows=24` (WebSocket) | full, terminal | terminal bytes |
 | `GET /.well-known/openapi.json` | none | OpenAPI 3.1 of the above |
@@ -118,7 +118,7 @@ The token a master holds for its peer has the `peer` scope, in both directions. 
 - Channels: `POST /v1/cli` (`kanban channel` and `dm` only), `GET` and `PUT /v1/channels/files`.
 - Agent sync: `/v1/sync/state`, `/v1/sync/file`, `/v1/sync/changed`, `POST /v1/optmem/run` (memo `note`, `nap`, `forget`, `wake`, `recall`, `zoom` only).
 - Vault: `GET` and `POST /v1/vault/replica` (the encrypted file), `POST /v1/vault/card-token`, and the audit log mirror (`GET /v1/vault/audit/hashes`, `GET` and `POST /v1/vault/audit/mirror`).
-- Scrubber: `/v1/scrub/status`, `/v1/scrub/run`, `/v1/scrub/schedule`.
+- Scrubber: `/v1/scrub/status`, `/v1/scrub/index`, `/v1/scrub/run`, `/v1/scrub/schedule`.
 
 Refused with 403: the terminal socket, and every vault route that releases, lists or edits a secret. So a peer's token cannot open a shell here.
 

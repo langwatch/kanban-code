@@ -202,8 +202,17 @@ public actor VaultStore {
         return decoded
     }
 
+    /// Called with each document about to be saved, before its owner-only
+    /// values are sealed: the one moment this master holds them in plain.
+    private var saveObserver: (@Sendable (VaultDocument) -> Void)?
+
+    public func observeSaves(_ observer: @escaping @Sendable (VaultDocument) -> Void) {
+        saveObserver = observer
+    }
+
     private func save(_ unsealedDoc: VaultDocument) throws {
         let identity = try ensureIdentity()
+        saveObserver?(unsealedDoc)
         let doc = try sealingOwnerOnly(unsealedDoc)
         if doc.secrets.values.contains(where: { $0.sealed != nil }), !(document?.secrets.values.contains { $0.sealed != nil } ?? false),
            !FileManager.default.fileExists(atPath: preSealBackupPath), let current = FileManager.default.contents(atPath: vaultPath) {

@@ -6,6 +6,7 @@ import KanbanCodeRemoteKit
 ///   GET  /v1/scrub/status     schedule, whether a run is in progress, the last run and dry run
 ///   POST /v1/scrub/run        {"dryRun": true|false}: starts a run, 202; 409 while one runs
 ///   PUT  /v1/scrub/schedule   {"enabled", "hour", "minute"}
+///   GET  /v1/scrub/index      the fingerprint index, for a peer master (never a value)
 ///
 /// For local callers (no token, as `kv scrub` calls them) and for devices
 /// of the full and peer scopes. Answers carry names, paths and counts only.
@@ -18,6 +19,13 @@ enum RemoteScrubRoutes {
         switch (method, rest.dropFirst().first, rest.count) {
         case ("GET", "status", 2):
             return .json(await scrubber.status())
+
+        case ("GET", "index", 2):
+            // Fingerprints only, and only for a paired master or a device of the human.
+            guard device != nil, let data = await scrubber.exportIndex() else {
+                return .error(403, "the index is for peer masters")
+            }
+            return .rawJSON(data)
 
         case ("POST", "run", 2):
             struct Run: Decodable { var dryRun: Bool? }

@@ -140,6 +140,21 @@ public actor SecretScrubber {
         return out
     }
 
+    /// Brings in the fingerprints the peer masters hold: a value set on
+    /// one master is sealed before the others ever see it in plain.
+    func mergePeerIndexes() async {
+        for peer in await peers() where peer.enabled {
+            if let data = try? await Self.call(peer, "GET", "/v1/scrub/index"),
+               let theirs = try? JSONDecoder.vault.decode(ScrubIndexStore.Index.self, from: data) {
+                await index.merge(theirs)
+            }
+        }
+    }
+
+    public func exportIndex() async -> Data? {
+        try? JSONEncoder.vault.encode(await index.export())
+    }
+
     /// Starts a run on every enabled peer master.
     public func runOnPeers(dryRun: Bool) async {
         let body = Data("{\"dryRun\":\(dryRun)}".utf8)
@@ -184,7 +199,11 @@ public actor SecretScrubber {
     /// The daily loop: runs once the day's time has passed, and deletes
     /// backups past their week.
     public func runSchedule() async {
-        lastScheduledDay = (report(named: "last-run")?.startedAt).map(Self.day)
+        await index.startObserving()
+        _ = await index.current()
+        // A machine that has never run waits for the time itself: its first
+        // run is not started by a restart that happens to come after it.
+        lastScheduledDay = (report(named: "last-run")?.startedAt).map(Self.day) ?? Self.day(Date())
         while !Task.isCancelled {
             purgeBackups()
             let s = schedule()
@@ -244,6 +263,8 @@ public actor SecretScrubber {
             running = false
             progress = nil
         }
+        await index.startObserving()
+        await mergePeerIndexes()
         guard let (entries, key) = await index.current() else {
             report.note = "this machine has no vault key: nothing was scanned"
             return finish(report)

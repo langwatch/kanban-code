@@ -35,7 +35,7 @@ enum RemoteScopePolicy {
         "GET attention", "POST attention/presence", "POST attention/*/resolve",
         "GET vault/replica", "POST vault/replica", "POST vault/card-token",
         "GET vault/audit/hashes", "GET vault/audit/mirror", "POST vault/audit/mirror",
-        "GET scrub/status", "POST scrub/run", "PUT scrub/schedule",
+        "GET scrub/status", "GET scrub/index", "POST scrub/run", "PUT scrub/schedule",
         "POST tasks", "GET cards/*", "PATCH cards/*", "DELETE cards/*",
         "GET cards/*/transcript", "GET cards/*/transcript/raw", "GET cards/*/handover",
         "POST cards/*/prompt", "POST cards/*/interrupt", "POST cards/*/resume", "POST cards/*/move",

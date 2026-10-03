@@ -52,6 +52,12 @@ public enum SecretDetector {
         "github_token", "provider_api_key", "stripe_secret_key", "slack_token", "google_api_key", "vendor_api_key",
     ]
 
+    /// The name a credential gets from its format alone (`OPENAI_API_KEY`,
+    /// `GITHUB_TOKEN`), whatever text it was found in.
+    public static func vendorName(of secret: DetectedSecret) -> String {
+        defaultName(kind: secret.kind, value: secret.value, text: "", valueStart: 0)
+    }
+
     /// Secrets in `text` found by the given rules only, placeholders left out.
     public static func find(in text: String, ruleIds: Set<String>) -> [DetectedSecret] {
         matches(in: text, ruleIds: ruleIds).filter { !isPlaceholder($0.value, kind: $0.kind) }
