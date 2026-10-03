@@ -375,6 +375,7 @@ public final class RemoteControlServer: Sendable {
             return .response(.error(401, "unknown or revoked token"))
         }
         if let refusal = RemoteScopePolicy.refusal(scope: device.scope, method: method, rest: Array(seg.dropFirst())) {
+            KanbanCodeLog.warn("remote", "refused \(method) /\(seg.joined(separator: "/")) for \(device.name) (\(device.scope.rawValue) scope)")
             return .response(.error(403, refusal))
         }
         if let scrubber, let response = await RemoteScrubRoutes.handle(
