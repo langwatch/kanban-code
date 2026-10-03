@@ -110,3 +110,81 @@ Feature: Vault projects, environments and card identity
     Then KANBAN_CARD_ID and KANBAN_CARD_TOKEN are set with "tmux new-session -e"
     And the command typed into the pane does not contain them
     And an app or tmux server started from that card's shell drops both before starting other sessions
+
+  # Owner-only secrets
+
+  Scenario: Ask and never secrets are sealed to the owner keys
+    Given owner keys with a recovery key and at least one device key
+    When a secret of tier ask or never is stored
+    Then the vault file holds it only as ciphertext for the owner keys
+    And the machine key alone cannot read its value
+
+  Scenario: Sealing waits for the recovery key and a device
+    Given owner keys with only a device key
+    When a secret of tier ask is stored
+    Then it stays under the machine key
+    And "kv owner" counts it as still plain
+
+  Scenario: An approval on a device is the decryption
+    Given a sealed secret of tier ask
+    When a card asks for it
+    Then the attention request carries the ciphertext
+    And approving on a device opens it after biometry and sends the value with the answer
+    And the card gets the value
+
+  Scenario: An approval without the device key is refused
+    Given an open request for a sealed secret
+    When an approval arrives with no unsealed value
+    Then the answer is refused and the request stays open
+
+  Scenario: A lease keeps the value in memory only
+    Given a sealed secret approved for the card
+    When the card asks again within the lease
+    Then it gets the value with no prompt
+    And after a master restart the next use asks the device again
+
+  Scenario: A device refuses a sealed value under another name
+    Given a request that names secret A with the ciphertext of secret B
+    When the device opens it
+    Then it refuses and sends nothing
+
+  Scenario: Moving a tier re-encrypts
+    When a secret moves from judged to ask
+    Then the master seals it
+    When a sealed secret moves from ask to judged
+    Then the edit needs a device to open it
+    And it is stored under the machine key
+
+  Scenario: Changing the owner keys re-seals every secret on a device
+    Given a second device asks to be enrolled
+    When a device that holds a key approves it
+    Then that device encrypts each sealed secret to the new set
+    And only ciphertext goes back to the master
+
+  Scenario: The recovery key opens a sealed secret with the age tool
+    Given a sealed secret
+    When its ciphertext is decrypted with the recovery identity by "age -d"
+    Then the name and the value come out
+
+  Scenario: AWS credentials are minted on the approving device
+    Given an AWS profile whose long-lived key is sealed
+    When a device approves a request for the profile
+    Then the device calls STS and sends only temporary credentials
+    And it asks for the longest session, falling back to shorter ones the role allows
+    And the master serves later allowed requests from them until 15 minutes before they expire
+
+  Scenario: The audit log is a hash chain
+    When the vault writes an audit line
+    Then the line carries the hash of the line before it
+    And a changed or removed line shows as a break in "kv audit check"
+
+  Scenario: The peer keeps a copy the writer cannot rewrite
+    Given the box pushed its audit lines to the Mac
+    When lines are removed from the box's log
+    Then "kv audit check" on the Mac reports them as missing on the box
+    And the mirror route only adds lines
+
+  Scenario: Device approvals are recorded on the device
+    When a vault request is approved on the Mac
+    Then the Mac records it in its own chained file
+    And an approval a log gives to the Mac with no record there is reported

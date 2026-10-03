@@ -15,6 +15,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { kanbanHome } from "./paths.js";
+import { auditLines, auditProblems, ownerLines, type AuditReport, type OwnerStatus } from "./vault-owner.js";
 
 export const EXIT_DENIED = 77;
 
@@ -56,6 +57,8 @@ export interface VaultSecretInfo {
   aliases?: string[] | null;
   displayLabel?: string | null;
   fingerprint?: string | null;
+  /** The value opens only on the owner's Mac or phone. */
+  sealed?: boolean | null;
 }
 
 export const DEFAULT_ENVIRONMENT = "dev";
@@ -665,7 +668,8 @@ export const USAGE = `kv: secrets from the Kanban Code vault
                                                             plus the manifest's lines; --names lists them instead
   kv get NAME [--reason "..."]                              print one secret (never one that asks)
   kv request NAME[:scope] [NAME..] --reason "..."           ask once for the card's whole task (2 days)
-  kv aws <profile> [--reason "..."]                         AWS credential_process JSON (1 h STS credentials)
+  kv aws <profile> [--reason "..."]                         AWS credential_process JSON (short-lived STS credentials,
+                                                            minted on Rogerio's Mac or phone when he approves)
   kv set KEY [--project P|.] [--env E] [--tier open|judged|ask|never] [--rules "..."] [--label "..."] [--tag t]
          [--reason "..."] [--every-use-asks]                value from stdin; with --project the secret is the
                                                             project's own (. is this folder's), else shared.
@@ -682,6 +686,9 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv tiers <tier> [NAME..] [--value-prefix P].. [--every-use-asks|--leases] --reason "..."
                                                             one change to many secrets, one approval
   kv status                                                 is the vault unlocked here
+  kv owner [--json]                                         the keys that open the ask and never secrets
+  kv audit check [--json]                                   audit log: broken chain, lines missing on a machine
+                                                            (exit 1 on a problem; run it on the Mac)
   kv scrub [--dry-run] [--status] [--all] [--json]          replace secrets in this machine's transcripts with
                                                             {{vault:NAME}} references (dry run: counts only)
   kv scrub --at HH:MM | --on | --off                        the daily run, on every master
@@ -940,7 +947,8 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       for (const s of body) {
         const lease = s.leasePolicy.everyUseAsks ? " every use asks" : "";
         const label = s.project ? `  ${s.displayLabel ?? secretDisplay(s.name)}` : "";
-        out(`${s.name.padEnd(width)}  ${s.tier.padEnd(6)}${lease}${label}${s.rules ? `  ${s.rules.slice(0, 80)}` : ""}\n`);
+        const sealed = s.sealed ? " sealed" : "";
+        out(`${s.name.padEnd(width)}  ${s.tier.padEnd(6)}${sealed}${lease}${label}${s.rules ? `  ${s.rules.slice(0, 80)}` : ""}\n`);
       }
       return 0;
     }
@@ -975,6 +983,21 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       );
       for (const l of body) out(`${secretDisplay(l.secret)}  card ${l.cardId}  until ${l.expiresAt.slice(0, 16)}${l.reason ? `  ${l.reason}` : ""}\n`);
       return 0;
+    }
+
+    case "owner": {
+      const json = takeFlag(args, "--json");
+      const { body } = await client.call<OwnerStatus>("GET", "owner");
+      out(json ? JSON.stringify(body, null, 2) + "\n" : ownerLines(body).join("\n") + "\n");
+      return 0;
+    }
+
+    case "audit": {
+      const json = takeFlag(args, "--json");
+      if (args[0] !== "check") throw new VaultCliError("usage: kv audit check [--json]");
+      const { body } = await client.call<AuditReport>("GET", "audit/check");
+      out(json ? JSON.stringify(body, null, 2) + "\n" : auditLines(body).join("\n") + "\n");
+      return auditProblems(body) === 0 ? 0 : 1;
     }
 
     case "status": {

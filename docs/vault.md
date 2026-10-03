@@ -8,18 +8,74 @@ The vault keeps secrets out of plaintext files. Every master (the Mac app and `k
 
 | File | Content |
 |------|---------|
-| `vault.age` | All secrets, age-encrypted to the vault key, with an HMAC keyed from the same key so only key holders can write a replica |
+| `vault.age` | All secrets, age-encrypted to the vault key, with an HMAC keyed from the same key so only key holders can write a replica. Secrets of tier ask and never are inside it only as ciphertext for the owner keys (see Owner-only secrets) |
 | `leases.json` | Card leases: card, secret, expiry. No values |
-| `audit.jsonl` | Append-only log of this machine: time, card, secret, tier, outcome, decider, command |
+| `audit.jsonl` | Append-only log of this machine: time, card, secret, tier, outcome, decider, command. Each line names the hash of the line before |
+| `audit-mirror/<machine>.jsonl` | The audit log of each peer master, as it pushed it. Lines are only added |
+| `device-key.bin` | Mac only: the Secure Enclave's handle to this Mac's owner key. Useless on another machine and without Touch ID |
+| `device-approvals.jsonl` | Mac only: the vault requests answered on this Mac, chained like the audit log |
+| `backup-before-owner-seal/vault.age` | The file as it was before the first owner-only secret was sealed |
 | `pending.age` | Approval requests still waiting for the human, age-encrypted to the vault key (an add carries the new value). Removed when none are open |
 | `card-tokens.json` | SHA-256 of each card session token and its card. No tokens |
 | `scrub-index.json` | Fingerprints of the values, for the scrubber. No values, no key |
 
-The key is an age X25519 identity. On the box it is `vault/identity.txt` (0600, root). On the Mac it is the login keychain item `io.kanbancode.vault` / `age-identity`, readable without a prompt only by the signed app. To give a machine the key, write it to `~/.kanban-code/vault/identity.import`; the master imports it at start and deletes the file.
+The vault key (the machine key) is an age X25519 identity. On the box it is `vault/identity.txt` (0600, root). On the Mac it is the login keychain item `io.kanbancode.vault` / `age-identity`, readable without a prompt only by the signed app. To give a machine the key, write it to `~/.kanban-code/vault/identity.import`; the master imports it at start and deletes the file.
 
-Recovery without Kanban Code: `age -d -i identity.txt vault.age` gives `{"doc": <base64 JSON>, "auth": ...}`; the `doc` field is the secrets.
+Recovery without Kanban Code: `age -d -i identity.txt vault.age` gives `{"doc": <base64 JSON>, "auth": ...}`; the `doc` field is the secrets. An owner-only secret there has an empty `value` and a `sealed` field: `base64 -d` it into a file and `age -d -i recovery.txt <file>` gives `{"name", "value"}`.
 
 Replicas sync with the configured peers every minute (`GET`/`POST /v1/vault/replica`, peer token). Each secret's newest edit wins; a delete is an edit.
+
+## Owner-only secrets
+
+Two sets of secrets:
+
+| Set | Tiers | Who can read the values |
+|-----|-------|-------------------------|
+| Unattended | open, judged | The machine key: the master releases them on its own |
+| Owner-only | ask, never | The owner keys: a device after Touch ID or Face ID, or the recovery key. The machine key, and so root on the box, reads only ciphertext |
+
+An owner key is one of:
+
+- A device key: P-256, made inside the Secure Enclave of the Mac (Kanban Code) or the iPhone (Kanban Code Mobile), not exportable, usable only after biometry with the fingers or face enrolled when it was made (`.biometryCurrentSet`, no password or passcode fallback). Adding a finger or resetting Face ID ends that key; enrol the device again from another one.
+- The recovery key: an age X25519 identity, shown once in Settings > Vault > Owner Keys and kept only in 1Password.
+
+Each owner-only secret is its own age file, encrypted to every owner key (`piv-p256` stanzas for the devices, an `X25519` stanza for recovery), holding `{"name", "value"}`. It is the `sealed` field of the secret; `value` is empty. The store keeps that invariant on every write: with owner keys in place, a secret of tier ask or never is sealed, also one a replica merge brought in plain.
+
+Sealing starts when the owner keys hold the recovery key and at least one device. Until then ask and never secrets stay as before, and `kv owner` says how many.
+
+### An approval is the decryption
+
+A request that needs a sealed value carries the ciphertext on its attention request (`unseal`). Approving it on the Mac sheet or the phone runs the Secure Enclave key agreement (the Touch ID or Face ID prompt), opens the value on the device, and sends it with the answer (`POST /v1/attention/{id}/resolve`, `unsealed`). The master uses it for that request and forgets it.
+
+- "Approve once": the value is used for that one release.
+- "Approve for this card (2 days)": the master keeps the value in memory until the lease ends, so the card's next uses need no prompt. A restart of the master forgets it: the lease is still there, the next use asks again with "it opens only with your Touch ID or Face ID".
+- An approval that arrives without what the key unlocked (an older app, a banner button on a build without the key) is refused with HTTP 409 and the request stays open.
+- A hook-wrapped command goes on without a sealed secret, as it does for anything that asks.
+
+The device checks what it opens: the name inside the sealed value must be the secret the request names, or one of its earlier names. It refuses otherwise ("the request names X but the sealed value belongs to Y"). The detail sheet lists what the approval does on the device ("Unlocks here", "Mints here", "Owner keys after") from the request's own `unseal` data.
+
+### Tier changes
+
+- Into ask or never: the master still has the value and seals it.
+- Out of ask or never: the edit's approval carries the sealed value, the device opens it, and the master stores it under the machine key. From Settings > Vault the Mac does it with its own key (Touch ID).
+- A new value (`kv set`) for an owner-only secret is sealed as it is stored.
+- Two secrets cannot be merged by `kv mv` when either is sealed: their values cannot be compared.
+
+### Devices
+
+`Settings > Vault > Owner Keys` on the Mac sets it up: "Create Keys" makes the Mac's key and the recovery key, shows the recovery key once, and "Seal N Secrets" (enabled by "I stored the recovery key in 1Password") encrypts every ask and never secret. The recovery key is then gone from the Mac: it was only in the sheet, and the clipboard is cleared when it still holds it. "Check the recovery key" takes a pasted key and tries it on a sealed secret.
+
+A second device (the iPhone: Machines > Vault key > Enrol this phone) sends its public key to a master (`POST /v1/vault/owner/enrol`). That raises an approval, "wants to change the keys that unlock the owner-only secrets", listing every key after the change with its fingerprint. Approve it on a device that already holds a key, after comparing the fingerprint with the one the new device shows: that device opens each sealed secret and encrypts it again to the new set, and only ciphertext goes back. Removing a key works the same way from the Owner Keys sheet.
+
+`kv owner` lists the keys (kind, fingerprint, name) and how many secrets are sealed.
+
+### What it does and does not cover
+
+- Root on the box cannot read an owner-only value at rest, and cannot make a device open one without the human's biometry.
+- A value in use is in the memory of the master and of the command that got it. Leased values and minted AWS credentials stay in the master's memory for their window.
+- The request text (card, reason, command) comes from the master. A master under someone else's control can word a request as it likes; the device shows the names it really unlocks and the role it really assumes.
+- New owner-only values pass through the master in plain on their way in (`kv set`), and are encrypted to the owner keys the vault file lists.
+- Copies of the vault from before the seal still hold the old values under the machine key: the backup folders and the box's restic snapshots (which carry `identity.txt`). `Scripts/vault-owner-cleanup.sh` reports them; `--delete-backups` and `--restic` remove them, each after a typed confirmation at a terminal.
 
 ## Names, projects and environments
 
@@ -47,8 +103,8 @@ Listings also carry a `fingerprint`: an HMAC of the value under the vault key, c
 |------|---------|
 | open | Any card session, logged |
 | judged | Jev reads the command, the reason, the card title, the card's recent prompts and the secret's rules: allow, ask or deny |
-| ask | Rogerio approves on the Mac or the phone |
-| never | Refused |
+| ask | Rogerio approves on the Mac or the phone; the approval unlocks the value with Touch ID or Face ID |
+| never | Refused. Used for the long-lived AWS keys, which only a device opens to mint credentials |
 
 Order, first match wins:
 
@@ -57,6 +113,7 @@ Order, first match wins:
 3. More than 20 releases of the secret in 5 minutes: ask. A yes from the human starts the count again.
 4. The card holds a lease and the secret allows leases: allow.
 5. Open: allow. Judged: the project's own development secret is allowed, anything else goes to Jev (allow needs at least 60% probability; Jev unreachable asks). Ask: the human.
+6. Allowed, but the value is sealed and the master holds no value for it (or it is an AWS profile and the master holds no credentials): ask, for the device to unlock it.
 
 "The project's own development secret" is a judged secret with environment `dev` and no rules, asked for by a process inside a card whose working directory is in that secret's project folder (or a worktree of it, or a subfolder). The master reads the working directory from the process itself (`lsof` on macOS, `/proc` on Linux), not from the request. It is allowed with no Jev call and logged with decider `rule`. Shared secrets, other environments, secrets with rules, with "every use asks", of tier ask or never, AWS profiles, and callers that are OpenClaw agents or outside a card keep the path above.
 
@@ -160,6 +217,8 @@ kv request NAME[:scope] [NAME..] --reason "..."
 kv aws <profile> [--reason "..."]
 kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--reason "..."]   value on stdin (kv add is the same)
 kv ls [--project P] | kv log | kv leases | kv status   (status also says who the master takes you for)
+kv owner                                     the keys of the owner-only secrets, and how many are sealed
+kv audit check                               broken chain, lines missing on a machine (exit 1 on a problem)
 kv mv OLD NEW [--reason "..."] | kv mv --plan renames.json [--dry-run] --reason "..."   asks Rogerio, one approval
 kv rm NAME [NAME..] --reason "..." | kv rm --plan names.txt [--dry-run] --reason "..."   asks Rogerio, one approval
 kv tier NAME <tier> [--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]   asks Rogerio
@@ -190,7 +249,13 @@ The manifest's own lines win over the group. Without a file argument kv uses the
 
 ### AWS
 
-AWS profiles are vault entries named `aws:<profile>` that carry a role (`roleArn`, optional session policies) and the name of the long-lived key secret (tier never, value `{"accessKeyId","secretAccessKey"}`). `kv aws <profile>` makes the master call STS AssumeRole (or GetSessionToken without a role) for one hour and prints the `credential_process` JSON. Use it from `~/.aws/config`:
+AWS profiles are vault entries named `aws:<profile>` that carry a role (`roleArn`, optional session policies) and the name of the long-lived key secret (tier never, value `{"accessKeyId","secretAccessKey"}`). `kv aws <profile>` prints the `credential_process` JSON.
+
+The long-lived key is owner-only, so the master cannot call STS. The approving device does: after biometry it opens the key, calls STS AssumeRole (or GetSessionToken without a role) itself, and sends only the temporary credentials to the master. It asks for the longest session STS grants: 12 hours for a role, then 8, 4, 2 and 1 when STS answers that the length exceeds the role's `MaxSessionDuration` (36 hours, then 12 and 1, for a session token). A role left at the IAM default allows one hour; `aws iam update-role --role-name R --max-session-duration 43200` raises it.
+
+The master keeps the credentials a device minted for a profile in memory until 15 minutes before they expire. While it holds them, a release the policy allows (Jev for a judged profile, a lease or an approval for an ask profile) is served from them with no prompt, and the audit line says "credentials a device minted N min ago". When it holds none, the release asks with "its long-lived AWS key opens only with your Touch ID or Face ID", also for a judged profile Jev allowed. A profile with "every use asks" is minted on every approval and never kept. Before the owner keys exist the master calls STS itself for one hour, as it did.
+
+Use it from `~/.aws/config`:
 
 ```
 [profile lw-dev-vault]
@@ -202,7 +267,23 @@ region = eu-central-1
 
 The `Command` of a `kv aws` request is the tool that asked, not `kv aws <profile>`: kv walks its process ancestry up to the shell or assistant that started the command and sends the outermost tool, with the nearest one after it, e.g. `kubectl get pods -n langwatch  (through: aws eks get-token --cluster-name dev)`. Jev judges that command, and the human sees it in the details and, without a reason, in the notification body.
 
-Credentials a card got are handed to it again while they are valid for more than 15 minutes: no new decision, no Jev call, no STS call, not counted toward the rate limit, one audit line with decider `reuse`. kubectl runs `aws eks get-token` on every call and terraform once per provider, each running `credential_process`; the card holds the first credentials for their whole hour, so the same ones again release nothing new. A profile with "every use asks" is never reused, nor is a caller outside a card. Editing the profile, or a restart of the master, ends the reuse.
+Credentials a card got are handed to it again while they are valid for more than 15 minutes: no new decision, no Jev call, no STS call, not counted toward the rate limit, one audit line with decider `reuse`. kubectl runs `aws eks get-token` on every call and terraform once per provider, each running `credential_process`; the card holds the first credentials for their whole session, so the same ones again release nothing new. A profile with "every use asks" is never reused, nor is a caller outside a card. Editing the profile, or a restart of the master, ends the reuse.
+
+## Audit log
+
+Every line of `audit.jsonl` carries `prev`, the SHA-256 of the line before it as written. A changed or removed line breaks the chain at the next line. Lines from before the chain have no `prev`; the first chained line names the last of them.
+
+A chain alone does not show a log cut at its end, so each master also sends its lines to its peers as it writes them (`VaultAuditSync`): it asks the peer where its mirror stands (`GET /v1/vault/audit/mirror?machine=`), and posts the lines after that (`POST /v1/vault/audit/mirror`), again every minute for what a peer missed while it was off. The peer adds them to `audit-mirror/<machine>.jsonl`. The route only adds: there is none that rewrites or deletes a mirror, and a line that does not follow the mirror's last one is kept and shows as a break. So the Mac holds a copy of the box's log that the box cannot change.
+
+Approvals are also recorded where they were given: `device-approvals.jsonl` on the Mac, and on the phone under Machines > Vault key (kept in the app, shown there), each chained the same way, with the request, the answer, and what the device unlocked or minted.
+
+`kv audit check` (`GET /v1/vault/audit/check`) reports, and exits 1 on any of them:
+
+- a break in this machine's chain, in a mirror, or in the device record;
+- lines a mirror here holds that the machine's own log no longer has ("MISSING box: 2 lines mirrored here are gone from its log"), with the first of them;
+- on the Mac, an approval a log says was given "by mac" with no record of it on the Mac.
+
+Run it on the Mac: that is where the box's mirror is. The same check is the "Check Now" button in the Owner Keys sheet. A peer that does not answer is named in a note and its mirror is checked only against itself.
 
 ## Bash hook
 
