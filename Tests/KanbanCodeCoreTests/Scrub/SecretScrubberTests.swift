@@ -83,8 +83,13 @@ struct SecretScrubberTests {
         #expect(!out.contains(Self.slack))
         let parsed = try #require(try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any])
         let content = (parsed["message"] as? [String: Any])?["content"] as? String
-        #expect(content == #"use {{vault:SLACK_BOT_TOKEN}} for "this""#)
+        let pad = String(repeating: " ", count: Self.slack.utf8.count - "{{vault:SLACK_BOT_TOKEN}}".utf8.count)
+        #expect(content == "use {{vault:SLACK_BOT_TOKEN}}\(pad) for \"this\"")
         #expect(parsed["n"] as? Int == 1)
+        // Only the bytes of the value differ, so nothing else in the file is written.
+        let changed = zip(line.utf8, out.utf8).enumerated().filter { $0.element.0 != $0.element.1 }.map(\.offset)
+        let start = line.utf8.distance(from: line.utf8.startIndex, to: line.range(of: Self.slack)!.lowerBound.samePosition(in: line.utf8)!)
+        #expect(changed.allSatisfy { $0 >= start && $0 < start + Self.slack.utf8.count })
     }
 
     @Test("several values in one string and in nested JSON text")
@@ -96,7 +101,8 @@ struct SecretScrubberTests {
         #expect(out.utf8.count == line.utf8.count)
         let parsed = try #require(try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: String])
         let innerParsed = try #require(try JSONSerialization.jsonObject(with: Data(parsed["result"]!.utf8)) as? [String: String])
-        #expect(innerParsed["out"] == "{{vault:SLACK_BOT_TOKEN}} and {{vault:DB}}")
+        let words = innerParsed["out"]!.split(separator: " ").map(String.init)
+        #expect(words == ["{{vault:SLACK_BOT_TOKEN}}", "and", "{{vault:DB}}"])
         #expect(parsed["after"] == "x")
     }
 

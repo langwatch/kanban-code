@@ -226,8 +226,7 @@ extension ScrubScanner {
     }
 }
 
-/// How a file takes a replacement: where the bytes freed by a shorter
-/// reference go, so every line keeps its length.
+/// The kind of file a replacement lands in: what must still parse after it.
 enum ScrubFileKind: Sendable, Equatable {
     /// One JSON document per line.
     case jsonl
@@ -245,68 +244,26 @@ enum ScrubFileKind: Sendable, Equatable {
 
 enum ScrubRewriter {
     /// A line with its matches replaced by references, the same length as
-    /// before. In JSON the freed bytes become spaces after the closing quote
-    /// of the string the value was in; in text, spaces after the reference.
-    /// `matches` are relative to the line. Returns nil when nothing could be
-    /// replaced, and the matches left out (a value cut by an escape, or too
-    /// short for any reference).
+    /// before: each value becomes its reference followed by spaces, so no
+    /// other byte of the line moves and only the bytes of the value are
+    /// written. `matches` are relative to the line. Returns nil when nothing
+    /// could be replaced, and leaves out a value cut by an escape or too
+    /// short for any reference.
     static func rewrite(line: UnsafeRawBufferPointer, matches: [ScrubMatch], kind: ScrubFileKind) -> (bytes: [UInt8], applied: [ScrubMatch])? {
-        var out: [UInt8] = []
-        out.reserveCapacity(line.count)
+        var out = [UInt8](line)
         var applied: [ScrubMatch] = []
         var cursor = 0
-        var owed = 0
-
-        /// Copies `line[cursor..<end]`, paying the owed spaces after the
-        /// first quote that closes a string.
-        func copy(to end: Int) {
-            guard owed > 0, kind != .text else {
-                out.append(contentsOf: line[cursor..<end])
-                cursor = end
-                return
-            }
-            var i = cursor
-            while i < end {
-                let b = line[i]
-                out.append(b)
-                i += 1
-                if b == 0x5C, i < end {
-                    out.append(line[i])
-                    i += 1
-                } else if b == 0x22 {
-                    out.append(contentsOf: [UInt8](repeating: 0x20, count: owed))
-                    owed = 0
-                    out.append(contentsOf: line[i..<end])
-                    break
-                }
-            }
-            cursor = end
-        }
-
         for m in matches {
             guard m.offset >= cursor, m.offset + m.length <= line.count,
                   let reference = ScrubIndex.reference(name: m.name, tag: m.tag, length: m.length) else { continue }
             // A value right after a backslash starts inside an escape.
             if kind != .text, m.offset > 0, line[m.offset - 1] == 0x5C { continue }
-            copy(to: m.offset)
-            out.append(contentsOf: reference)
-            let spare = m.length - reference.count
-            if kind == .text {
-                out.append(contentsOf: [UInt8](repeating: 0x20, count: spare))
-            } else {
-                owed += spare
-            }
+            let padded = reference + [UInt8](repeating: 0x20, count: m.length - reference.count)
+            out.replaceSubrange(m.offset..<(m.offset + m.length), with: padded)
             cursor = m.offset + m.length
             applied.append(m)
         }
-        guard !applied.isEmpty else { return nil }
-        // The line break stays last.
-        var tail = line.count
-        while tail > cursor, line[tail - 1] == 0x0A || line[tail - 1] == 0x0D { tail -= 1 }
-        copy(to: tail)
-        out.append(contentsOf: [UInt8](repeating: 0x20, count: owed))
-        out.append(contentsOf: line[tail..<line.count])
-        guard out.count == line.count else { return nil }
+        guard !applied.isEmpty, out.count == line.count else { return nil }
         return (out, applied)
     }
 

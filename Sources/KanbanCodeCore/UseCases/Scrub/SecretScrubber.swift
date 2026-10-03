@@ -112,6 +112,8 @@ public actor SecretScrubber {
     /// A file written this recently belongs to a session in progress.
     public var liveWindow: TimeInterval = 600
     public static let backupDays = 7
+    /// A run stops changing files when the disk has less than this free.
+    static let freeDiskFloor = 1 << 30
 
     public init(vault: VaultService, home: String = NSHomeDirectory(), kanbanHome: String? = nil, machine: String,
                 peers: @escaping @Sendable () async -> [PeerConfig] = { [] }) {
@@ -379,9 +381,21 @@ public actor SecretScrubber {
             report.backupPath = backup?.directory
         }
         var done = 0
+        var outOfDisk = false
         for plan in plans {
             done += 1
             if done % 50 == 0 { progress = "\(dryRun ? "counted" : "cleaned") \(done) of \(plans.count) files" }
+            // A run never takes the disk below the floor: what is left waits for the next one.
+            if !dryRun, !plan.live, !outOfDisk,
+               let free = (try? FileManager.default.attributesOfFileSystem(forPath: kanbanHome))?[.systemFreeSize] as? Int,
+               free < Self.freeDiskFloor {
+                outOfDisk = true
+                report.errors.append("stopped at file \(done) of \(plans.count): less than 1 GB of disk free")
+            }
+            if outOfDisk, !plan.live {
+                report.skipped += plan.matches.count
+                continue
+            }
             var entry = ScrubFileReport(path: plan.file.path, known: 0, new: 0, live: plan.live ? true : nil)
             var applied = plan.matches
             if !dryRun {
@@ -414,6 +428,20 @@ public actor SecretScrubber {
             let folder = ScrubTargets.folder(of: plan.file.path, home: home)
             report.byFolder[folder, default: 0] += applied.count
             report.files.append(entry)
+        }
+        // Times are checked again at the end: on a Mac the time of a large
+        // file can move after its descriptor closes.
+        if !dryRun {
+            var moved = 0
+            for plan in plans where !plan.live {
+                if let now = (try? FileManager.default.attributesOfItem(atPath: plan.file.path))?[.modificationDate] as? Date,
+                   abs(now.timeIntervalSince(plan.file.modified)) >= 1, now > plan.file.modified,
+                   (try? FileManager.default.attributesOfItem(atPath: plan.file.path))?[.size] as? Int == plan.file.size {
+                    moved += 1
+                    _ = ScrubFilePlan.restoreTime(plan.file.path, to: plan.file.modified)
+                }
+            }
+            if moved > 0 { KanbanCodeLog.warn("scrub", "put the modification time back on \(moved) files at the end of the run") }
         }
         report.backupFiles = backup?.count
         backup?.writeManifest()
@@ -628,11 +656,13 @@ struct ScrubFilePlan: Sendable {
                 let line = UnsafeRawBufferPointer(rebasing: buf[lineStart..<lineEnd])
                 guard let (bytes, done) = ScrubRewriter.rewrite(line: line, matches: inLine, kind: kind) else { continue }
                 if kind == .jsonl, ScrubRewriter.isJSON(line), !bytes.withUnsafeBytes(ScrubRewriter.isJSON) { continue }
-                patches.append((lineStart, bytes))
-                applied += done.map { m in
+                // Only the bytes of each value are written, so a copy-on-write
+                // backup shares every other block of the file.
+                for m in done {
+                    patches.append((lineStart + m.offset, Array(bytes[m.offset..<(m.offset + m.length)])))
                     var m = m
                     m.offset += lineStart
-                    return m
+                    applied.append(m)
                 }
             }
         }
@@ -651,11 +681,34 @@ struct ScrubFilePlan: Sendable {
         fsync(fd)
         #if canImport(Darwin)
         var times = [before.st_atimespec, before.st_mtimespec]
+        let wanted = before.st_mtimespec
         #else
         var times = [before.st_atim, before.st_mtim]
+        let wanted = before.st_mtim
         #endif
         futimens(fd, &times)
+        // Checked by path as well: a session list sorts by this time.
+        var after = stat()
+        if stat(file.path, &after) == 0 {
+            #if canImport(Darwin)
+            let now = after.st_mtimespec
+            #else
+            let now = after.st_mtim
+            #endif
+            if now.tv_sec != wanted.tv_sec {
+                utimensat(AT_FDCWD, file.path, &times, 0)
+                KanbanCodeLog.warn("scrub", "modification time set again for \(file.path)")
+            }
+        }
         return (applied, nil)
+    }
+
+    /// Puts a file's modification time back when it moved after the run
+    /// wrote it; false when it could not.
+    static func restoreTime(_ path: String, to modified: Date) -> Bool {
+        guard let now = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date else { return false }
+        if abs(now.timeIntervalSince(modified)) < 1 { return true }
+        return (try? FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: path)) != nil
     }
 }
 
@@ -674,6 +727,11 @@ final class ScrubBackup {
     init(root: String, day: String) {
         directory = root + "/" + day
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // A run that stopped early left copies here: they stay, and this one adds to them.
+        if let data = FileManager.default.contents(atPath: directory + "/manifest.json"),
+           let earlier = try? JSONDecoder().decode([String: String].self, from: data) {
+            manifest = earlier
+        }
     }
 
     /// Copies a file in. Returns why it failed, or nil.
@@ -684,6 +742,7 @@ final class ScrubBackup {
         if clonefile(path, clone, 0) == 0 {
             chmod(clone, 0o600)
             manifest[base] = path
+            writeManifest()
             return nil
         }
         #endif
@@ -713,6 +772,7 @@ final class ScrubBackup {
             return "gzip exited \(gzip.terminationStatus)"
         }
         manifest[name] = path
+        writeManifest()
         return nil
     }
 
