@@ -201,7 +201,9 @@ extension MasterEngine {
     /// Answers a request: in its session for questions, plans and
     /// permissions; for a vault approval the vault reads the resolution.
     /// A request another master raised is answered there.
-    public func resolveAttention(id: String, resolution: String, by device: String) async throws {
+    /// `unsealed` is what the answering device opened with its own key,
+    /// for a vault approval that needs it.
+    public func resolveAttention(id: String, resolution: String, by device: String, unsealed: VaultUnsealed? = nil) async throws {
         guard let request = store.state.attentionRequests[id] else {
             throw RemoteHostError.notFound(AttentionAnswerCopy.gone)
         }
@@ -210,12 +212,15 @@ extension MasterEngine {
             if request.resolution == resolution { return }
             throw RemoteHostError.conflict(AttentionAnswerCopy.alreadyAnswered(by: request.resolvedBy, resolution: request.resolution))
         }
+        if request.needsDeviceKey, !AttentionCopy.isDenial(resolution), unsealed == nil {
+            throw RemoteHostError.conflict(AttentionAnswerCopy.needsDeviceKey)
+        }
         if let owner = request.machineId, !store.state.localMachineId.isEmpty, owner != store.state.localMachineId {
             guard let client = await peerClient(machineId: owner) else {
                 throw RemoteHostError.conflict(AttentionAnswerCopy.ownerUnreachable)
             }
             do {
-                try await client.resolveAttention(id: id, resolution: resolution, by: device)
+                try await client.resolveAttention(id: id, resolution: resolution, by: device, unsealed: unsealed)
             } catch let error as RemoteClientError {
                 // Settled on its own master already: it is over here too.
                 switch error {
@@ -231,6 +236,8 @@ extension MasterEngine {
         }
         if request.kind != .vaultApproval {
             try await answerInSession(request, resolution: resolution)
+        } else if let unsealed {
+            await vaultUnsealed?(id, unsealed)
         }
         store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device))
     }

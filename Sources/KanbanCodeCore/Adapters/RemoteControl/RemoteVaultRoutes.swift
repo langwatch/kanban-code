@@ -22,6 +22,12 @@ import KanbanCodeRemoteKit
 ///   POST   /v1/vault/card-token        the card of a session token's hash (peer masters)
 ///   GET    /v1/vault/replica           the encrypted file (peer masters)
 ///   POST   /v1/vault/replica           merge a peer's encrypted file (peer masters)
+///   GET    /v1/vault/owner             the keys of the owner-only secrets, and how many are sealed
+///   POST   /v1/vault/owner/enrol       one more device key (asks the human on an enrolled device)
+///   GET    /v1/vault/audit/check       chain and mirror check of the audit logs
+///   GET    /v1/vault/audit/hashes      the hash of every line of this machine's log (peer masters)
+///   GET    /v1/vault/audit/mirror      where the mirror of ?machine= stands here (peer masters)
+///   POST   /v1/vault/audit/mirror      add a peer's audit lines to its mirror here (peer masters, add only)
 ///
 /// Loopback callers need no token: the master finds the calling process
 /// and the card session it runs in, or takes the card of the session token
@@ -177,6 +183,52 @@ enum RemoteVaultRoutes {
                 return .error(404, "no card session here has that token")
             }
             return .json(VaultPeerCard(cardId: card, title: await vault.broker.cardTitle(card), machine: vault.broker.machine))
+
+        case ("GET", "owner", 1):
+            do {
+                let owner = try await vault.store.owner()
+                let counts = try await vault.store.ownerCounts()
+                return .json(VaultOwnerStatus(
+                    active: owner?.isActive ?? false,
+                    keys: (owner?.recipients ?? []).map { .init(name: $0.name, kind: $0.kind.rawValue, fingerprint: $0.fingerprint, addedAt: $0.addedAt) },
+                    sealed: counts.sealed, plain: counts.plain))
+            } catch {
+                return .error(423, "\(error)")
+            }
+
+        case ("POST", "owner", 2) where path[1] == "enrol":
+            guard loopback || device?.scope == .full else {
+                return .error(403, "a device enrols with a full-scope token")
+            }
+            guard let req = decode(VaultEnrolRequest.self), req.kind != .recovery,
+                  (try? Age.P256Recipient(text: req.publicKey)) != nil else {
+                return .error(400, "body must be {\"name\", \"kind\": \"mac\"|\"phone\", \"publicKey\": \"age1se1...\"}")
+            }
+            let who = await caller(claimedCard: query["card"], sessionId: nil)
+            let r = await vault.broker.enrol(VaultOwnerRecipient(name: req.name, kind: req.kind, publicKey: req.publicKey), caller: who)
+            await vault.replica?.poke()
+            return respond(r)
+
+        case ("GET", "audit", 2) where path[1] == "check":
+            return .json(await vault.audit.check())
+
+        case (_, "audit", 2) where path[1] == "hashes" || path[1] == "mirror":
+            // A device of the human or a paired master, by scope name.
+            guard let device, ["full", "peer"].contains(device.scope.rawValue) else {
+                return .error(403, "the audit mirror is for peer masters only")
+            }
+            if path[1] == "hashes" {
+                return .json(VaultAuditHashes(machine: vault.broker.machine, hashes: await vault.store.auditLines().map(AuditChain.hash)))
+            }
+            if method == "GET" {
+                guard let machine = query["machine"], !machine.isEmpty else { return .error(400, "name the machine: ?machine=") }
+                return .json(await vault.store.mirrorTail(machine: machine))
+            }
+            guard method == "POST", let push = try? JSONDecoder().decode(VaultAuditMirrorPush.self, from: body), !push.machine.isEmpty else {
+                return .error(400, "body must be {\"machine\", \"lines\": [...]}")
+            }
+            guard push.machine != vault.broker.machine else { return .error(400, "a machine does not mirror itself") }
+            return .json(await vault.store.appendMirror(machine: push.machine, lines: push.lines))
 
         case (_, "replica", 1):
             guard let device, device.scope.actsForOwner else {

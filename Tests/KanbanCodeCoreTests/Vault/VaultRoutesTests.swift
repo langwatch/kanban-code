@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 @Suite("Vault routes", .serialized)
 struct VaultRoutesTests {

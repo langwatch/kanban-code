@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 private func tempVaultDir() -> String {
     let path = NSTemporaryDirectory() + "vault-\(UUID().uuidString.prefix(8))"

@@ -618,7 +618,8 @@ public final class RemoteControlServer: Sendable {
                   !resolve.resolution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return .error(400, "body must be {\"resolution\": \"...\"}")
             }
-            try await host.resolveAttention(id: rest[1], resolution: resolve.resolution, by: resolve.by ?? device.name)
+            try await host.resolveAttention(id: rest[1], resolution: resolve.resolution, by: resolve.by ?? device.name,
+                                            unsealed: resolve.unsealed)
             return .noContent
         case (_, 1), (_, 2), (_, 3):
             return .error(405, "method \(method) not allowed on /v1/\(rest.joined(separator: "/"))")

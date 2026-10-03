@@ -35,6 +35,9 @@ public struct AttentionRequest: Codable, Sendable, Equatable, Hashable, Identifi
     public var machineId: String?
     /// The full picture of a vault request, for the detail sheet.
     public var vault: VaultApprovalDetails?
+    /// What the answering device does with its own key before the approval
+    /// counts: unlock owner-only secrets, mint AWS credentials.
+    public var unseal: VaultUnsealChallenge?
 
     public init(
         id: String,
@@ -50,7 +53,8 @@ public struct AttentionRequest: Codable, Sendable, Equatable, Hashable, Identifi
         resolvedBy: String? = nil,
         sessionId: String? = nil,
         machineId: String? = nil,
-        vault: VaultApprovalDetails? = nil
+        vault: VaultApprovalDetails? = nil,
+        unseal: VaultUnsealChallenge? = nil
     ) {
         self.id = id
         self.cardId = cardId
@@ -66,7 +70,11 @@ public struct AttentionRequest: Codable, Sendable, Equatable, Hashable, Identifi
         self.sessionId = sessionId
         self.machineId = machineId
         self.vault = vault
+        self.unseal = unseal
     }
+
+    /// Approving needs this device's vault key (Touch ID or Face ID).
+    public var needsDeviceKey: Bool { !(unseal?.isEmpty ?? true) }
 
     public var isOpen: Bool { resolvedAt == nil }
 }
@@ -77,10 +85,13 @@ public struct AttentionResolveRequest: Codable, Sendable, Equatable {
     /// The device acting, e.g. "phone"; the server fills it from the token
     /// when absent.
     public var by: String?
+    /// What the device unlocked with its own key for this approval.
+    public var unsealed: VaultUnsealed?
 
-    public init(resolution: String, by: String? = nil) {
+    public init(resolution: String, by: String? = nil, unsealed: VaultUnsealed? = nil) {
         self.resolution = resolution
         self.by = by
+        self.unsealed = unsealed
     }
 }
 

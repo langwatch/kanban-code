@@ -85,7 +85,8 @@ public protocol RemoteControlHost: AnyObject, Sendable {
 
     /// Answers an attention request in its session (or for the vault) and
     /// clears it on every device. `by` names the device acting.
-    func resolveAttention(id: String, resolution: String, by: String) async throws
+    /// `unsealed` is what the device opened with its own vault key.
+    func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws
 
     /// Presence the Mac reported, for the escalation of the requests here.
     func reportPresence(_ presence: MacPresence) async
@@ -152,6 +153,10 @@ extension RemoteControlHost {
     public func attention() async -> [AttentionRequest] { [] }
 
     public func resolveAttention(id: String, resolution: String, by: String) async throws {
+        try await resolveAttention(id: id, resolution: resolution, by: by, unsealed: nil)
+    }
+
+    public func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws {
         throw RemoteHostError.notFound("this host has no attention requests")
     }
 

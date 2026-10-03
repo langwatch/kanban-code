@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeRemoteKit
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -12,6 +13,7 @@ public final class VaultService: Sendable {
     public let resolver: LiveVaultCallerResolver
     public let replica: VaultReplicaSync?
     public let cardTokens: VaultCardTokens
+    public let audit: VaultAuditSync
     public let kanbanHome: String
 
     public init(
@@ -22,7 +24,8 @@ public final class VaultService: Sendable {
         cardTitle: @escaping @Sendable (String) async -> String?,
         cardPrompts: @escaping @Sendable (String) async -> CardPrompts? = { _ in nil },
         cardSessions: @escaping @Sendable () async -> [String: String],
-        peers: (@Sendable () async -> [PeerConfig])?
+        peers: (@Sendable () async -> [PeerConfig])?,
+        deviceApprovals: (log: VaultDeviceApprovals, name: String)? = nil
     ) {
         self.kanbanHome = kanbanHome
         let store = VaultStore(directory: VaultStore.defaultDirectory(kanbanHome: kanbanHome), keys: keys)
@@ -35,6 +38,17 @@ public final class VaultService: Sendable {
         resolver = LiveVaultCallerResolver(tokens: tokens, peerTokens: peers.map { VaultPeerTokenVerifier(peers: $0) },
                                            cardSessions: cardSessions)
         replica = peers.map { VaultReplicaSync(store: store, peers: $0) }
+        audit = VaultAuditSync(store: store, machine: machine, peers: peers ?? { [] }, deviceApprovals: deviceApprovals)
+    }
+
+    /// Where a device keeps the record of the approvals answered on it.
+    public static func deviceApprovalsPath(kanbanHome: String) -> String {
+        VaultStore.defaultDirectory(kanbanHome: kanbanHome) + "/device-approvals.jsonl"
+    }
+
+    /// Where a Mac keeps the handle of its Secure Enclave key.
+    public static func deviceKeyPath(kanbanHome: String) -> String {
+        VaultStore.defaultDirectory(kanbanHome: kanbanHome) + "/device-key.bin"
     }
 
     /// What a card's new session gets in its environment so the vault
@@ -65,9 +79,15 @@ public final class VaultService: Sendable {
             unlink(importPath)
         }
         await broker.restore()
+        if let sealed = try? await store.sealPending(), sealed > 0 {
+            KanbanCodeLog.info("vault", "sealed \(sealed) owner-only secret(s) to the owner keys")
+        }
         if let replica {
             Task.detached { await replica.run() }
         }
+        let audit = audit
+        await store.onAuditAppend { Task { await audit.poke() } }
+        Task.detached { await audit.run() }
     }
 }
 

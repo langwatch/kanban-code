@@ -231,7 +231,8 @@ struct AttentionDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Section {
-                ForEach(request.vault?.rows(cardName: item.cardName) ?? [], id: \.self) { row in
+                ForEach((request.vault?.rows(cardName: item.cardName) ?? [])
+                    + (request.unseal?.rows ?? []).map { VaultApprovalDetails.Row($0.label, $0.value) }, id: \.self) { row in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.label)
                             .font(.caption)

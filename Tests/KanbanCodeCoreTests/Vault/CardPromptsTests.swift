@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 private func userLine(_ content: Any, extra: [String: Any] = ["origin": ["kind": "human"], "promptSource": "typed"]) -> String {
     var obj: [String: Any] = ["type": "user", "message": ["role": "user", "content": content]]

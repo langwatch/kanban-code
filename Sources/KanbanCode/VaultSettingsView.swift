@@ -13,6 +13,7 @@ struct VaultSettingsView: View {
     @State private var status = ""
     @State private var selected: String?
     @State private var showAdd = false
+    @State private var showOwner = false
     @State private var error: String?
 
     private var vault: VaultService { AppComposition.shared.vault }
@@ -22,12 +23,13 @@ struct VaultSettingsView: View {
             HStack {
                 Text(status).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                Button("Owner Keys...") { showOwner = true }
                 Button("Add Secret") { showAdd = true }
                 Button("Refresh") { Task { await reload() } }
             }
+            ScrubSettingsSection()
             HSplitView {
                 List(selection: $selected) {
-            ScrubSettingsSection()
                     ForEach(VaultTier.allCases, id: \.self) { tier in
                         let inTier = secrets.filter { $0.tier == tier }
                         if !inTier.isEmpty {
@@ -46,6 +48,9 @@ struct VaultSettingsView: View {
                                         if s.aws != nil {
                                             Text("AWS").font(.caption2).foregroundStyle(.secondary)
                                         }
+                                        if s.sealed == true {
+                                            Image(systemName: "touchid").foregroundStyle(.secondary).help("Opens only on your Mac or phone")
+                                        }
                                     }
                                     .tag(s.name)
                                 }
@@ -59,8 +64,20 @@ struct VaultSettingsView: View {
                     if let name = selected, let s = secrets.first(where: { $0.name == name }) {
                         VaultSecretEditor(secret: s) { edit in
                             Task {
-                                let r = await vault.broker.edit(s.name, edit, caller: settingsCaller, trusted: true)
+                                // Lowering a sealed secret's tier opens it with this Mac's key first.
+                                let challenge = await vault.broker.editChallenge(s.name, edit)
+                                var unsealed: VaultUnsealed?
+                                if !challenge.isEmpty {
+                                    do {
+                                        unsealed = try await MacVaultDevice.key.answer(challenge, reason: "lower the tier of \(s.name)")
+                                    } catch {
+                                        if !MacVaultDevice.isCancel(error) { self.error = "Not changed: \(MacVaultDevice.describe(error))" }
+                                        return
+                                    }
+                                }
+                                let r = await vault.broker.edit(s.name, edit, caller: settingsCaller, trusted: true, unsealed: unsealed)
                                 if r.status != .granted { error = r.message }
+                                await vault.replica?.poke()
                                 await reload()
                             }
                         } onDelete: {
@@ -84,6 +101,7 @@ struct VaultSettingsView: View {
         }
         .padding()
         .task { await reload() }
+        .sheet(isPresented: $showOwner, onDismiss: { Task { await reload() } }) { VaultOwnerSheet() }
         .sheet(isPresented: $showAdd) {
             VaultAddSheet { req in
                 Task {

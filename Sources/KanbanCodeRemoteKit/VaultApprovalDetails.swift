@@ -16,6 +16,8 @@ public struct VaultApprovalDetails: Codable, Sendable, Equatable, Hashable {
         /// Changing a secret's tier, rules, tags, label, lease time or role.
         case edit
         case delete
+        /// Changing which keys open the owner-only secrets.
+        case ownerKeys
     }
 
     /// Who is asking.
@@ -156,6 +158,12 @@ public struct VaultApprovalDetails: Codable, Sendable, Equatable, Hashable {
 /// The words of attention notifications: a short headline naming who asks
 /// for what, and a body that is only the agent's own reason.
 public enum AttentionCopy {
+    /// An answer that refuses: "Deny", "No".
+    public static func isDenial(_ resolution: String) -> Bool {
+        let lower = resolution.lowercased()
+        return lower.hasPrefix("deny") || lower.hasPrefix("no")
+    }
+
     // MARK: Notifications
 
     /// Title and body of a notification for `request`.
@@ -248,6 +256,8 @@ public enum AttentionCopy {
             return "wants to replace \(things)"
         case .delete:
             return "wants to delete \(things)"
+        case .ownerKeys:
+            return "wants to change the keys that unlock the owner-only secrets"
         case .edit:
             let what = details.changes.isEmpty ? "settings" : list(details.changes)
             if labels.count > 1 { return "wants to change the \(what) of \(things)" }

@@ -1,13 +1,15 @@
 import Foundation
 import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 /// Process-wide handles to the adapters the app builds once in
 /// `ContentView.init`. Views that are far from the composition root (the
 /// embedded terminal, the app delegate, chat views) reach tmux and the boxd
 /// supervisor through here instead of building their own adapters.
 enum AppServices {
-    /// Answers an attention request from a Mac notification action.
-    nonisolated(unsafe) static var resolveAttention: (@Sendable (String, String) async -> String?)?
+    /// Answers an attention request from this Mac, with what its vault key
+    /// unlocked for the approval; the problem as text when it was not taken.
+    nonisolated(unsafe) static var resolveAttention: (@Sendable (String, String, VaultUnsealed?) async -> String?)?
     /// Answers the question or plan a card waits on from the chat; false
     /// when it waits on none.
     nonisolated(unsafe) static var answerCard: (@Sendable (String, String) async -> Bool)?

@@ -229,9 +229,21 @@ public struct RemoteClient: Sendable {
     }
 
     /// Answers a decision: `resolution` is one of its options or free text.
-    public func resolveAttention(id: String, resolution: String, by: String? = nil) async throws {
+    public func resolveAttention(id: String, resolution: String, by: String? = nil, unsealed: VaultUnsealed? = nil) async throws {
         try await sendEmpty(makeRequest("POST", "v1/attention/\(Self.escape(id))/resolve",
-                                        body: AttentionResolveRequest(resolution: resolution, by: by)))
+                                        body: AttentionResolveRequest(resolution: resolution, by: by, unsealed: unsealed)))
+    }
+
+    /// The keys of the vault's owner-only secrets on this master.
+    public func vaultOwner() async throws -> VaultOwnerStatus {
+        try await send(makeRequest("GET", "v1/vault/owner"))
+    }
+
+    /// Asks the master to add this device's key to the owner keys. The
+    /// human approves it on a device that already holds one.
+    public func vaultEnrol(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String) async throws {
+        try await sendEmpty(makeRequest("POST", "v1/vault/owner/enrol",
+                                        body: VaultEnrolRequest(name: name, kind: kind, publicKey: publicKey)))
     }
 
     /// Reports where the Mac user is, so a master without a screen knows

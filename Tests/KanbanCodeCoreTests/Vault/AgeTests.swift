@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import KanbanCodeCore
+@testable import KanbanCodeRemoteKit
 
 @Suite("Age file format")
 struct AgeTests {

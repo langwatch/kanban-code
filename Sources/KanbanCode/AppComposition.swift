@@ -202,9 +202,11 @@ final class AppComposition {
                 return CardPromptReader.read(link: link, kanbanHome: NSHomeDirectory() + "/.kanban-code")
             },
             cardSessions: { [weak boardStore] in await MainActor.run { boardStore?.vaultCardSessions() ?? [:] } },
-            peers: { await peerSync.configuredPeers() }
+            peers: { await peerSync.configuredPeers() },
+            deviceApprovals: (MacVaultDevice.approvals, MacVaultDevice.deviceName)
         )
         engine.cardSessionEnvironment = { [vault] cardId in await vault.sessionEnvironment(cardId: cardId) }
+        engine.vaultUnsealed = { [vault] id, unsealed in await vault.broker.deliver(id: id, unsealed: unsealed) }
         Task { await vault.start() }
 
         // Decisions agents wait on: Mac notification, then the phone.
@@ -237,10 +239,10 @@ final class AppComposition {
             let notifications = Self.readNotificationSettings()
             Task { await attentionCenter.configure(settings: notifications.attentionPolicy, phone: notifications.phoneSender) }
         }
-        AppServices.resolveAttention = { [weak engine] id, resolution in
+        AppServices.resolveAttention = { [weak engine] id, resolution, unsealed in
             guard let engine else { return "Kanban Code is still starting." }
             do {
-                try await engine.resolveAttention(id: id, resolution: resolution, by: "mac")
+                try await engine.resolveAttention(id: id, resolution: resolution, by: MacVaultDevice.deviceName, unsealed: unsealed)
                 return nil
             } catch {
                 KanbanCodeLog.warn("attention", "Resolving \(id) from the Mac failed: \(error)")
@@ -256,11 +258,11 @@ final class AppComposition {
                 return false
             }
         }
-        RemoteControlController.shared.attach(
-            engine: engine,
         let scrubber = SecretScrubber(vault: vault, machine: identity.name) { await peerSync.configuredPeers() }
         Task.detached(priority: .utility) { await scrubber.runSchedule() }
         RemoteControlController.shared.scrubber = scrubber
+        RemoteControlController.shared.attach(
+            engine: engine,
             peerServer: BoardPeerLinksServer(store: boardStore, peerSync: peerSync),
             syncEngine: agentSync,
             vault: vault,
@@ -278,9 +280,9 @@ final class AppComposition {
         self.peerSync = peerSync
         self.agentSync = agentSync
         self.vault = vault
+        self.scrubber = scrubber
         self.transcriptMirror = mirror
         self.attentionCenter = attentionCenter
-        self.scrubber = scrubber
         KanbanCodeLog.info("app", "services composed machine=\(identity.name) (\(identity.id))")
     }
 

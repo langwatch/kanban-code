@@ -126,9 +126,9 @@ final class BoardModel {
     }
 
     /// Answers a decision on this master; it clears on every device.
-    func resolveAttention(_ request: AttentionRequest, resolution: String) async throws {
+    func resolveAttention(_ request: AttentionRequest, resolution: String, unsealed: VaultUnsealed? = nil) async throws {
         guard let client else { return }
-        try await client.resolveAttention(id: request.id, resolution: resolution, by: "phone")
+        try await client.resolveAttention(id: request.id, resolution: resolution, by: "phone", unsealed: unsealed)
         attention.removeAll { $0.id == request.id }
     }
 

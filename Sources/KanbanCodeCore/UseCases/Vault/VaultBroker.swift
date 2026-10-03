@@ -336,6 +336,8 @@ public actor VaultBroker {
         case delete(String)
         case rename([VaultRename])
         case deleteMany([String])
+        /// The keys the owner-only secrets are encrypted to, after the change.
+        case owner([VaultOwnerRecipient])
     }
 
     private struct Pending: Sendable {
@@ -373,7 +375,22 @@ public actor VaultBroker {
         var joinedTo: String?
     }
 
+    /// A value a device unlocked for a card lease, kept in memory for the
+    /// lease's time. A restart forgets it and the next use asks again.
+    private struct HeldValue: Sendable {
+        var value: String
+        var until: Date
+    }
+
+    static let lockedWhy = "it opens only with your Touch ID or Face ID"
+    static let mintWhy = "its long-lived AWS key opens only with your Touch ID or Face ID"
+
     private var pending: [String: Pending] = [:]
+    private var held: [String: HeldValue] = [:]
+    /// What a device unlocked for a request, until the request settles.
+    private var delivered: [String: VaultUnsealed] = [:]
+    /// Credentials a device minted for a profile, in memory until they expire.
+    private var awsHeld: [String: IssuedAws] = [:]
     private var awsIssued: [String: IssuedAws] = [:]
     private var hookAllows: [String: Date] = [:]
     private var restoring: Task<Void, Never>?
@@ -458,13 +475,91 @@ public actor VaultBroker {
     }
 
     /// The values of the allowed secrets, under what the caller asked for.
-    private func answer(_ wanted: [Wanted], allowed: Set<String>) -> (values: [String: String], env: [String: String]) {
+    private func answer(_ wanted: [Wanted], allowed: Set<String>, unlocked: [String: String] = [:])
+        -> (values: [String: String], env: [String: String]) {
         var values: [String: String] = [:]
         var env: [String: String] = [:]
         for w in wanted where allowed.contains(w.secret.name) {
-            if w.asEnv { env[w.requested] = w.secret.value } else { values[w.requested] = w.secret.value }
+            let value = w.secret.isSealed ? (unlocked[w.secret.name] ?? "") : w.secret.value
+            if w.asEnv { env[w.requested] = value } else { values[w.requested] = value }
         }
         return (values, env)
+    }
+
+    // MARK: - Owner-only values
+
+    /// The value a device unlocked for a lease on `name`, while it lasts.
+    private func heldValue(_ s: VaultSecret, now: Date) -> String? {
+        for name in s.allNames {
+            guard let h = held[name] else { continue }
+            if h.until > now { return h.value }
+            held[name] = nil
+        }
+        return nil
+    }
+
+    /// The credentials a device minted for a profile, while they stay
+    /// valid for a while and the profile is as it was.
+    private func heldAws(_ s: VaultSecret, now: Date) -> IssuedAws? {
+        guard let role = s.aws, !s.leasePolicy.everyUseAsks, let issued = awsHeld[s.name] else { return nil }
+        guard issued.role == role, issued.secretUpdatedAt == s.updatedAt, issued.expiresAt.timeIntervalSince(now) > awsReuseMargin else {
+            awsHeld[s.name] = nil
+            return nil
+        }
+        return issued
+    }
+
+    /// The sealed long-lived key of an AWS profile, when only a device can
+    /// mint its credentials.
+    private func sealedSource(of s: VaultSecret) async -> VaultSecret? {
+        guard let role = s.aws, let source = (try? await store.secret(role.sourceSecret)) ?? nil, source.isSealed else { return nil }
+        return source
+    }
+
+    /// Whether handing out `s` first needs a device: its sealed value, or
+    /// credentials only the device can mint.
+    private func needsDevice(_ s: VaultSecret, now: Date) async -> String? {
+        if s.aws != nil {
+            guard await sealedSource(of: s) != nil, heldAws(s, now: now) == nil else { return nil }
+            return Self.mintWhy
+        }
+        return s.isSealed && heldValue(s, now: now) == nil ? Self.lockedWhy : nil
+    }
+
+    /// What the answering device has to do with its key for `action`.
+    private func challenge(for action: PendingAction, secrets: [VaultSecret], caller: VaultCaller, now: Date) async -> VaultUnsealChallenge {
+        var out = VaultUnsealChallenge()
+        switch action {
+        case .release, .lease:
+            for s in secrets {
+                if let role = s.aws {
+                    guard let source = await sealedSource(of: s), let item = source.unsealItem, heldAws(s, now: now) == nil else { continue }
+                    out.aws.append(.init(profile: s.name, key: item, role: role, sessionName: "kanban-\(caller.cardId ?? "outside")"))
+                } else if s.isSealed, heldValue(s, now: now) == nil, let item = s.unsealItem {
+                    out.secrets.append(item)
+                }
+            }
+        case .edit(_, let edit):
+            if let tier = edit.tier, tier < .ask {
+                for s in secrets where s.isSealed { if let item = s.unsealItem { out.secrets.append(item) } }
+            }
+        case .owner(let recipients):
+            let sealed = ((try? await store.sealedItems()) ?? [])
+            if !sealed.isEmpty {
+                out.reseal = sealed
+                out.resealTo = recipients
+            }
+        case .add, .delete, .deleteMany, .rename:
+            break
+        }
+        return out
+    }
+
+    /// What the device unlocked for an open request. The request settles
+    /// with it once its attention request is resolved.
+    public func deliver(id: String, unsealed: VaultUnsealed) {
+        guard let p = pending[id], p.result == nil else { return }
+        delivered[p.joinedTo ?? id] = unsealed
     }
 
     // MARK: - Release
@@ -523,6 +618,21 @@ public actor VaultBroker {
             }
         }
 
+        // An owner-only value, or AWS credentials from a sealed key, come
+        // from a device even when the policy allows the release.
+        var unlocked: [String: String] = [:]
+        var free: [(VaultSecret, VaultDecider, String)] = []
+        for entry in allowed {
+            let s = entry.0
+            if let why = await needsDevice(s, now: now) {
+                asks.append((s, why))
+            } else {
+                if s.isSealed, let value = heldValue(s, now: now) { unlocked[s.name] = value }
+                free.append(entry)
+            }
+        }
+        allowed = free
+
         // A hook-wrapped command goes on without what it was not given:
         // that is a skip, not a refusal of anything the agent asked for.
         for (s, why) in denies {
@@ -537,7 +647,7 @@ public actor VaultBroker {
             for (s, by, why) in allowed {
                 await audit(s, req: req, caller: caller, outcome: .allowed, decider: by, detail: why)
             }
-            let given = answer(wanted, allowed: Set(allowed.map(\.0.name)))
+            let given = answer(wanted, allowed: Set(allowed.map(\.0.name)), unlocked: unlocked)
             let left = (asks.map(\.0.name) + denies.map(\.0.name)).sorted()
             let skipped = wanted.filter { left.contains($0.secret.name) }.map(\.requested).sorted()
             let message = left.isEmpty ? "released" : "went on without \(left.joined(separator: ", ")) (kv request \(left.joined(separator: " ")) --reason \"...\" to ask for them)"
@@ -553,7 +663,8 @@ public actor VaultBroker {
             return .denied("denied:\n  \(lines)")
         }
         if asks.isEmpty {
-            return await grant(allowed.map { ($0.0, $0.1, $0.2) }, wanted: wanted, req: req, caller: caller, now: now)
+            return await grant(allowed.map { ($0.0, $0.1, $0.2) }, wanted: wanted, req: req, caller: caller, now: now,
+                               unlocked: unlocked)
         }
         return await ask(
             action: .release(req, asks.map(\.0.name)),
@@ -658,41 +769,66 @@ public actor VaultBroker {
     /// next `kv aws` is decided again.
     public func forgetIssuedAws() {
         awsIssued = [:]
+        awsHeld = [:]
     }
 
-    static func awsExpiry(_ text: String) -> Date? {
-        let plain = ISO8601DateFormatter()
-        if let date = plain.date(from: text) { return date }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text)
+    /// Drops every value and credential a device unlocked that is still
+    /// held in memory.
+    public func forgetHeld() {
+        held = [:]
+        awsHeld = [:]
     }
 
     private func grant(_ allowed: [(VaultSecret, VaultDecider, String)], wanted: [Wanted], req: VaultReleaseRequest,
-                       caller: VaultCaller, now: Date, requestId: String? = nil) async -> VaultResponse {
+                       caller: VaultCaller, now: Date, requestId: String? = nil, unlocked: [String: String] = [:],
+                       minted: [String: AwsProcessCredentials] = [:]) async -> VaultResponse {
+        if req.mode == "aws" {
+            guard let s = allowed.first?.0, let role = s.aws else { return .denied("not an AWS profile") }
+            let credentials: AwsProcessCredentials
+            var note: String?
+            if let fresh = minted[s.name] {
+                credentials = fresh
+                if !s.leasePolicy.everyUseAsks, let expires = fresh.expiresAt {
+                    awsHeld[s.name] = IssuedAws(credentials: fresh, expiresAt: expires, issuedAt: now, role: role, secretUpdatedAt: s.updatedAt)
+                }
+                note = "minted on the device"
+            } else if await sealedSource(of: s) != nil {
+                guard let kept = heldAws(s, now: now) else {
+                    return .denied("\(s.name): its credentials are minted on Rogerio's Mac or phone, and none are held; ask again")
+                }
+                credentials = kept.credentials
+                note = "credentials a device minted \(Int(now.timeIntervalSince(kept.issuedAt) / 60)) min ago"
+            } else {
+                do {
+                    guard let source = try await store.secret(role.sourceSecret) else {
+                        return .denied("the AWS key \(role.sourceSecret) is not in the vault")
+                    }
+                    let key = try JSONDecoder().decode(AwsAccessKey.self, from: Data(source.value.utf8))
+                    credentials = try await sts(key, role, "kanban-\(caller.cardId ?? "outside")")
+                } catch {
+                    return .denied("STS failed: \(error)")
+                }
+            }
+            for (s, by, why) in allowed {
+                await store.recordRelease(s.name, now: now)
+                await audit(s, req: req, caller: caller, outcome: .allowed, decider: by,
+                            detail: [why, note].compactMap { $0 }.joined(separator: ", "), requestId: requestId)
+            }
+            if caller.insideCard, let card = caller.cardId, let expires = credentials.expiresAt {
+                awsIssued["\(card)|\(s.name)"] = IssuedAws(credentials: credentials, expiresAt: expires, issuedAt: now,
+                                                           role: role, secretUpdatedAt: s.updatedAt)
+            }
+            return VaultResponse(status: .granted, message: "released", id: requestId, credentials: credentials, card: caller.cardId)
+        }
+        let missing = allowed.map(\.0).filter { $0.isSealed && unlocked[$0.name] == nil }
+        guard missing.isEmpty else {
+            return .denied("\(missing.map(\.name).joined(separator: ", ")): approved, but not unlocked on a device. Ask again; Rogerio answers in Kanban Code on his Mac or phone")
+        }
         for (s, by, why) in allowed {
             await store.recordRelease(s.name, now: now)
             await audit(s, req: req, caller: caller, outcome: .allowed, decider: by, detail: why, requestId: requestId)
         }
-        let given = answer(wanted, allowed: Set(allowed.map(\.0.name)))
-        if req.mode == "aws" {
-            guard let s = allowed.first?.0, let role = s.aws else { return .denied("not an AWS profile") }
-            do {
-                guard let source = try await store.secret(role.sourceSecret) else {
-                    return .denied("the AWS key \(role.sourceSecret) is not in the vault")
-                }
-                let key = try JSONDecoder().decode(AwsAccessKey.self, from: Data(source.value.utf8))
-                let session = "kanban-\(caller.cardId ?? "outside")"
-                let credentials = try await sts(key, role, session)
-                if caller.insideCard, let card = caller.cardId, let expires = Self.awsExpiry(credentials.Expiration) {
-                    awsIssued["\(card)|\(s.name)"] = IssuedAws(credentials: credentials, expiresAt: expires, issuedAt: now,
-                                                               role: role, secretUpdatedAt: s.updatedAt)
-                }
-                return VaultResponse(status: .granted, message: "released", id: requestId, credentials: credentials, card: caller.cardId)
-            } catch {
-                return .denied("STS failed: \(error)")
-            }
-        }
+        let given = answer(wanted, allowed: Set(allowed.map(\.0.name)), unlocked: unlocked)
         return VaultResponse(status: .granted, message: "released", id: requestId, values: given.values, card: caller.cardId,
                              env: given.env, resolved: Dictionary(wanted.map { ($0.requested, $0.secret.name) }) { first, _ in first })
     }
@@ -807,13 +943,59 @@ public actor VaultBroker {
         return await apply(.rename(todo), caller: caller, now: now)
     }
 
-    public func edit(_ name: String, _ req: VaultEditRequest, caller: VaultCaller, trusted: Bool, now: Date = Date()) async -> VaultResponse {
+    /// `unsealed` is what this machine's own key opened, for a trusted
+    /// edit that lowers a sealed secret's tier.
+    public func edit(_ name: String, _ req: VaultEditRequest, caller: VaultCaller, trusted: Bool, unsealed: VaultUnsealed? = nil,
+                     now: Date = Date()) async -> VaultResponse {
         guard let s = (try? await store.secret(name)) ?? nil else { return .denied("no secret named \(name)") }
         if !trusted {
             return await ask(action: .edit([name], req), secrets: [s], whys: ["changing a secret always asks"], caller: caller,
                              command: nil, reason: req.reason, now: now, leaseOnly: false, admin: true)
         }
-        return await apply(.edit([name], req), caller: caller, now: now)
+        return await apply(.edit([name], req), caller: caller, now: now, unsealed: unsealed)
+    }
+
+    /// What a device has to open before `edit` can apply to `name`: the
+    /// sealed value, when the edit lowers the tier below ask.
+    public func editChallenge(_ name: String, _ req: VaultEditRequest) async -> VaultUnsealChallenge {
+        guard let s = (try? await store.secret(name)) ?? nil else { return VaultUnsealChallenge() }
+        return await challenge(for: .edit([s.name], req), secrets: [s], caller: VaultCaller(), now: Date())
+    }
+
+    // MARK: - Owner keys
+
+    /// What a device has to encrypt again before the owner keys become
+    /// `recipients`.
+    public func ownerChallenge(_ recipients: [VaultOwnerRecipient]) async -> VaultUnsealChallenge {
+        await challenge(for: .owner(recipients), secrets: [], caller: VaultCaller(), now: Date())
+    }
+
+    /// Changes the keys the owner-only secrets are encrypted to. With
+    /// sealed secrets in the vault, a device that already holds a key
+    /// encrypts each of them again to the new keys.
+    public func setOwnerKeys(_ recipients: [VaultOwnerRecipient], caller: VaultCaller, trusted: Bool, unsealed: VaultUnsealed? = nil,
+                             reason: String? = nil, now: Date = Date()) async -> VaultResponse {
+        for r in recipients {
+            guard (try? Age.AnyRecipient(text: r.publicKey)) != nil else { return .denied("\(r.name): not an age public key") }
+        }
+        guard Set(recipients.map(\.publicKey)).count == recipients.count else { return .denied("the same key twice") }
+        if !trusted {
+            return await ask(action: .owner(recipients), secrets: [], whys: ["changing the owner keys always asks"], caller: caller,
+                             command: nil, reason: reason, now: now, leaseOnly: false, admin: true)
+        }
+        return await apply(.owner(recipients), caller: caller, now: now, unsealed: unsealed)
+    }
+
+    /// One more key for the owner-only secrets: a device that wants to
+    /// answer approvals. The human compares its fingerprint and approves
+    /// on a device that already holds a key.
+    public func enrol(_ recipient: VaultOwnerRecipient, caller: VaultCaller, now: Date = Date()) async -> VaultResponse {
+        let current = ((try? await store.owner()) ?? nil)?.recipients ?? []
+        if current.contains(where: { $0.publicKey == recipient.publicKey }) {
+            return VaultResponse(status: .granted, message: "\(recipient.name) already holds an owner key (\(recipient.fingerprint))")
+        }
+        return await setOwnerKeys(current + [recipient], caller: caller, trusted: false,
+                                  reason: "Let \(recipient.name) unlock the owner-only secrets", now: now)
     }
 
     /// The same change to several secrets, in one approval: the names given
@@ -888,7 +1070,8 @@ public actor VaultBroker {
         return await apply(.deleteMany(names), caller: caller, now: now)
     }
 
-    private func apply(_ action: PendingAction, caller: VaultCaller, now: Date, by: VaultDecider = .rule, requestId: String? = nil) async -> VaultResponse {
+    private func apply(_ action: PendingAction, caller: VaultCaller, now: Date, by: VaultDecider = .rule, requestId: String? = nil,
+                       unsealed: VaultUnsealed? = nil) async -> VaultResponse {
         do {
             switch action {
             case .add(let req):
@@ -914,7 +1097,7 @@ public actor VaultBroker {
                 return VaultResponse(status: .granted, message: existing == nil ? "added \(name)" : "replaced \(name)", id: requestId)
             case .edit(let names, let req):
                 for name in names {
-                    try await store.update(name, now: now) { req.apply(to: &$0) }
+                    try await store.update(name, unsealedValue: unsealed?.values[name], now: now) { req.apply(to: &$0) }
                     await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
                                                        secret: name, tier: req.tier, outcome: .allowed, decider: by,
                                                        action: "edit", detail: req.summary, requestId: requestId))
@@ -958,6 +1141,20 @@ public actor VaultBroker {
                 }
                 return VaultResponse(status: .granted, message: "renamed \(done) of \(renames.count) secrets", id: requestId,
                                      resolved: outcomes)
+            case .owner(let recipients):
+                let before = try await store.owner()?.recipients ?? []
+                try await store.setOwner(recipients, resealed: unsealed?.resealed ?? [:], now: now)
+                let counts = try await store.ownerCounts()
+                let added = recipients.filter { r in !before.contains { $0.publicKey == r.publicKey } }
+                let removed = before.filter { r in !recipients.contains { $0.publicKey == r.publicKey } }
+                let change = (added.map { "added \($0.name) \($0.fingerprint)" } + removed.map { "removed \($0.name) \($0.fingerprint)" })
+                    .joined(separator: ", ")
+                await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
+                                                   secret: Self.ownerKeysName, tier: nil, outcome: .allowed, decider: by, action: "owner",
+                                                   detail: [change, unsealed.map { "encrypted again by key \($0.device)" }]
+                                                       .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "; "),
+                                                   requestId: requestId))
+                return VaultResponse(status: .granted, message: "owner keys: \(recipients.map(\.name).joined(separator: ", ")); \(counts.sealed) secrets sealed", id: requestId)
             case .release, .lease:
                 return .denied("not an admin action")
             }
@@ -1009,6 +1206,7 @@ public actor VaultBroker {
         if leaseOnly { options = [AttentionRequest.vaultApprovalOptions[0], AttentionRequest.vaultApprovalOptions[2]] }
         let details = approvalDetails(action: action, secrets: secrets, whys: whys, caller: caller, title: title,
                                       command: command, reason: reason, options: options)
+        let challenge = await challenge(for: action, secrets: secrets, caller: caller, now: now)
         let request = AttentionRequest(
             id: id,
             cardId: caller.openClawAgent == nil ? caller.cardId : nil,
@@ -1017,9 +1215,10 @@ public actor VaultBroker {
             body: AttentionCopy.vaultBody(details),
             options: options,
             createdAt: now,
-            requiresBiometry: admin || secrets.contains { $0.tier >= .ask },
+            requiresBiometry: admin || !challenge.isEmpty || secrets.contains { $0.tier >= .ask },
             sessionId: caller.sessionId,
-            vault: details
+            vault: details,
+            unseal: challenge.isEmpty ? nil : challenge
         )
         pending[id] = Pending(action: action, caller: caller, result: nil, createdAt: now, everyUseAsks: everyUse, request: request)
         await persist()
@@ -1074,6 +1273,8 @@ public actor VaultBroker {
             what = "delete|\(names.sorted().joined(separator: ","))"
         case .rename(let renames):
             what = "rename|\(renames.map { "\($0.from)>\($0.to)" }.sorted().joined(separator: ","))"
+        case .owner(let recipients):
+            what = "owner|\(recipients.map(\.publicKey).sorted().joined(separator: ","))"
         }
         return principalKey(caller) + "|" + what
     }
@@ -1129,6 +1330,9 @@ public actor VaultBroker {
             kind = .edit
             changes = ["name"]
             changeLines = renames.prefix(400).map { "\($0.from) -> \($0.to)" }
+        case .owner(let recipients):
+            kind = .ownerKeys
+            changeLines = recipients.map { "\($0.name) (\($0.kind.rawValue)): \($0.fingerprint)" }
         }
         let origin: VaultApprovalDetails.Origin =
             caller.openClawAgent != nil ? .openClaw : (caller.insideCard ? .card : .outside)
@@ -1163,8 +1367,11 @@ public actor VaultBroker {
         case .edit: "edit"
         case .delete, .deleteMany: "delete"
         case .rename: "rename"
+        case .owner: "owner"
         }
     }
+
+    static let ownerKeysName = "owner-keys"
 
     private func waitForHuman(id: String) async {
         guard let approvals, let started = pending[id]?.createdAt else { return }
@@ -1182,6 +1389,7 @@ public actor VaultBroker {
     private func settle(id: String, approval: VaultPolicy.Approval, by: String) async {
         guard let p = pending[id], p.result == nil, p.joinedTo == nil else { return }
         let now = Date()
+        let unsealed = delivered.removeValue(forKey: id)
         // A yes past the rate limit starts the count again: the human saw
         // the volume and allowed it.
         if approval != .deny, case .release(_, let asked) = p.action {
@@ -1194,15 +1402,28 @@ public actor VaultBroker {
                 let policy = ((try? await store.secret(name)) ?? nil)?.leasePolicy ?? .standard
                 try? await store.grantLease(VaultLease(cardId: card, secret: name, reason: req.reason, grantedAt: now,
                                                        expiresAt: now.addingTimeInterval(policy.leaseSeconds), grantedBy: "human:\(by)"))
+                if let value = unsealed?.values[name] { held[name] = HeldValue(value: value, until: now.addingTimeInterval(policy.leaseSeconds)) }
             }
             leasedTo = card
+        }
+        if approval != .deny, case .lease(let wanted, _) = p.action {
+            for want in wanted {
+                guard let value = unsealed?.values[want.name] else { continue }
+                let policy = ((try? await store.secret(want.name)) ?? nil)?.leasePolicy ?? .standard
+                held[want.name] = HeldValue(value: value, until: now.addingTimeInterval(policy.leaseSeconds))
+            }
+            for (profile, credentials) in unsealed?.credentials ?? [:] {
+                guard let s = (try? await store.secret(profile)) ?? nil, let role = s.aws, !s.leasePolicy.everyUseAsks,
+                      let expires = credentials.expiresAt else { continue }
+                awsHeld[s.name] = IssuedAws(credentials: credentials, expiresAt: expires, issuedAt: now, role: role, secretUpdatedAt: s.updatedAt)
+            }
         }
         if approval != .deny, case .lease = p.action { leasedTo = p.caller.cardId }
 
         let joined = pending.filter { $0.value.joinedTo == id && $0.value.result == nil }.map(\.key).sorted()
         for member in [id] + joined {
             guard let m = pending[member], m.result == nil else { continue }
-            pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now)
+            pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed)
             expireResult(member, after: unclaimedResultLifetime)
         }
         await persist()
@@ -1210,7 +1431,8 @@ public actor VaultBroker {
     }
 
     /// What one waiting request gets for the human's answer.
-    private func outcome(of p: Pending, id: String, approval: VaultPolicy.Approval, by: String, now: Date) async -> VaultResponse {
+    private func outcome(of p: Pending, id: String, approval: VaultPolicy.Approval, by: String, now: Date,
+                         unsealed: VaultUnsealed? = nil) async -> VaultResponse {
         switch (approval, p.action) {
         case (.deny, _):
             let timedOut = by == "timeout"
@@ -1229,13 +1451,17 @@ public actor VaultBroker {
             var allowed: [(VaultSecret, VaultDecider, String)] = []
             var known = Set<String>()
             let covered = by == Self.coveredByLease
+            var unlocked = unsealed?.values ?? [:]
             for s in wanted.map(\.secret) where known.insert(s.name).inserted {
                 let wasAsked = asked.contains(s.name)
                 let decider: VaultDecider = wasAsked ? (covered ? .lease : .human) : .tier
-                let why = wasAsked ? (covered ? "the card got a lease while this waited" : "approved by \(by)") : "allowed with the request"
+                var why = wasAsked ? (covered ? "the card got a lease while this waited" : "approved by \(by)") : "allowed with the request"
+                if s.isSealed, unlocked[s.name] != nil, let device = unsealed?.device { why += ", unlocked by key \(device)" }
+                if s.isSealed, unlocked[s.name] == nil, let value = heldValue(s, now: now) { unlocked[s.name] = value }
                 allowed.append((s, decider, why))
             }
-            return await grant(allowed, wanted: wanted, req: req, caller: p.caller, now: now, requestId: id)
+            return await grant(allowed, wanted: wanted, req: req, caller: p.caller, now: now, requestId: id,
+                               unlocked: unlocked, minted: unsealed?.credentials ?? [:])
 
         case (_, .lease(let wanted, let reason)):
             guard let card = p.caller.cardId else { return .denied("no card to lease to") }
@@ -1253,7 +1479,7 @@ public actor VaultBroker {
             return VaultResponse(status: .granted, message: "leased \(wanted.map(\.name).joined(separator: ", ")) to the card", id: id, card: card)
 
         case (_, let action):
-            return await apply(action, caller: p.caller, now: now, by: .human, requestId: id)
+            return await apply(action, caller: p.caller, now: now, by: .human, requestId: id, unsealed: unsealed)
         }
     }
 
@@ -1376,6 +1602,7 @@ public actor VaultBroker {
         case .delete(let name): [name]
         case .deleteMany(let names): names
         case .rename(let renames): renames.map(\.from)
+        case .owner: [Self.ownerKeysName]
         }
     }
 

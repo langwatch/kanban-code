@@ -375,8 +375,8 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         await MainActor.run { store.state.openAttentionRequests }
     }
 
-    public func resolveAttention(id: String, resolution: String, by: String) async throws {
-        try await engine.resolveAttention(id: id, resolution: resolution, by: by)
+    public func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws {
+        try await engine.resolveAttention(id: id, resolution: resolution, by: by, unsealed: unsealed)
     }
 
     public func reportPresence(_ presence: MacPresence) async {

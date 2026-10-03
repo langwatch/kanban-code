@@ -671,11 +671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             let request = MainActor.assumeIsolated { AppComposition.shared.store.state.attentionRequests[attentionId] }
             if let request, request.options.indices.contains(index) {
                 let resolution = request.options[index]
-                let biometry = request.requiresBiometry
-                Task {
-                    if biometry, !(await Self.confirmWithBiometry(reason: "Approve: \(request.title)")) { return }
-                    _ = await AppServices.resolveAttention?(attentionId, resolution)
-                }
+                Task { _ = await MacVaultDevice.answer(request, option: resolution) }
             }
             completionHandler()
             return

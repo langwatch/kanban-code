@@ -170,7 +170,9 @@ struct AttentionDetailSheet: View {
     }
 
     private var rows: [VaultApprovalDetails.Row] {
-        if let vault = request.vault { return vault.rows(cardName: cardName) }
+        if let vault = request.vault {
+            return vault.rows(cardName: cardName) + (request.unseal?.rows ?? []).map { .init($0.label, $0.value) }
+        }
         var rows: [VaultApprovalDetails.Row] = []
         if let cardName { rows.append(.init("Card", cardName)) }
         if !request.body.isEmpty { rows.append(.init(request.title, request.body)) }
@@ -181,18 +183,18 @@ struct AttentionDetailSheet: View {
         guard busy == nil else { return }
         busy = option
         failure = nil
-        let id = request.id
-        let biometry = request.requiresBiometry
-        let title = request.title
+        let request = request
         Task { @MainActor in
             defer { busy = nil }
-            if biometry, !(await AppDelegate.confirmWithBiometry(reason: "\(option): \(title)")) { return }
-            if let problem = await AppServices.resolveAttention?(id, option) {
+            switch await MacVaultDevice.answer(request, option: option) {
+            case .cancelled:
+                return
+            case .failed(let problem):
                 // A request settled elsewhere closes on its own state change.
                 failure = problem
-                return
+            case .sent:
+                onClose()
             }
-            onClose()
         }
     }
 

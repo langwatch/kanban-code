@@ -22,6 +22,7 @@ var products: [Product] = [
 var dependencies: [Package.Dependency] = []
 
 var coreDependencies: [Target.Dependency] = ["KanbanCodeRemoteKit"]
+var remoteKitDependencies: [Target.Dependency] = []
 
 var targets: [Target] = [
     // Development server for the remote control clients: the real server over a fake board.
@@ -42,11 +43,6 @@ var targets: [Target] = [
         dependencies: ["KanbanCodeCore"],
         path: "Sources/KanbanCodeExport"
     ),
-    // Wire types of the remote control API, shared with the iOS app.
-    .target(
-        name: "KanbanCodeRemoteKit",
-        path: "Sources/KanbanCodeRemoteKit"
-    ),
     .testTarget(
         name: "KanbanCodeRemoteKitTests",
         dependencies: ["KanbanCodeRemoteKit"],
@@ -62,6 +58,7 @@ var targets: [Target] = [
 if linuxOnly {
     dependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"))
     coreDependencies.append(.product(name: "Crypto", package: "swift-crypto"))
+    remoteKitDependencies.append(.product(name: "Crypto", package: "swift-crypto"))
     coreDependencies.append("CZlib")
     targets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
 } else {
@@ -92,6 +89,16 @@ if linuxOnly {
         ),
     ])
 }
+
+// Wire types of the remote control API and the vault's owner-key crypto,
+// shared with the iOS app.
+targets.append(
+    .target(
+        name: "KanbanCodeRemoteKit",
+        dependencies: remoteKitDependencies,
+        path: "Sources/KanbanCodeRemoteKit"
+    )
+)
 
 targets.append(
     .target(

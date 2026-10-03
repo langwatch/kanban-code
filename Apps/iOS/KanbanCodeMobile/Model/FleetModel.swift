@@ -106,14 +106,38 @@ final class FleetModel {
         let id = item.request.id
         guard answers.begin(id, option: resolution) else { return }
         answers.prune(listed: Set(masters.flatMap { $0.attention.map(\.id) }).union([id]))
-        if item.request.requiresBiometry, !(await confirm()) {
+        // An approval that needs this phone's vault key unlocks with it
+        // (Face ID, no passcode); any other one that wants Face ID asks first.
+        let isVault = item.request.kind == .vaultApproval
+        var unsealed: VaultUnsealed?
+        if !AttentionCopy.isDenial(resolution), let challenge = item.request.unseal, !challenge.isEmpty {
+            guard PhoneVaultDevice.key.exists else {
+                answers.failed(id, error: PhoneVaultDevice.Problem(
+                    text: "This phone has no vault key yet. Enrol it under Machines > Vault key, or answer on the Mac."))
+                return
+            }
+            do {
+                unsealed = try await PhoneVaultDevice.key.answer(challenge, reason: "\(resolution): \(item.request.title)")
+            } catch {
+                let text = PhoneVaultDevice.describe(error)
+                PhoneVaultDevice.approvals.record(item.request, resolution: resolution, error: text)
+                if PhoneVaultDevice.isCancel(error) {
+                    answers.cancelled(id)
+                } else {
+                    answers.failed(id, error: PhoneVaultDevice.Problem(text: "Not unlocked: \(text)"))
+                }
+                return
+            }
+        } else if item.request.requiresBiometry, !(await confirm()) {
             answers.cancelled(id)
             return
         }
         do {
-            try await item.master.resolveAttention(item.request, resolution: resolution)
+            try await item.master.resolveAttention(item.request, resolution: resolution, unsealed: unsealed)
+            if isVault { PhoneVaultDevice.approvals.record(item.request, resolution: resolution) }
             answers.succeeded(id)
         } catch {
+            if isVault { PhoneVaultDevice.approvals.record(item.request, resolution: resolution, error: error.localizedDescription) }
             answers.failed(id, error: error)
         }
     }

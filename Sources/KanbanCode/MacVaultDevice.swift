@@ -1,0 +1,81 @@
+import AppKit
+import Foundation
+import KanbanCodeCore
+import KanbanCodeRemoteKit
+
+/// This Mac as a device of the vault's owner: its Secure Enclave key, the
+/// record of the approvals answered here, and answering a request.
+enum MacVaultDevice {
+    /// The name the audit log gives approvals from this Mac.
+    static let deviceName = "mac"
+
+    private static var kanbanHome: String { NSHomeDirectory() + "/.kanban-code" }
+
+    static var key: SecureEnclaveOwnerKey {
+        SecureEnclaveOwnerKey(path: VaultService.deviceKeyPath(kanbanHome: kanbanHome))
+    }
+
+    static var approvals: VaultDeviceApprovals {
+        VaultDeviceApprovals(path: VaultService.deviceApprovalsPath(kanbanHome: kanbanHome))
+    }
+
+    /// This Mac's public key as an owner key, when it has one.
+    static func recipient() -> VaultOwnerRecipient? {
+        key.recipient().map {
+            VaultOwnerRecipient(name: Host.current().localizedName ?? "Mac", kind: .mac, publicKey: $0.text)
+        }
+    }
+
+    enum Answer {
+        case sent
+        /// The human backed out of Touch ID.
+        case cancelled
+        case failed(String)
+    }
+
+    /// Answers `request` from this Mac. An approval that needs the device
+    /// key unlocks with it (Touch ID, no password); any other approval
+    /// that wants biometry asks for Touch ID or the password first.
+    static func answer(_ request: AttentionRequest, option: String) async -> Answer {
+        let approving = !AttentionCopy.isDenial(option)
+        var unsealed: VaultUnsealed?
+        if approving, let challenge = request.unseal, !challenge.isEmpty {
+            guard key.exists else {
+                return .failed("This Mac has no vault key yet. Set it up in Settings > Vault, or answer on the phone.")
+            }
+            do {
+                unsealed = try await key.answer(challenge, reason: "\(option): \(request.title)")
+            } catch {
+                let text = describe(error)
+                approvals.record(request, resolution: option, error: text)
+                KanbanCodeLog.warn("vault", "Unlocking for \(request.id) on this Mac failed: \(text)")
+                return isCancel(error) ? .cancelled : .failed("Not unlocked: \(text)")
+            }
+        } else if request.requiresBiometry, !(await AppDelegate.confirmWithBiometry(reason: "\(option): \(request.title)")) {
+            return .cancelled
+        }
+        if let problem = await AppServices.resolveAttention?(request.id, option, unsealed) {
+            if request.kind == .vaultApproval { approvals.record(request, resolution: option, error: problem) }
+            return .failed(problem)
+        }
+        if request.kind == .vaultApproval { approvals.record(request, resolution: option) }
+        return .sent
+    }
+
+    static func isCancel(_ error: Error) -> Bool {
+        let ns = error as NSError
+        // LAError.userCancel, .appCancel, .systemCancel
+        return ns.domain == "com.apple.LocalAuthentication" && [-2, -4, -9].contains(ns.code)
+    }
+
+    static func describe(_ error: Error) -> String {
+        switch error {
+        case let e as VaultOwnerSeal.SealError: e.description
+        case let e as Age.AgeError: e.description
+        case let e as SecureEnclaveOwnerKey.KeyError: e.description
+        case let e as AwsSts.StsError: e.description
+        case let e as VaultError: e.description
+        default: error.localizedDescription
+        }
+    }
+}

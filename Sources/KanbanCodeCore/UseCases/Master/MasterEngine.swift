@@ -48,6 +48,9 @@ public final class MasterEngine {
     /// What a card's new local session gets in its environment for the
     /// vault (the card id and a fresh session token); nil without a vault.
     public var cardSessionEnvironment: (@Sendable (String) async -> [String: String])?
+    /// Hands the vault what a device unlocked for an approval, before the
+    /// request resolves.
+    public var vaultUnsealed: (@Sendable (String, VaultUnsealed) async -> Void)?
 
     /// Wakes the channels mirror after a channel write.
     let channelsPoke = AsyncSignal()

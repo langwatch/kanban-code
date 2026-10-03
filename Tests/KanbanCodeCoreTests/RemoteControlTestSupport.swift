@@ -71,7 +71,7 @@ final class FakeRemoteHost: RemoteControlHost {
         state.withLock { $0.attention }
     }
 
-    func resolveAttention(id: String, resolution: String, by: String) async throws {
+    func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws {
         let conts = try state.withLock { s -> [AsyncStream<Void>.Continuation] in
             guard s.attention.contains(where: { $0.id == id }) else { throw RemoteHostError.notFound("no attention request \(id)") }
             s.attention.removeAll { $0.id == id }

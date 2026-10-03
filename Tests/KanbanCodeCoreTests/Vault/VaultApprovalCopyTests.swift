@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 private final class CapturingApprovals: VaultApprovals, @unchecked Sendable {
     let lock = NSLock()

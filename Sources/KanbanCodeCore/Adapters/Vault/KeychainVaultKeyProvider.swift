@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import KanbanCodeRemoteKit
 import Security
 
 /// The vault identity as a generic password in the login keychain. The app

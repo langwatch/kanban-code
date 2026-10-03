@@ -48,6 +48,17 @@ struct MachinesView: View {
                     Button("Pair another machine", systemImage: "plus") { showAdd = true }
                         .accessibilityIdentifier("addMachine")
                 }
+
+                Section {
+                    NavigationLink {
+                        VaultDeviceView(fleet: fleet)
+                    } label: {
+                        Label("Vault key", systemImage: "faceid")
+                    }
+                    .accessibilityIdentifier("vaultKey")
+                } footer: {
+                    Text("Lets this phone unlock the secrets that always ask, with Face ID.")
+                }
             }
             .navigationTitle("Machines")
             .navigationBarTitleDisplayMode(.inline)
