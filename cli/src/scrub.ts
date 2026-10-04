@@ -108,7 +108,7 @@ export function formatScrubStatus(s: ScrubStatus): string {
   return text;
 }
 
-/** `kv scrub [--dry-run] [--status] [--json] [--all] | --at HH:MM | --on | --off | --add PATH | --remove PATH | --patterns typed|on|off | --restore FILE...` */
+/** `kv scrub [--dry-run] [--once on|typed|off [--except VENDOR,...]] [--status] [--json] [--all] | --at HH:MM | --on | --off | --add PATH | --remove PATH | --patterns typed|on|off | --restore FILE...` */
 export async function runScrub(
   args: string[],
   client: ScrubClient,
@@ -181,7 +181,26 @@ export async function runScrub(
   }
 
   const dryRun = has("--dry-run");
-  await client.call<ScrubStatus>("POST", "../scrub/run", { dryRun });
+  const run: { dryRun: boolean; patterns?: ScrubPatterns; except?: string[] } = { dryRun };
+  const once = args.indexOf("--once");
+  const except = args.indexOf("--except");
+  if (once >= 0) {
+    const mode = args[once + 1] ?? "";
+    if (!["on", "off", "typed"].includes(mode)) throw new Error("kv scrub --once on|typed|off [--except VENDOR,...]");
+    run.patterns = mode as ScrubPatterns;
+  }
+  if (except >= 0) {
+    const names = (args[except + 1] ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+    if (once < 0 || !names.length || names.some((n) => n.startsWith("--"))) {
+      throw new Error("kv scrub --once on --except VENDOR[,VENDOR] (vendor names as the finds are named, e.g. LANGWATCH_API_KEY)");
+    }
+    run.except = names;
+  }
+  const started = await client.call<ScrubStatus & { error?: string }>("POST", "../scrub/run", run);
+  if (started.status >= 400) {
+    out(`kv: ${started.body.error ?? `the master answered ${started.status}`}\n`);
+    return 1;
+  }
   let s = await status();
   while (s.running) {
     await sleep(2000);

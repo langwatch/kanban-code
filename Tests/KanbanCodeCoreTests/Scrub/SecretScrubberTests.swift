@@ -528,6 +528,46 @@ struct SecretScrubberTests {
         #expect(third.replacements == 0)
     }
 
+    static let langwatch = "sk-lw-" + "Qm7Xw2Lp9Vt4Zk8Rb3Nc6Hd1Fy5Gj0UsAeTiOoPqWx"
+
+    @Test("a one-off run takes every vendor key but the excepted ones, and leaves the schedule as it is")
+    func oneOffRunWithAnException() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        try write([#"{"type":"assistant","message":{"content":"dev key \#(Self.langwatch) and \#(Self.agentOnly)"}}"#], to: other)
+        // The scheduled mode has run and knows the files.
+        _ = await f.scrubber.run(dryRun: false, targets: standard(f))
+        let once = ScrubOnce(patterns: .on, except: ["LANGWATCH_API_KEY"])
+
+        let dry = await f.scrubber.run(dryRun: true, targets: standard(f), once: once)
+        #expect(dry.filesUnchanged == 0)
+        #expect(dry.newSecrets == 2)
+        #expect(dry.note == "one-off run: patterns on, except LANGWATCH_API_KEY; the schedule is unchanged")
+        #expect(dry.bySecret.keys.allSatisfy { $0.hasPrefix("scrubbed/found/ANTHROPIC_API_KEY_") })
+
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f), once: once)
+        #expect(report.newSecrets == 2 && report.replacements == 2)
+        let text = try String(contentsOfFile: other, encoding: .utf8)
+        #expect(text.contains(Self.langwatch) && !text.contains(Self.agentOnly))
+        #expect(try !String(contentsOfFile: f.transcript, encoding: .utf8).contains(Self.vendor))
+        let names = try await f.vault.store.list().map(\.name)
+        #expect(names.filter { $0.hasPrefix("scrubbed/found/ANTHROPIC_API_KEY_") }.count == 2)
+        #expect(!names.contains { $0.contains("LANGWATCH") })
+        #expect(await f.scrubber.schedule().patterns == .typed)
+
+        let again = await f.scrubber.run(dryRun: true, targets: standard(f), once: once)
+        #expect(again.newSecrets == 0 && again.replacements == 0)
+        // Without the exception the LangWatch key is taken too.
+        let all = await f.scrubber.run(dryRun: true, targets: standard(f), once: ScrubOnce(patterns: .on))
+        #expect(all.newSecrets == 1)
+        #expect(all.bySecret.keys.allSatisfy { $0.hasPrefix("scrubbed/found/LANGWATCH_API_KEY_") })
+        // The scheduled mode still runs as typed and leaves that key.
+        let scheduled = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(scheduled.note == nil && scheduled.newSecrets == 0)
+        #expect(try String(contentsOfFile: other, encoding: .utf8).contains(Self.langwatch))
+    }
+
     @Test("the patterns setting of an older build reads as on or off")
     func oldPatternsSetting() throws {
         func mode(_ json: String) throws -> ScrubPatterns {

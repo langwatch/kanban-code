@@ -694,6 +694,7 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv scrub --at HH:MM | --on | --off                        the daily run, on every master
   kv scrub --add <path> | --remove <path>                   extra files and folders it reads, on every master
   kv scrub --patterns typed|on|off                          keys the vault does not hold: typed = only ones you typed in a chat (default), on = all, off = none
+  kv scrub [--dry-run] --once on|typed|off [--except V,..]  one run in another patterns mode, leaving the keys of the named vendors (LANGWATCH_API_KEY); the schedule is unchanged
   kv scrub --restore <file>... | --restore --all-files      write back what the runs of the last week replaced
   kv exec-provider                                          OpenClaw exec SecretRef provider (JSON on stdin)
   kv import [--apply] [--secrets-only] [--only <dir>]..   plan (then do) the migration of plaintext secrets

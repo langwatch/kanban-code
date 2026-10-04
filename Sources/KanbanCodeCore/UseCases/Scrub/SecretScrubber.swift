@@ -6,6 +6,24 @@ import KanbanCodeRemoteKit
 
 /// What the scrubber does with a key in a vendor's format that the vault
 /// does not hold.
+/// What one manual run does differently from the schedule: its own
+/// patterns mode, and vendors whose keys it leaves in place.
+public struct ScrubOnce: Codable, Sendable, Equatable {
+    public var patterns: ScrubPatterns
+    /// Vendor names as the finds are named: `LANGWATCH_API_KEY`.
+    public var except: Set<String>
+
+    public init(patterns: ScrubPatterns, except: Set<String> = []) {
+        self.patterns = patterns
+        self.except = except
+    }
+
+    var note: String {
+        let left = except.isEmpty ? "" : ", except \(except.sorted().joined(separator: ", "))"
+        return "one-off run: patterns \(patterns.rawValue)\(left); the schedule is unchanged"
+    }
+}
+
 public enum ScrubPatterns: String, Codable, Sendable, CaseIterable {
     /// Left alone: only values the vault holds are replaced.
     case off
@@ -270,11 +288,11 @@ public actor SecretScrubber {
 
     /// Starts a run in the background; false when one is in progress.
     @discardableResult
-    public func start(dryRun: Bool) -> Bool {
+    public func start(dryRun: Bool, once: ScrubOnce? = nil) -> Bool {
         guard !running else { return false }
         running = true
         progress = "starting"
-        Task.detached(priority: .utility) { _ = await self.run(dryRun: dryRun, claimed: true) }
+        Task.detached(priority: .utility) { _ = await self.run(dryRun: dryRun, claimed: true, once: once) }
         return true
     }
 
@@ -309,8 +327,10 @@ public actor SecretScrubber {
     }
 
     @discardableResult
-    public func run(dryRun: Bool, targets: ScrubTargets? = nil, now: Date = Date(), claimed: Bool = false) async -> ScrubReport {
+    public func run(dryRun: Bool, targets: ScrubTargets? = nil, now: Date = Date(), claimed: Bool = false,
+                    once: ScrubOnce? = nil) async -> ScrubReport {
         var report = ScrubReport(machine: machine, startedAt: now, finishedAt: now, dryRun: dryRun)
+        report.note = once?.note
         guard claimed || !running else {
             report.note = "a run is in progress"
             return report
@@ -328,11 +348,14 @@ public actor SecretScrubber {
             return finish(report)
         }
         let settings = schedule()
-        let scanner = ScrubScanner(entries: entries, key: key, patterns: settings.patterns)
+        // A one-off run takes its own patterns mode and reads every file;
+        // the schedule and what the scheduled runs know stay as they are.
+        let patterns = once?.patterns ?? settings.patterns
+        let scanner = ScrubScanner(entries: entries, key: key, patterns: patterns, except: once?.except ?? [])
         var state = loadState()
-        let known = state.generation == scanner.generation ? state.files : [:]
+        let known = once == nil && state.generation == scanner.generation ? state.files : [:]
         let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
-        let typedText = settings.patterns == .typed ? ScrubTypedText(home: home, kanbanHome: kanbanHome) : nil
+        let typedText = patterns == .typed ? ScrubTypedText(home: home, kanbanHome: kanbanHome) : nil
         report.filesSeen = files.count
 
         // Scan.
@@ -378,7 +401,7 @@ public actor SecretScrubber {
                 add()
             }
         }
-        if settings.patterns == .typed {
+        if patterns == .typed {
             // Only a key the human typed somewhere is taken, and then in every file.
             let typed = plans.reduce(into: Set<String>()) { $0.formUnion($1.typed) }
             plans = plans.compactMap { plan in
@@ -521,7 +544,7 @@ public actor SecretScrubber {
         report.files = Array(report.files.prefix(200))
         if report.errors.count > 50 { report.errors = Array(report.errors.prefix(50)) + ["and \(report.errors.count - 50) more"] }
 
-        if !dryRun {
+        if !dryRun, once == nil {
             state.files = clean
             // What the vault holds now, the saved finds included.
             if let (entries, key) = await index.current() {

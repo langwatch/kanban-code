@@ -4,7 +4,9 @@ import KanbanCodeRemoteKit
 /// The scrubber routes of the Remote Control server (docs/vault.md, "Scrubber"):
 ///
 ///   GET  /v1/scrub/status     schedule, whether a run is in progress, the last run and dry run
-///   POST /v1/scrub/run        {"dryRun": true|false}: starts a run, 202; 409 while one runs
+///   POST /v1/scrub/run        {"dryRun": true|false}: starts a run, 202; 409 while one runs.
+///                             {"patterns": "on", "except": ["LANGWATCH_API_KEY"]} makes it a one-off
+///                             run in that patterns mode; local callers and full scope devices only.
 ///   PUT  /v1/scrub/schedule   {"enabled", "hour", "minute"}
 ///   GET  /v1/scrub/index      the fingerprint index, for a peer master (never a value)
 ///   POST /v1/scrub/restore    {"paths": [...]} or {"all": true}: writes back what the runs of the
@@ -30,9 +32,17 @@ enum RemoteScrubRoutes {
             return .rawJSON(data)
 
         case ("POST", "run", 2):
-            struct Run: Decodable { var dryRun: Bool? }
-            let dryRun = (try? JSONDecoder().decode(Run.self, from: body))?.dryRun ?? false
-            guard await scrubber.start(dryRun: dryRun) else { return .error(409, "a run is in progress") }
+            struct Run: Decodable { var dryRun: Bool?; var patterns: ScrubPatterns?; var except: [String]? }
+            let wanted = try? JSONDecoder().decode(Run.self, from: body)
+            let dryRun = wanted?.dryRun ?? false
+            var once: ScrubOnce?
+            if let patterns = wanted?.patterns {
+                if let device, device.scope != .full { return .error(403, "the \(device.scope.rawValue) scope cannot start a one-off run") }
+                once = ScrubOnce(patterns: patterns, except: Set(wanted?.except ?? []))
+            } else if !(wanted?.except ?? []).isEmpty {
+                return .error(400, "except goes with patterns: {\"patterns\": \"on\", \"except\": [...]}")
+            }
+            guard await scrubber.start(dryRun: dryRun, once: once) else { return .error(409, "a run is in progress") }
             return .json(await scrubber.status(), status: 202)
 
         case ("POST", "restore", 2):

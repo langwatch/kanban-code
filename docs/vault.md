@@ -357,6 +357,7 @@ kv scrub --status      schedule and the last run
 kv scrub --at 03:00 | --on | --off
 kv scrub --add ~/notes/log.txt | --remove ~/notes/log.txt
 kv scrub --patterns typed|on|off   which keys the vault does not hold are saved and replaced (typed by default)
+kv scrub [--dry-run] --once on|typed|off [--except VENDOR,...]   one run in another patterns mode
 kv scrub --restore <file>...   write back what the runs of the last week replaced in these files
 ```
 
@@ -380,6 +381,8 @@ The patterns mode (`kv scrub --patterns`, sent to the peers with the other setti
 - `typed` (the default): only a key found in a record of what you typed: a line of Kanban's record of your messages (`~/.kanban-code/human-messages`, written by the card chat composers on the Mac and the iPhone) or of rush's `human.jsonl` ([side-chat.md](side-chat.md)). Such a key is saved and then replaced in every file that holds it, assistant and tool lines included, also in files an earlier run left clean. A transcript does not count on its own, since a prompt an agent wrote reads there the same as one you typed: a key pasted straight into a terminal session, or one that only agents or tools wrote (the ones a local dev stack mints), is left in place and not saved.
 - `on`: every key that passes the check above, wherever it is.
 - `off`: none. Only values the vault holds are replaced.
+
+`kv scrub --once <mode>` runs once in another mode without changing the setting: `kv scrub --dry-run --once on --except LANGWATCH_API_KEY` counts every key in a vendor's format except the LangWatch ones, and the same without `--dry-run` saves and replaces them. `--except` takes the vendor names the finds are saved under (`OPENAI_API_KEY`, `LANGWATCH_API_KEY`), separated by commas; a value the vault already holds is replaced whatever its vendor. Such a run reads every file, goes to this master only, and leaves the schedule and what the daily runs remember untouched; its report says "one-off run". Over the network only a full-scope device can start one (`POST /v1/scrub/run` with `patterns` and `except`).
 
 JWTs, bearer tokens, URL passwords, PEM keys and `password=` style assignments that are not in the vault are not replaced: without a human looking they match too much that is not a secret.
 

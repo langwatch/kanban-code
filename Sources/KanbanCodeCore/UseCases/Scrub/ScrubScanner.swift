@@ -23,14 +23,18 @@ struct ScrubScanner: Sendable {
     /// One bit per prefix fingerprint (its low 24 bits), checked before the dictionary.
     private let bitmap: [UInt64]
     let patterns: ScrubPatterns
+    /// Vendor names (`LANGWATCH_API_KEY`) whose keys are left in place
+    /// when the vault does not hold them.
+    let except: Set<String>
 
     /// The group new finds are saved under.
     static let foundProject = "scrubbed"
     static let foundEnvironment = "found"
 
-    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: ScrubPatterns = .on) {
+    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: ScrubPatterns = .on, except: Set<String> = []) {
         self.key = key
         self.patterns = patterns
+        self.except = except
         var byPrefix: [UInt32: [ScrubFingerprint]] = [:]
         var byMac: [String: ScrubFingerprint] = [:]
         var bitmap = [UInt64](repeating: 0, count: 1 << 18)
@@ -49,7 +53,8 @@ struct ScrubScanner: Sendable {
     /// What changes the result of a scan: the fingerprints and the rules.
     var generation: String {
         let macs = byMac.keys.sorted().joined()
-        return "v2:\(patterns.rawValue):" + key.macHex(Array(macs.utf8))
+        let left = except.isEmpty ? "" : "-" + except.sorted().joined(separator: ",")
+        return "v2:\(patterns.rawValue)\(left):" + key.macHex(Array(macs.utf8))
     }
 
     /// Matches in file order, none overlapping another, none across a line break.
@@ -144,9 +149,11 @@ struct ScrubScanner: Sendable {
                         out.append(ScrubMatch(offset: offset, length: bytes.count, name: known.name, tag: known.tag))
                         continue
                     }
+                    let vendor = SecretDetector.vendorName(of: secret)
+                    if except.contains(vendor) { continue }
                     let tag = key.tagHex(secret.value)
                     // Named by the value alone, so every master and every run gives it the same name.
-                    let name = VaultSecretName(key: "\(SecretDetector.vendorName(of: secret))_\(tag.prefix(8))",
+                    let name = VaultSecretName(key: "\(vendor)_\(tag.prefix(8))",
                                                project: Self.foundProject, environment: Self.foundEnvironment).canonical
                     out.append(ScrubMatch(offset: offset, length: bytes.count, name: name, tag: tag, newValue: secret.value))
                 }

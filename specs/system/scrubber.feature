@@ -135,3 +135,22 @@ Feature: Secret scrubber
     When I press Dry Run in Settings > Vault
     Then its counts show under the buttons, with a Details button that lists counts per file and no value
     And after I close and reopen the settings only the last real run of each master shows
+
+  Scenario: A one-off run in another patterns mode
+    Given the patterns mode is "typed"
+    And transcripts that hold an Anthropic key and a LangWatch key the vault does not hold, neither typed by me
+    When I run "kv scrub --once on --except LANGWATCH_API_KEY"
+    Then the Anthropic key is saved under "scrubbed/found" as ask and replaced in every file
+    And the LangWatch key is left in place and not saved
+    And the report says it was a one-off run
+    And the patterns mode is still "typed" on every master
+    And the next daily run reads the files as it would have without it
+
+  Scenario: A second one-off run finds nothing new
+    Given a one-off run with "--once on --except LANGWATCH_API_KEY" has finished
+    When I run the same with "--dry-run"
+    Then it counts 0 keys the vault does not hold
+
+  Scenario: An exception needs a one-off mode
+    When I run "kv scrub --except LANGWATCH_API_KEY" without "--once"
+    Then kv refuses and says how to write it

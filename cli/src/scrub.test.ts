@@ -66,6 +66,20 @@ describe("kv scrub", () => {
     assert.match(printed, /would replace 41 values/);
   });
 
+  test("--once runs one time in another patterns mode, with vendors left out, and changes no schedule", async () => {
+    const c = client([{ machine: "mac", schedule, running: false, lastDryRun: report(true) }]);
+    const code = await runScrub(["--dry-run", "--once", "on", "--except", "LANGWATCH_API_KEY,NPM_TOKEN"], c, () => {}, async () => {});
+    assert.equal(code, 0);
+    assert.deepEqual(c.calls[0], {
+      method: "POST",
+      path: "../scrub/run",
+      body: { dryRun: true, patterns: "on", except: ["LANGWATCH_API_KEY", "NPM_TOKEN"] },
+    });
+    assert.equal(c.calls.some((x) => x.method === "PUT"), false);
+    await assert.rejects(runScrub(["--except", "LANGWATCH_API_KEY"], c, () => {}, async () => {}), /--once on --except/);
+    await assert.rejects(runScrub(["--once", "sometimes"], c, () => {}, async () => {}), /--once on\|typed\|off/);
+  });
+
   test("--at sets the daily time and keeps the switch", async () => {
     const c = client([{ machine: "box", schedule, running: false }]);
     await runScrub(["--at", "03:15"], c, () => {}, async () => {});
