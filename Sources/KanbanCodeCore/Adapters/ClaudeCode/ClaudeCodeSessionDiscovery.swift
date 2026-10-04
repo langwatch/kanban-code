@@ -45,6 +45,17 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
         session.isHeadless && headlessExclusion.matches(session.projectPath)
     }
 
+    /// Drops a cached session whose transcript left `dirPath`. A transcript
+    /// that moved to another project directory (the session entered a
+    /// worktree) may already be cached at its new path, and stays.
+    private func evict(_ sessionId: String, ifStoredIn dirPath: String) {
+        if let path = cachedSessions[sessionId]?.jsonlPath,
+           (path as NSString).deletingLastPathComponent != dirPath {
+            return
+        }
+        cachedSessions.removeValue(forKey: sessionId)
+    }
+
     public func discoverSessions() async throws -> [Session] {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: claudeDir) else { return [] }
@@ -167,7 +178,7 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
             // Evict sessions from this dir that no longer exist
             if let oldIds = dirSessionIds[dirName] {
                 for removedId in oldIds.subtracting(dirSessions) {
-                    cachedSessions.removeValue(forKey: removedId)
+                    evict(removedId, ifStoredIn: dirPath)
                 }
             }
             dirSessionIds[dirName] = dirSessions
@@ -180,7 +191,8 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
             dirMtimes.removeValue(forKey: removedDir)
             dirSkippedIds.removeValue(forKey: removedDir)
             if let ids = dirSessionIds.removeValue(forKey: removedDir) {
-                for id in ids { cachedSessions.removeValue(forKey: id) }
+                let dirPath = (claudeDir as NSString).appendingPathComponent(removedDir)
+                for id in ids { evict(id, ifStoredIn: dirPath) }
             }
         }
 

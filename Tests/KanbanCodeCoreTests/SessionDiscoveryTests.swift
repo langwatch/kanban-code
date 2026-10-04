@@ -130,4 +130,33 @@ struct SessionDiscoveryTests {
         #expect(sessions[0].id == "new-sess") // newest first
         #expect(sessions[1].id == "old-sess")
     }
+
+    @Test("A transcript moved to another project directory keeps its session, at the new path")
+    func transcriptMovedBetweenProjectDirs() async throws {
+        let dir = try makeTempDir()
+        defer { cleanup(dir) }
+
+        let rootDir = (dir as NSString).appendingPathComponent("-Users-test-app")
+        let worktreeDir = (dir as NSString).appendingPathComponent("-Users-test-app--claude-worktrees-one")
+        for path in [rootDir, worktreeDir] {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        }
+        let inRoot = (rootDir as NSString).appendingPathComponent("moved-sess.jsonl")
+        let inWorktree = (worktreeDir as NSString).appendingPathComponent("moved-sess.jsonl")
+        try #"{"type":"user","sessionId":"moved-sess","message":{"content":"Hi"},"cwd":"/Users/test/app"}"#
+            .write(toFile: inRoot, atomically: true, encoding: .utf8)
+
+        let discovery = ClaudeCodeSessionDiscovery(claudeDir: dir)
+        #expect(try await discovery.discoverSessions().first?.jsonlPath == inRoot)
+
+        // Both directions, so the result holds whichever directory is scanned first.
+        for (from, to) in [(inRoot, inWorktree), (inWorktree, inRoot)] {
+            try await Task.sleep(for: .milliseconds(20))
+            try FileManager.default.moveItem(atPath: from, toPath: to)
+            let first = try await discovery.discoverSessions()
+            #expect(first.map(\.jsonlPath) == [to])
+            let second = try await discovery.discoverSessions()
+            #expect(second.map(\.jsonlPath) == [to])
+        }
+    }
 }
