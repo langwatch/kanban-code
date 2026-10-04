@@ -763,6 +763,7 @@ slackCmd
   .description("Post a message to a Slack channel as the bot (needs SLACK_BOT_TOKEN)")
   .argument("<channel>", "Channel name (e.g. #dev) or id")
   .argument("<message>", "Message text (Slack mrkdwn)")
+  .option("-f, --file <path>", "Attach a file to the message (repeatable, needs the files:write scope)", (p: string, all: string[]) => [...all, p], [] as string[])
   .option("-j, --json", "Output as JSON")
   .action(async (channel: string, message: string, opts) => {
     const token = process.env.SLACK_BOT_TOKEN;
@@ -770,7 +771,12 @@ slackCmd
       process.stderr.write("Error: SLACK_BOT_TOKEN must be set\n");
       process.exit(1);
     }
-    const result = await postToSlack(new SlackClient(token), channel, message);
+    const missing = (opts.file as string[]).filter((p) => !existsSync(p));
+    if (missing.length) {
+      process.stderr.write(`Error: file not found: ${missing.join(", ")}\n`);
+      process.exit(1);
+    }
+    const result = await postToSlack(new SlackClient(token), channel, message, opts.file);
     if (opts.json) {
       output(result, { json: true });
       if (!result.ok) process.exit(1);
@@ -782,6 +788,9 @@ slackCmd
       process.stderr.write(`Failed to post to ${channel}: ${result.error}\n`);
       if (String(result.error).includes("not_in_channel")) {
         process.stderr.write("The bot is not a member of that channel — invite it there first.\n");
+      }
+      if (String(result.error).includes("missing_scope")) {
+        process.stderr.write("The Slack app lacks a scope: attaching files needs files:write. Add it and reinstall the app.\n");
       }
       process.exit(1);
     }

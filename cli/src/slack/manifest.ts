@@ -49,6 +49,7 @@ export function slackAppManifest(opts: ManifestOptions = {}): string {
           "chat:write",
           "chat:write.public",
           "files:read",
+          "files:write",
           "users:read",
           "app_mentions:read",
           // Required for /stop and any future slash commands the bridge handles.

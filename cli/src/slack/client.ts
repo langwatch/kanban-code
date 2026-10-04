@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { WebClient } from "@slack/web-api";
 
 /// Thin wrapper over the Slack Web API for what the bridge needs: identify the
@@ -25,6 +26,16 @@ export class SlackClient {
       unfurl_media: false,
     });
     return r.ts as string | undefined;
+  }
+
+  /// Upload files into a channel as one message, with the text as its comment.
+  /// Needs the files:write scope.
+  async postFiles(channel: string, text: string, paths: string[]): Promise<void> {
+    await this.web.filesUploadV2({
+      channel_id: channel,
+      initial_comment: text,
+      file_uploads: paths.map((p) => ({ file: p, filename: basename(p) })),
+    });
   }
 
   /// Post a Block Kit message (e.g. the picker UI) with fallback text for
