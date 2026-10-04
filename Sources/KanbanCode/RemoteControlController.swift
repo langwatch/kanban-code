@@ -70,7 +70,15 @@ final class RemoteControlController {
         }
         guard let engine else { return }
         let host = MasterRemoteControlHost(engine: engine)
-        let server = RemoteControlServer(host: host, devices: deviceStore, port: settings.port, peerServer: peerServer, syncEngine: syncEngine, vault: vault, scrubber: scrubber)
+        let store = engine.store
+        let server = RemoteControlServer(
+            host: host, devices: deviceStore, port: settings.port, peerServer: peerServer, syncEngine: syncEngine,
+            vault: vault, scrubber: scrubber,
+            // The phone using a card this Mac owns keeps the Mac awake for a while.
+            activity: { cardId in
+                let ownedHere = await MainActor.run { store.state.links[cardId].map(store.state.isOwnedLocally) ?? false }
+                if ownedHere { RemoteWakeHold.shared.touch(card: cardId) }
+            })
         do {
             try await server.start()
             self.host = host

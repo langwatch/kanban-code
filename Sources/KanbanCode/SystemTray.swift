@@ -151,7 +151,8 @@ final class SystemTray: NSObject, @unchecked Sendable {
     /// Show tray icon when there are In Progress sessions, or within linger timeout.
     /// Also manages the active-session helper app for Amphetamine integration.
     /// The tray icon shows any active session; the helper only runs for
-    /// sessions on this Mac, so cards on a boxd machine never keep it awake.
+    /// sessions on this Mac, so cards on a boxd machine never keep it awake,
+    /// and while a card here is in use from another device (`RemoteWakeHold`).
     private func updateVisibility() {
         guard let store else { return }
         let hasActive = store.state.cardCount(in: .inProgress) > 0
@@ -168,7 +169,8 @@ final class SystemTray: NSObject, @unchecked Sendable {
             statusItem?.isVisible = false
         }
 
-        if hasLocalActive {
+        // A card in use from the phone counts like a working session.
+        if hasLocalActive || RemoteWakeHold.shared.isHolding() {
             lastLocalActiveTime = Date()
             startActiveSessionIfNeeded()
         } else if let lastLocal = lastLocalActiveTime,

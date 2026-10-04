@@ -95,6 +95,37 @@ Feature: System Tray and Amphetamine Integration
     And the menu bar icon should remain visible
     And it should still keep the Mac awake via Amphetamine
 
+  # ── A card used from the phone ──
+
+  Scenario: A phone request to a card on this Mac keeps it awake
+    Given no session is working on this Mac
+    When the phone asks for a card this Mac owns
+    Then the Mac takes a power assertion that holds it awake for 10 minutes after the last such request
+    And the helper app runs for the same time
+    And the hold ends by itself
+
+  Scenario Outline: What does not count
+    When <caller> calls <route>
+    Then the Mac is not held awake
+
+    Examples:
+      | caller                                 | route                         |
+      | a paired master, for its own sync      | the board, links or events    |
+      | a paired master, mirroring transcripts | a card's raw transcript       |
+      | an agent token                         | a card's transcript or prompt |
+      | the phone                              | the board or the events       |
+
+  Scenario: A paired master passing on the phone's request
+    Given the phone asks the box for a card this Mac owns
+    When the box forwards the request
+    Then the request says it is for the human
+    And the Mac is held awake
+
+  Scenario: The setting turns it off
+    Given "Stay awake while a card on this Mac is used from the phone" is off
+    When the phone asks for a card this Mac owns
+    Then no power assertion is taken
+
   # ── Edge Cases ──
 
   Scenario: Amphetamine not installed

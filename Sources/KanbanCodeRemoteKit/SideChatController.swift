@@ -92,9 +92,16 @@ public final class SideChatController {
             } catch {
                 guard !Task.isCancelled else { return }
                 let message = (error as? RemoteError)?.error ?? error.localizedDescription
-                self?.state.apply(.failed(id: id, message: message))
+                self?.state.apply(.failed(id: id, message: message, unreachable: SideChatFailure.isUnreachable(error)))
             }
         }
+    }
+
+    /// Asks the question that failed again, in its place.
+    public func retry() {
+        guard let failed = state.failedEntry else { return }
+        state.apply(.removed(id: failed.id))
+        ask(failed.kind, question: failed.kind == .btw ? failed.question : "")
     }
 
     /// Runs the catch-up again from nothing: the side chat starts over

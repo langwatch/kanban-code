@@ -148,6 +148,33 @@ Feature: Side chat (/btw and /catchup)
     Given a Codex or Gemini card, or a session on an ssh or boxd machine
     Then the catch-up button is not shown, or the panel says the side chat is not available
 
+  # ── The card's machine is offline ───────────────────────────────────
+
+  Scenario: The machine does not answer
+    Given the Mac that owns the card is asleep
+    When I run /catchup on the phone and the request gets no answer
+    Then the panel says "<machine name> is offline. It may be asleep."
+    And it does not say "The request timed out."
+    And it offers Retry
+
+  Scenario: Retry
+    Given the panel says the machine is offline
+    When the machine is back and I use Retry
+    Then the same question is asked again in its place
+    And the answer shows
+
+  Scenario: An error the machine answered with
+    Given the machine is online
+    When the side chat fails with an error of its own
+    Then the panel shows that error
+    And it offers Retry
+
+  Scenario: The phone keeps the Mac awake
+    Given a Mac on power with its lid closed that is awake for a moment
+    When I run /catchup on the phone for a card on that Mac
+    Then the Mac stays awake for 10 minutes after my last request to the card
+    And the run is not cut off by sleep
+
   # ── The record of what I typed ──────────────────────────────────────
 
   Scenario: What the Kanban chat sends is recorded as mine

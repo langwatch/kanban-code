@@ -54,6 +54,12 @@ The prompt of a catch-up holds an index of the messages since your last one, one
 
 Not supported: Codex and Gemini cards, and sessions that run on an ssh or boxd machine.
 
+## When the machine is offline
+
+On the phone, a side chat request that gets no answer (a timeout, a lost connection), or any failure while the app shows the card's machine as offline, reads "<machine name> is offline. It may be asleep." with a Retry button. Retry asks the same question again in its place. An error the machine itself answered with shows as it is, also with Retry.
+
+A request the phone makes to a card keeps a Mac awake for 10 minutes, so a run that started is not cut off by sleep. See "Staying awake for the phone" in [`remote-control.md`](remote-control.md).
+
 ## Your last message
 
 A message is yours when you typed and sent it yourself: in the Kanban chat (Mac or phone), in the rush composer, or straight into the terminal of a tmux card. Messages from `kanban send`, DMs, channels, remote agents, prompts an agent queued, self-compact follow-ups and task notifications are not, even though the session stores them as user messages.

@@ -165,7 +165,8 @@ struct ChatPane: View {
                     SideChatPanel(controller: sideChat, collapsed: $sideChatCollapsed,
                                   maxHeight: geo.size.height - keyboardShortfall - 12,
                                   onJump: jump(toOffset:),
-                                  onSendToMain: { deliver($0, .queue, fromDraft: false) })
+                                  onSendToMain: { deliver($0, .queue, fromDraft: false) },
+                                  machineName: board.machineName, machineOffline: !board.isOnline)
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
             }

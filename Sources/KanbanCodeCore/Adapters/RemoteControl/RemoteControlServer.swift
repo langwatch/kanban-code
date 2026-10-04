@@ -88,6 +88,9 @@ public final class RemoteControlServer: Sendable {
     public let vault: VaultService?
     /// Serves the scrubber routes (`/v1/scrub/*`) when set.
     public let scrubber: SecretScrubber?
+    /// Told the card of every request the human made to a card from
+    /// another device (`RemoteActivityPolicy`).
+    private let activity: (@Sendable (String) async -> Void)?
     private let bindAddresses: @Sendable () -> [String]
     private let options: Options
     private let requestedPort: Int
@@ -103,8 +106,10 @@ public final class RemoteControlServer: Sendable {
         peerServer: (any PeerLinksServing)? = nil,
         syncEngine: AgentSyncEngine? = nil,
         vault: VaultService? = nil,
-        scrubber: SecretScrubber? = nil
+        scrubber: SecretScrubber? = nil,
+        activity: (@Sendable (String) async -> Void)? = nil
     ) {
+        self.activity = activity
         self.host = host
         self.vault = vault
         self.scrubber = scrubber
@@ -378,6 +383,19 @@ public final class RemoteControlServer: Sendable {
             KanbanCodeLog.warn("remote", "refused \(method) /\(seg.joined(separator: "/")) for \(device.name) (\(device.scope.rawValue) scope)")
             return .response(.error(403, refusal))
         }
+        let forOwner = RemoteActivityPolicy.actsForOwner(scope: device.scope, header: request.header(RemoteActingFor.header.lowercased()))
+        if forOwner, let activity, let card = RemoteActivityPolicy.card(rest: Array(seg.dropFirst())) {
+            await activity(card)
+        }
+        // What this request forwards to another master goes for the human too.
+        return await RemoteActingFor.$owner.withValue(forOwner) {
+            await self.routeAuthenticated(request, device: device, peer: peer)
+        }
+    }
+
+    private func routeAuthenticated(_ request: RemoteHTTPRequest, device: RemoteDevice, peer: RemotePeerAddress?) async -> Outcome {
+        let seg = request.segments
+        let method = request.method
         if let scrubber, let response = await RemoteScrubRoutes.handle(
             method: method, rest: Array(seg.dropFirst()), body: request.body, device: device, scrubber: scrubber) {
             return .response(response)

@@ -392,6 +392,9 @@ public struct SideChatState: Equatable, Sendable {
         public var answer: String
         public var isRunning: Bool
         public var error: String?
+        /// The failure was the machine not answering (asleep, off the
+        /// network), not something the machine said.
+        public var unreachable: Bool
         public var since: RemoteSideChatSince?
         public var refs: [RemoteSideChatRef]
         /// A catch-up made earlier, shown again.
@@ -400,7 +403,8 @@ public struct SideChatState: Equatable, Sendable {
 
         public init(id: String, kind: RemoteSideChatKind, question: String, answer: String = "", isRunning: Bool = true,
                     error: String? = nil, since: RemoteSideChatSince? = nil, refs: [RemoteSideChatRef] = [],
-                    reopened: Bool = false, finishedAt: Date? = nil) {
+                    reopened: Bool = false, finishedAt: Date? = nil, unreachable: Bool = false) {
+            self.unreachable = unreachable
             self.id = id
             self.kind = kind
             self.question = question
@@ -449,7 +453,9 @@ public struct SideChatState: Equatable, Sendable {
         case started(localId: String, run: RemoteSideChatRun)
         /// More of the answer, or its end.
         case progress(RemoteSideChatRun)
-        case failed(id: String, message: String)
+        case failed(id: String, message: String, unreachable: Bool = false)
+        /// A failed question leaves, to be asked again.
+        case removed(id: String)
         /// The panel opens with nothing asked (`/btw` alone).
         case opened
         /// The panel closes and the side chat is forgotten.
@@ -464,6 +470,12 @@ public struct SideChatState: Equatable, Sendable {
     public static let catchUpQuestion = "Catch me up"
 
     public var isRunning: Bool { entries.contains(where: \.isRunning) }
+
+    /// The question that failed last, which Retry asks again.
+    public var failedEntry: Entry? {
+        guard let last = entries.last, last.error != nil, !last.isRunning else { return nil }
+        return last
+    }
 
     /// The run id of the catch-up this side chat holds: what a follow-up
     /// is kept with.
@@ -505,10 +517,13 @@ public struct SideChatState: Equatable, Sendable {
         case .progress(let run):
             guard let index = entries.firstIndex(where: { $0.id == run.id }) else { return }
             merge(run, at: index)
-        case .failed(let id, let message):
+        case .failed(let id, let message, let unreachable):
             guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
             entries[index].isRunning = false
             entries[index].error = message
+            entries[index].unreachable = unreachable
+        case .removed(let id):
+            entries.removeAll { $0.id == id }
         case .opened:
             isOpen = true
         case .dismissed:
@@ -525,6 +540,34 @@ public struct SideChatState: Equatable, Sendable {
         if let refs = run.refs { entries[index].refs = refs }
         entries[index].reopened = run.reopened == true
         entries[index].finishedAt = run.finishedAt
+    }
+}
+
+// MARK: - A machine that does not answer
+
+public enum SideChatFailure {
+    /// What the panel says when the card's machine cannot be reached.
+    public static func offlineMessage(machine: String) -> String {
+        let name = machine.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(name.isEmpty ? "The machine" : name) is offline. It may be asleep."
+    }
+
+    /// Whether `error` means the request got no answer from the machine: a
+    /// timeout, a refused or lost connection. An answer with an error
+    /// status is the machine speaking, so it is not.
+    public static func isUnreachable(_ error: any Error) -> Bool {
+        if let error = error as? RemoteClientError {
+            if case .transport = error { return true }
+            return false
+        }
+        return error is URLError
+    }
+
+    /// What an entry's failure reads as: the offline line when the machine
+    /// did not answer or is known to be offline, else the error itself.
+    public static func text(for entry: SideChatState.Entry, machine: String, machineOffline: Bool) -> String? {
+        guard let error = entry.error else { return nil }
+        return entry.unreachable || machineOffline ? offlineMessage(machine: machine) : error
     }
 }
 

@@ -1010,6 +1010,7 @@ struct GeneralSettingsView: View {
 
 struct AmphetamineSettingsView: View {
     @AppStorage("sessionLingerTimeout") private var lingerTimeout: Double = 60
+    @AppStorage(RemoteWakeHold.enabledKey) private var remoteWakeHold = true
 
     var body: some View {
         Form {
@@ -1042,6 +1043,15 @@ struct AmphetamineSettingsView: View {
                             .frame(width: 50, alignment: .trailing)
                     }
                     Text("Keep the helper running for this long after the last active session ends, so Amphetamine doesn't immediately allow sleep.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Section("Phone") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Stay awake while a card on this Mac is used from the phone", isOn: $remoteWakeHold)
+                    Text("Keeps the Mac awake for 10 minutes after the last request the phone made to one of its cards, so a catch-up or a prompt is not cut off by sleep. Works on power, also with the lid closed. A Mac that is already asleep is not woken.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

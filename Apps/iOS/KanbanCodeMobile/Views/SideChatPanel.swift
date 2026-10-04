@@ -20,6 +20,9 @@ struct SideChatPanel: View {
     var onJump: (Int) -> Void
     /// Sends a prompt to the session, as the composer does.
     var onSendToMain: (String) -> Void
+    /// The machine that owns the card, and whether the app has lost it.
+    var machineName = ""
+    var machineOffline = false
 
     @State private var followUp = ""
     @State private var entriesHeight: CGFloat = 0
@@ -125,7 +128,9 @@ struct SideChatPanel: View {
                     .foregroundStyle(Color(.secondaryLabel))
             }
             ForEach(state.entries) { entry in
-                SideChatEntryView(entry: entry, onJump: onJump, onRefresh: { controller.refresh() })
+                SideChatEntryView(entry: entry, onJump: onJump, onRefresh: { controller.refresh() },
+                                  failure: SideChatFailure.text(for: entry, machine: machineName, machineOffline: machineOffline),
+                                  onRetry: entry.id == state.failedEntry?.id ? { controller.retry() } : nil)
                     .id(entry.id)
             }
         }
@@ -176,6 +181,10 @@ private struct SideChatEntryView: View {
     var onJump: (Int) -> Void
     /// Runs the catch-up again.
     var onRefresh: () -> Void
+    /// What the failure reads as: the machine being offline, or its error.
+    var failure: String?
+    /// Asks the failed question again; nil for an entry that cannot.
+    var onRetry: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -220,11 +229,20 @@ private struct SideChatEntryView: View {
                         .foregroundStyle(Color(.secondaryLabel))
                 }
             }
-            if let error = entry.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+            if let failure {
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline)
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("sideChatError")
+                if let onRetry {
+                    Button(action: onRetry) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("sideChatRetry")
+                }
             }
         }
     }

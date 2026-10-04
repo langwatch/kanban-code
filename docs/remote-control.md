@@ -126,6 +126,19 @@ The Mac shows the terminals of the box's cards, so it holds a second token of th
 
 Pairing: `kanban-code-server pair <name> --scope peer` on a box, Add Device > Peer master on the Mac. A peer entry whose token is still `full` keeps working; change its `scope` in `~/.kanban-code/remote/devices.json` on the machine that issued it (the server re-reads the file).
 
+## Staying awake for the phone
+
+A Mac with its lid closed wakes on its own for a moment now and then (a dark wake) and goes back to sleep within a minute or two. A phone request that arrives in that moment is answered, and anything longer, such as a catch-up, is cut off.
+
+So a request the human makes to a card this Mac owns holds the Mac awake for 10 minutes after the last one (`RemoteWakeHold`):
+
+- What counts: any `/v1/cards/{id}...` route called with a full-scope token (the phone), or by a paired master passing on such a request. A master sets `X-Kanban-For-Owner: 1` on what it forwards while it serves a full-scope device; its own calls (board and links sync, transcript mirror, agent sync, vault replica) carry no header and never count. Agent and terminal tokens never count, nor does `/v1/board`, `/v1/events` or any other route without a card.
+- The hold is a `PreventSystemSleep` power assertion with its own timeout, so it ends by itself. macOS honours it on power, also with the lid closed; on battery with the lid closed it does not. The marker app that Amphetamine triggers on runs for the same time.
+- A side chat run ends within 10 minutes, so the request that starts it covers the whole run; every poll of its answer extends the hold.
+- Settings > Amphetamine > "Stay awake while a card on this Mac is used from the phone" turns it off. `[wake]` lines in `~/.kanban-code/logs/kanban-code.log` say when a hold starts; `pmset -g assertions` lists it.
+
+A Mac that is fully asleep gets no request and is not woken. The phone then shows the machine as offline.
+
 ## Agent sync
 
 Settings > Sync keeps the agent setup the same on every master. The list lives in `~/.kanban-code/sync.json`; the copy with the newest `updatedAt` wins, so entries edited on the Mac reach the box. Each master only writes its own disk: it scans its entries every 5 seconds, sends `POST /v1/sync/changed` to its peers when something changed, and pulls `GET /v1/sync/state` from each online peer every minute or when poked.

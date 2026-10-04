@@ -282,6 +282,7 @@ public struct RemoteClient: Sendable {
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if authorized { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if RemoteActingFor.owner { request.setValue("1", forHTTPHeaderField: RemoteActingFor.header) }
         request.timeoutInterval = 30
         return request
     }
