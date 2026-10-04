@@ -514,3 +514,187 @@ struct AgentSyncEngineTests {
         #expect(!FileManager.default.fileExists(atPath: box + "/.optmem/home.json"))
     }
 }
+
+// MARK: - Settings keys
+
+@Suite("Agent sync: named keys of a JSON file")
+struct SyncJSONKeysTests {
+    private let mac = """
+    {
+      "hideMinimap": true,
+      "logins": {
+        "work": {"token": "mac-only"}
+      },
+      "view": "list",
+      "keys": {
+        "a": [1, 2],
+        "b": "x, y"
+      }
+    }
+
+    """
+
+    private func text(_ data: Data?) -> String? { data.map { String(decoding: $0, as: UTF8.self) } }
+
+    @Test func projectionHoldsOnlyTheNamedKeysSortedAndWithoutWhitespace() {
+        let projection = SyncJSONKeys.projection(of: Data(mac.utf8), keys: ["view", "keys", "hideMinimap", "absent"])
+        #expect(text(projection) == #"{"hideMinimap":true,"keys":{"a":[1,2],"b":"x, y"},"view":"list"}"#)
+        // The same values written another way give the same bytes.
+        let compact = #"{"view":"list","logins":{},"keys":{"a":[1,2],"b":"x, y"},"hideMinimap":true}"#
+        #expect(SyncJSONKeys.projection(of: Data(compact.utf8), keys: ["hideMinimap", "keys", "view"]) == projection)
+        #expect(text(SyncJSONKeys.projection(of: Data("{}".utf8), keys: ["view"])) == "{}")
+    }
+
+    @Test func whatIsNotAJSONObjectHasNoProjection() {
+        #expect(SyncJSONKeys.projection(of: Data(mac.dropLast(20).utf8), keys: ["view"]) == nil)
+        #expect(SyncJSONKeys.projection(of: Data("[1, 2]".utf8), keys: ["view"]) == nil)
+        #expect(SyncJSONKeys.projection(of: Data(), keys: ["view"]) == nil)
+    }
+
+    @Test func mergeSetsAddsAndRemovesTheNamedKeysAndLeavesTheRestByteForByte() throws {
+        let box = """
+        {
+          "logins": {
+            "work": {"token": "box-only"}
+          },
+          "view": "board",
+          "groupBy": "project",
+          "sideWidth": 40
+        }
+
+        """
+        let keys = ["hideMinimap", "view", "groupBy", "keys"]
+        let projection = try #require(SyncJSONKeys.projection(of: Data(mac.utf8), keys: keys))
+        let merged = try #require(text(SyncJSONKeys.merge(into: Data(box.utf8), keys: keys, from: projection)))
+        #expect(merged == """
+        {
+          "logins": {
+            "work": {"token": "box-only"}
+          },
+          "view": "list",
+          "sideWidth": 40,
+          "hideMinimap": true,
+          "keys": {"a":[1,2],"b":"x, y"}
+        }
+
+        """)
+        // Now both files give the same projection, and a second merge changes nothing.
+        #expect(SyncJSONKeys.projection(of: Data(merged.utf8), keys: keys) == projection)
+        #expect(SyncJSONKeys.merge(into: Data(merged.utf8), keys: keys, from: projection) == Data(merged.utf8))
+    }
+
+    @Test func mergeKeepsAOneLineFileOnOneLineAndRefusesWhatIsNoObject() {
+        let projection = Data(#"{"view":"list"}"#.utf8)
+        let merged = SyncJSONKeys.merge(into: Data(#"{"a":1,"view":"board"}"#.utf8), keys: ["view"], from: projection)
+        #expect(text(merged) == #"{"a":1,"view":"list"}"#)
+        #expect(text(SyncJSONKeys.merge(into: Data("{}".utf8), keys: ["view"], from: projection)) == #"{"view":"list"}"#)
+        #expect(SyncJSONKeys.merge(into: Data("[]".utf8), keys: ["view"], from: projection) == nil)
+        #expect(SyncJSONKeys.merge(into: Data(#"{"view": "bo"#.utf8), keys: ["view"], from: projection) == nil)
+    }
+
+    @Test func aChangeToAnotherKeyIsNoNewVersionAndAHalfWrittenFileKeepsTheLast() {
+        let home = tempDir()
+        let path = home + "/config.json"
+        write(path, #"{"view": "list", "logins": {"a": 1}}"#, mtime: 1000)
+        let scanner = SyncScanner(home: home, machineId: "A", jsonKeys: ["view"])
+        let first = scanner.scan(root: path, excludes: SyncExcludes([]), previous: [:])
+        #expect(first[""]?.mtime == 1000)
+
+        write(path, #"{"view": "list", "logins": {"a": 1, "b": 2}}"#, mtime: 2000)
+        let second = scanner.scan(root: path, excludes: SyncExcludes([]), previous: first)
+        #expect(second[""]?.hash == first[""]?.hash)
+        #expect(second[""]?.mtime == 1000)
+
+        write(path, #"{"view": "li"#, mtime: 3000)
+        let third = scanner.scan(root: path, excludes: SyncExcludes([]), previous: second)
+        #expect(third[""]?.hash == first[""]?.hash)
+        #expect(third[""]?.deleted == false)
+
+        write(path, #"{"view": "board", "logins": {}}"#, mtime: 4000)
+        let fourth = scanner.scan(root: path, excludes: SyncExcludes([]), previous: third)
+        #expect(fourth[""]?.hash != first[""]?.hash)
+        #expect(fourth[""]?.mtime == 4000)
+    }
+}
+
+extension AgentSyncEngineTests {
+    @Test func namedKeysTravelBetweenFilesAtDifferentPathsAndTheRestStays() async throws {
+        let mac = tempDir(), box = tempDir()
+        let macId = MachineIdentity(id: "machine_mac", name: "mac")
+        let boxId = MachineIdentity(id: "machine_box", name: "Box", alwaysOn: true)
+        let transport = LoopbackTransport()
+        let entries = [
+            SyncEntry(mode: .json, path: "~/.config/app/config.json", keys: ["hideMinimap", "view"],
+                      paths: ["box": "~/.config/old/config.json"]),
+            SyncEntry(mode: .mirror, path: "~/.config/app/keybindings.json", paths: ["machine_box": "~/.config/old/keybindings.json"]),
+        ]
+        let a = try engine(home: mac, identity: macId, peer: boxId, transport: transport, entries: entries)
+        let b = try engine(home: box, identity: boxId, peer: macId, transport: transport, entries: entries)
+        transport.engines = [macId.id: a, boxId.id: b]
+
+        let boxConfig = box + "/.config/old/config.json"
+        write(boxConfig, "{\n  \"logins\": {\"box\": \"secret\"},\n  \"view\": \"board\"\n}\n", mtime: 1000)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: boxConfig)
+        write(mac + "/.config/app/config.json", "{\n  \"hideMinimap\": true,\n  \"logins\": {\"mac\": \"other\"},\n  \"view\": \"list\"\n}\n", mtime: 2000)
+        write(mac + "/.config/app/keybindings.json", "{\"quit\": \"q\"}")
+        await a.round()
+        await b.round()
+
+        // The box took the Mac's keys, kept its own login and permissions, and has a copy of what it had.
+        #expect(read(boxConfig) == "{\n  \"logins\": {\"box\": \"secret\"},\n  \"view\": \"list\",\n  \"hideMinimap\": true\n}\n")
+        #expect((try FileManager.default.attributesOfItem(atPath: boxConfig)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        #expect(read(boxConfig + ".sync-prev")?.contains("\"board\"") == true)
+        #expect(read(box + "/.config/old/keybindings.json") == "{\"quit\": \"q\"}")
+        #expect(!FileManager.default.fileExists(atPath: box + "/.config/app"))
+        await a.round()
+        #expect(read(mac + "/.config/app/config.json")?.contains("\"mac\": \"other\"") == true)
+        #expect(await a.file(entryId: entries[0].id, path: "") == Data(#"{"hideMinimap":true,"view":"list"}"#.utf8))
+
+        // A key changed on the box reaches the Mac; a login added there does not.
+        write(boxConfig, "{\n  \"logins\": {\"box\": \"secret\", \"new\": \"x\"},\n  \"view\": \"list\",\n  \"hideMinimap\": false\n}\n",
+              mtime: Date().timeIntervalSince1970 + 10)
+        await b.round()
+        await a.round()
+        let macConfig = try #require(read(mac + "/.config/app/config.json"))
+        #expect(macConfig.contains("\"hideMinimap\": false"))
+        #expect(macConfig.contains("\"mac\": \"other\"") && !macConfig.contains("secret") && !macConfig.contains("\"new\""))
+
+        // The file removed on the Mac stays on the box.
+        try FileManager.default.removeItem(atPath: mac + "/.config/app/config.json")
+        await a.round()
+        await b.round()
+        #expect(FileManager.default.fileExists(atPath: boxConfig))
+    }
+
+    @Test func aMachineWithoutTheFileIsLeftWithoutIt() async throws {
+        let mac = tempDir(), box = tempDir()
+        let macId = MachineIdentity(id: "machine_mac", name: "mac")
+        let boxId = MachineIdentity(id: "machine_box", name: "box", alwaysOn: true)
+        let transport = LoopbackTransport()
+        let entries = [SyncEntry(mode: .json, path: "~/.config/app/config.json", keys: ["view"])]
+        let a = try engine(home: mac, identity: macId, peer: boxId, transport: transport, entries: entries)
+        let b = try engine(home: box, identity: boxId, peer: macId, transport: transport, entries: entries)
+        transport.engines = [macId.id: a, boxId.id: b]
+        write(mac + "/.config/app/config.json", #"{"view": "list"}"#)
+        await a.round()
+        await b.round()
+        #expect(!FileManager.default.fileExists(atPath: box + "/.config/app/config.json"))
+        #expect(await b.entryStatuses()[entries[0].id]?.level == .warning)
+
+        // Once its program creates the file, the keys arrive.
+        write(box + "/.config/app/config.json", #"{"own": 1}"#, mtime: 1000)
+        await b.round()
+        #expect(read(box + "/.config/app/config.json") == #"{"own":1,"view":"list"}"#)
+    }
+
+    @Test func entriesWithKeysAndPathsSurviveSyncJson() throws {
+        let entry = SyncEntry(mode: .json, path: "~/a.json", keys: ["x"], paths: ["box": "~/b.json"])
+        let decoded = try JSONDecoder().decode(SyncEntry.self, from: JSONEncoder().encode(entry))
+        #expect(decoded == entry)
+        #expect(entry.id == "json:~/a.json")
+        #expect(entry.path(on: MachineIdentity(id: "m1", name: "BOX")) == "~/b.json")
+        #expect(entry.path(on: MachineIdentity(id: "m2", name: "mac")) == "~/a.json")
+        let old = try JSONDecoder().decode(SyncEntry.self, from: Data(#"{"mode":"mirror","path":"~/x"}"#.utf8))
+        #expect(old.keys.isEmpty && old.paths.isEmpty)
+    }
+}

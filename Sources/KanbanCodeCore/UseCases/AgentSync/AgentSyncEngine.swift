@@ -72,6 +72,7 @@ public actor AgentSyncEngine {
         for entry in config.entries where entry.mode != .git {
             manifests[entry.id] = Self.loadManifest(kanbanHome: kanbanHome, entryId: entry.id)
         }
+        manifestBasis = Dictionary(uniqueKeysWithValues: config.entries.map { ($0.id, Self.basis($0, identity: identity)) })
         let applied = Self.loadApplied(kanbanHome: kanbanHome)
         for entry in applied {
             optmemApplied[entry.id] = entry.result
@@ -166,9 +167,27 @@ public actor AgentSyncEngine {
         KanbanCodeLog.info("sync", "took Settings > Sync from \(peer)")
     }
 
+    /// What a manifest's versions were computed from, besides the files:
+    /// the entry's path on this machine and its keys.
+    private var manifestBasis: [String: String] = [:]
+
+    static func basis(_ entry: SyncEntry, identity: MachineIdentity) -> String {
+        entry.path(on: identity) + "\n" + entry.keys.sorted().joined(separator: "\n")
+    }
+
     private func dropStaleState() {
         let ids = Set(config.entries.map(\.id))
         for id in statuses.keys where !ids.contains(id) { statuses[id] = nil }
+        // Another path or other keys: the versions kept are of something
+        // else, and a file gone from the old path is not a deletion.
+        for entry in config.entries where entry.copiesFiles {
+            let basis = Self.basis(entry, identity: identity)
+            if let known = manifestBasis[entry.id], known != basis {
+                manifests[entry.id] = [:]
+                saveManifest(entry.id)
+            }
+            manifestBasis[entry.id] = basis
+        }
         for entry in config.entries where entry.mode != .git && manifests[entry.id] == nil {
             manifests[entry.id] = Self.loadManifest(kanbanHome: kanbanHome, entryId: entry.id)
         }
@@ -229,7 +248,7 @@ public actor AgentSyncEngine {
         }
         pokedPeers.removeAll()
         if !peers.contains(where: \.online) {
-            for entry in config.entries where entry.enabled && entry.mode == .mirror {
+            for entry in config.entries where entry.enabled && entry.copiesFiles {
                 let files = (manifests[entry.id] ?? [:]).values.filter { !$0.deleted }.count
                 setStatus(entry, .info, peers.isEmpty ? "no peer machine yet" : "no peer online", count: files)
             }
@@ -251,23 +270,32 @@ public actor AgentSyncEngine {
 
     // MARK: - Scanning
 
-    func root(_ entry: SyncEntry) -> String { SyncHome.expand(entry.path, home: home) }
+    /// The entry's path on this machine, with `~`.
+    func localPath(_ entry: SyncEntry) -> String { entry.path(on: identity) }
+
+    func root(_ entry: SyncEntry) -> String { SyncHome.expand(localPath(entry), home: home) }
 
     /// The entry's own excludes plus the login files, which only the login
     /// sync writes.
     func mirrorExcludes(_ entry: SyncEntry) -> SyncExcludes {
-        SyncExcludes(entry.excludes + SyncConfig.loginFileExcludes(entryPath: entry.path))
+        SyncExcludes(entry.excludes + SyncConfig.loginFileExcludes(entryPath: localPath(entry)))
     }
 
     /// Whether `path` of a mirror is a login file (or the whole mirror is).
     func isLoginFile(_ entry: SyncEntry, path: String) -> Bool {
-        if SyncConfig.isLoginFile(entryPath: entry.path) { return true }
-        let login = SyncExcludes(SyncConfig.loginFileExcludes(entryPath: entry.path))
+        if SyncConfig.isLoginFile(entryPath: localPath(entry)) { return true }
+        let login = SyncExcludes(SyncConfig.loginFileExcludes(entryPath: localPath(entry)))
         return scanner(rewriteHome: false).isExcluded(rel: path, excludes: login, only: nil)
     }
 
     private func scanner(rewriteHome: Bool) -> SyncScanner {
         SyncScanner(home: home, machineId: identity.id, rewriteHome: rewriteHome)
+    }
+
+    /// The scanner of a mirror or `json` entry.
+    private func scanner(for entry: SyncEntry) -> SyncScanner {
+        SyncScanner(home: home, machineId: identity.id, rewriteHome: entry.copiesFiles,
+                    jsonKeys: entry.mode == .json ? entry.keys : nil)
     }
 
     static let optmemTop: Set<String> = ["memory", "WAKE.md"]
@@ -281,10 +309,10 @@ public actor AgentSyncEngine {
         var changed = false
         for entry in config.entries where entry.enabled {
             switch entry.mode {
-            case .mirror:
-                if SyncConfig.isLoginFile(entryPath: entry.path) { continue }
+            case .mirror, .json:
+                if SyncConfig.isLoginFile(entryPath: localPath(entry)) { continue }
                 let before = manifests[entry.id] ?? [:]
-                let after = scanner(rewriteHome: true).scan(
+                let after = scanner(for: entry).scan(
                     root: root(entry), excludes: mirrorExcludes(entry), previous: before)
                 if after != before {
                     manifests[entry.id] = after
@@ -324,7 +352,7 @@ public actor AgentSyncEngine {
         var homes: [String] = []
         for entry in config.entries where entry.enabled {
             switch entry.mode {
-            case .mirror:
+            case .mirror, .json:
                 mirrors[entry.id] = manifests[entry.id] ?? [:]
             case .optmem:
                 if isLocalOptmemHome(entry, peers: lastPeers) {
@@ -343,9 +371,9 @@ public actor AgentSyncEngine {
         guard let entry = config.entries.first(where: { $0.id == entryId && $0.enabled }), entry.mode != .git,
               let item = manifests[entryId]?[path], !item.deleted, item.kind == .file,
               !path.hasPrefix("/"), !path.split(separator: "/").contains(".."),
-              entry.mode != .mirror || !isLoginFile(entry, path: path)
+              !entry.copiesFiles || !isLoginFile(entry, path: path)
         else { return nil }
-        return scanner(rewriteHome: entry.mode == .mirror).content(root: root(entry), rel: path)
+        return scanner(for: entry).content(root: root(entry), rel: path)
     }
 
     // MARK: - Pulling
@@ -372,7 +400,7 @@ public actor AgentSyncEngine {
         }
         scanAll()
         var changedLocally = false
-        for entry in config.entries where entry.enabled && entry.mode == .mirror {
+        for entry in config.entries where entry.enabled && entry.copiesFiles {
             guard var theirs = remote.manifests[entry.id] else { continue }
             theirs = theirs.filter { !isLoginFile(entry, path: $0.key) }
             let (applied, failed) = await apply(
@@ -401,16 +429,19 @@ public actor AgentSyncEngine {
     /// Runs `actions` against the disk; returns how many changed it and the
     /// first failure.
     private func apply(entry: SyncEntry, actions: [SyncAction], peer: SyncPeer, rewriteHome: Bool) async -> (Int, String?) {
-        let applier = SyncApplier(home: home, rewriteHome: rewriteHome)
+        let applier = SyncApplier(home: home, rewriteHome: rewriteHome, jsonKeys: entry.mode == .json ? entry.keys : nil)
         let rootPath = root(entry)
         var applied = 0
         var failure: String?
+        var missing: String?
         let planned = manifests[entry.id] ?? [:]
         for action in actions {
             switch action {
             case .adopt(let path, _):
                 manifests[entry.id]?[path]?.synced = true
             case .delete(let path, let remote):
+                // A settings file removed on a peer is never removed here.
+                if entry.mode == .json { continue }
                 guard manifests[entry.id]?[path] == planned[path] else { continue }
                 manifests[entry.id, default: [:]][path] = applier.delete(root: rootPath, rel: path, remote: remote)
                 applied += 1
@@ -430,13 +461,15 @@ public actor AgentSyncEngine {
                     manifests[entry.id, default: [:]][path] = try applier.write(
                         root: rootPath, rel: path, remote: remote, content: content, keepPrevious: keepPrevious)
                     applied += 1
+                } catch SyncApplyError.missing(let path) {
+                    missing = missing ?? SyncApplyError.missing(path).localizedDescription
                 } catch {
                     failure = failure ?? error.localizedDescription
                 }
             }
         }
         if !actions.isEmpty { saveManifest(entry.id) }
-        return (applied, failure)
+        return (applied, failure ?? missing)
     }
 
     // MARK: - Git

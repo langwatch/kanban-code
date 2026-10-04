@@ -11,6 +11,10 @@ struct SyncSettingsView: View {
     @State private var newPath = ""
     @State private var editingExcludes: String?
     @State private var excludesText = ""
+    @State private var editingKeys: String?
+    @State private var keysText = ""
+    @State private var editingPaths: String?
+    @State private var pathsText = ""
 
     private var engine: AgentSyncEngine { AppComposition.shared.agentSync }
 
@@ -20,6 +24,8 @@ struct SyncSettingsView: View {
                     footer: "Cloned where missing, fetched and fast-forwarded every two minutes and when a peer pushes; local commits are pushed. A diverged clone is never forced.")
             section(.mirror, title: "Mirrored files",
                     footer: "The newest version of each file wins; deletions travel too. The home folder is rewritten in text files and symlink targets. A file that differed on first sync keeps the local copy as <name>.sync-prev.")
+            section(.json, title: "Settings keys",
+                    footer: "For a JSON settings file that also holds what belongs to one machine: only the named top-level keys are kept the same, newest wins, and the rest of the file is left as it is. A machine that does not have the file yet is skipped.")
             section(.optmem, title: "OptMem",
                     footer: "The home (the always-on master unless set) keeps the memory. Other machines forward memo note, nap and forget to it, queue them while it is unreachable, and read a mirrored copy.")
             Section("Add") {
@@ -27,10 +33,11 @@ struct SyncSettingsView: View {
                     Picker("", selection: $newMode) {
                         Text("Git").tag(SyncEntryMode.git)
                         Text("Mirror").tag(SyncEntryMode.mirror)
+                        Text("Settings keys").tag(SyncEntryMode.json)
                         Text("OptMem").tag(SyncEntryMode.optmem)
                     }
                     .labelsHidden()
-                    .frame(width: 100)
+                    .frame(width: 130)
                     TextField("~/path", text: $newPath)
                         .onSubmit { add() }
                     Button("Add") { add() }
@@ -86,6 +93,21 @@ struct SyncSettingsView: View {
                     }
                     .controlSize(.small)
                 }
+                if entry.mode == .json {
+                    Button("Keys") {
+                        editingKeys = entry.id
+                        keysText = entry.keys.joined(separator: ", ")
+                    }
+                    .controlSize(.small)
+                }
+                if entry.copiesFiles {
+                    Button("Paths") {
+                        editingPaths = entry.id
+                        pathsText = entry.paths.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")
+                    }
+                    .controlSize(.small)
+                    .help("The path on a machine that keeps this somewhere else")
+                }
                 Toggle("", isOn: Binding(
                     get: { entry.enabled },
                     set: { value in update(entry.id) { $0.enabled = value } }
@@ -103,6 +125,20 @@ struct SyncSettingsView: View {
                     TextField("*.log, .trash/", text: $excludesText)
                         .onSubmit { commitExcludes(entry.id) }
                     Button("Save") { commitExcludes(entry.id) }.controlSize(.small)
+                }
+            }
+            if editingKeys == entry.id {
+                HStack {
+                    TextField("theme, fontSize", text: $keysText)
+                        .onSubmit { commitKeys(entry.id) }
+                    Button("Save") { commitKeys(entry.id) }.controlSize(.small)
+                }
+            }
+            if editingPaths == entry.id {
+                HStack {
+                    TextField("machine name=~/path on it", text: $pathsText)
+                        .onSubmit { commitPaths(entry.id) }
+                    Button("Save") { commitPaths(entry.id) }.controlSize(.small)
                 }
             }
             if entry.mode == .optmem {
@@ -151,6 +187,12 @@ struct SyncSettingsView: View {
         } else {
             parts.append("waiting for the first round")
         }
+        if entry.mode == .json {
+            parts.append(entry.keys.isEmpty ? "no keys named yet" : "keys " + entry.keys.joined(separator: " "))
+        }
+        for (machine, path) in entry.paths.sorted(by: { $0.key < $1.key }) {
+            parts.append("\(path) on \(machine)")
+        }
         if entry.mode == .mirror {
             let extra = entry.excludes.filter { !SyncConfig.defaultExcludes.contains($0) }
             let dropped = SyncConfig.defaultExcludes.filter { !entry.excludes.contains($0) }
@@ -189,6 +231,23 @@ struct SyncSettingsView: View {
         guard !entries.contains(where: { $0.id == entry.id }) else { return }
         save(entries + [entry])
         newPath = ""
+    }
+
+    private func commitKeys(_ id: String) {
+        let keys = keysText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        update(id) { $0.keys = keys }
+        editingKeys = nil
+    }
+
+    private func commitPaths(_ id: String) {
+        var paths: [String: String] = [:]
+        for pair in pathsText.split(separator: ",") {
+            let sides = pair.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard sides.count == 2, !sides[0].isEmpty, !sides[1].isEmpty else { continue }
+            paths[sides[0]] = sides[1]
+        }
+        update(id) { $0.paths = paths }
+        editingPaths = nil
     }
 
     private func commitExcludes(_ id: String) {

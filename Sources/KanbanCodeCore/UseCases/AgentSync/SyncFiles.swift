@@ -130,11 +130,15 @@ public struct SyncScanner: Sendable {
     public var maxFileBytes: Int = 32 * 1024 * 1024
     /// Deletions older than this are forgotten.
     public var tombstoneTTL: Double = 30 * 24 * 3600
+    /// A `json` entry: a file's version is these top-level keys of it, not
+    /// the whole file.
+    public var jsonKeys: [String]?
 
-    public init(home: String, machineId: String, rewriteHome: Bool = true) {
+    public init(home: String, machineId: String, rewriteHome: Bool = true, jsonKeys: [String]? = nil) {
         self.home = home
         self.machineId = machineId
         self.rewriteHome = rewriteHome
+        self.jsonKeys = jsonKeys
     }
 
     /// One file or symlink found on disk.
@@ -166,7 +170,12 @@ public struct SyncScanner: Sendable {
                 out[rel] = prev
                 continue
             }
-            guard let hashed = hash(path: path, found: f) else { continue }
+            guard let hashed = hash(path: path, found: f) else {
+                // There but not readable now (a JSON file caught half
+                // written): the last version stands, it is not a deletion.
+                if let prev { out[rel] = prev }
+                continue
+            }
             if let prev, !prev.deleted, prev.kind == f.kind, prev.hash == hashed.hash {
                 var same = prev
                 same.size = f.size
@@ -220,16 +229,23 @@ public struct SyncScanner: Sendable {
             let normalized = rewriteHome ? SyncHome.normalize(target, home: home) : target
             return (SyncHash.symlink(normalized), normalized)
         case .file:
-            guard let data = FileManager.default.contents(atPath: path) else { return nil }
-            let normalized = rewriteHome ? SyncHome.normalize(data, home: home) : data
-            return (SyncHash.file(normalized, executable: f.mode & 0o111 != 0), nil)
+            guard let data = travelling(path) else { return nil }
+            return (SyncHash.file(data, executable: jsonKeys == nil && f.mode & 0o111 != 0), nil)
         }
     }
 
-    /// The content a peer receives for `rel`: the file with the home marked.
+    /// The content a peer receives for `rel`: the file with the home
+    /// marked, or only its named keys for a `json` entry.
     public func content(root: String, rel: String) -> Data? {
-        let path = rel.isEmpty ? root : root + "/" + rel
-        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        travelling(rel.isEmpty ? root : root + "/" + rel)
+    }
+
+    private func travelling(_ path: String) -> Data? {
+        guard var data = FileManager.default.contents(atPath: path) else { return nil }
+        if let jsonKeys {
+            guard let projection = SyncJSONKeys.projection(of: data, keys: jsonKeys) else { return nil }
+            data = projection
+        }
         return rewriteHome ? SyncHome.normalize(data, home: home) : data
     }
 
@@ -349,12 +365,14 @@ public enum SyncPlanner {
 public enum SyncApplyError: Error, LocalizedError, Equatable {
     case hashMismatch(String)
     case notAFile(String)
+    case missing(String)
     case failed(String)
 
     public var errorDescription: String? {
         switch self {
         case .hashMismatch(let p): "\(p) changed while it was copied"
         case .notAFile(let p): "\(p) is a folder here and a file on the peer"
+        case .missing(let p): "\(p) is not on this machine; its keys are set once its program creates it"
         case .failed(let m): m
         }
     }
@@ -365,10 +383,13 @@ public enum SyncApplyError: Error, LocalizedError, Equatable {
 public struct SyncApplier: Sendable {
     public var home: String
     public var rewriteHome: Bool
+    /// A `json` entry: only these top-level keys of the file are written.
+    public var jsonKeys: [String]?
 
-    public init(home: String, rewriteHome: Bool = true) {
+    public init(home: String, rewriteHome: Bool = true, jsonKeys: [String]? = nil) {
         self.home = home
         self.rewriteHome = rewriteHome
+        self.jsonKeys = jsonKeys
     }
 
     static func path(root: String, rel: String) -> String {
@@ -385,6 +406,7 @@ public struct SyncApplier: Sendable {
 
         let existing = SyncScanner.lstat(path)
         if existing?.isDirectory == true { throw SyncApplyError.notAFile(path) }
+        if jsonKeys != nil, existing?.kind != .file { throw SyncApplyError.missing(path) }
         if keepPrevious, existing != nil {
             let prev = path + ".sync-prev"
             if SyncScanner.lstat(prev) == nil {
@@ -399,14 +421,34 @@ public struct SyncApplier: Sendable {
             try fm.createSymbolicLink(atPath: path, withDestinationPath: target)
         case .file:
             guard let content else { throw SyncApplyError.failed("no content for \(path)") }
-            let hash = SyncHash.file(content, executable: remote.mode & 0o111 != 0)
+            let hash = SyncHash.file(content, executable: jsonKeys == nil && remote.mode & 0o111 != 0)
             guard hash == remote.hash else { throw SyncApplyError.hashMismatch(path) }
-            let local = rewriteHome ? SyncHome.localize(content, home: home) : content
+            var local = rewriteHome ? SyncHome.localize(content, home: home) : content
+            var mode = remote.mode
+            if let jsonKeys {
+                // Only the named keys change; the file keeps its own
+                // permissions and the rest of what its program wrote.
+                guard let current = fm.contents(atPath: path),
+                      let merged = SyncJSONKeys.merge(into: current, keys: jsonKeys, from: local)
+                else { throw SyncApplyError.failed("\(path) is not a JSON object") }
+                local = merged
+                mode = existing?.mode ?? 0o600
+            }
             let tmp = parent + "/.\((path as NSString).lastPathComponent).sync-tmp-\(getpid())"
-            guard fm.createFile(atPath: tmp, contents: local, attributes: [.posixPermissions: remote.mode]) else {
+            guard fm.createFile(atPath: tmp, contents: local, attributes: [.posixPermissions: mode]) else {
                 throw SyncApplyError.failed("cannot write \(tmp)")
             }
-            try? fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: remote.mtime)], ofItemAtPath: tmp)
+            if jsonKeys != nil {
+                // Its program saved it while the keys were merged: that
+                // save stands, and the next round merges into it.
+                let now = SyncScanner.lstat(path)
+                guard now?.size == existing?.size, now?.mtime == existing?.mtime else {
+                    try? fm.removeItem(atPath: tmp)
+                    throw SyncApplyError.hashMismatch(path)
+                }
+            } else {
+                try? fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: remote.mtime)], ofItemAtPath: tmp)
+            }
             if existing?.kind == .symlink { try fm.removeItem(atPath: path) }
             guard rename(tmp, path) == 0 else {
                 try? fm.removeItem(atPath: tmp)

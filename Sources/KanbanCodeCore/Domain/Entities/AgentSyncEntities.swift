@@ -8,6 +8,10 @@ public enum SyncEntryMode: String, Codable, Sendable, CaseIterable {
     case git
     /// Files and folders copied between machines, newest version of each file wins.
     case mirror
+    /// Named top-level keys of a JSON file, newest version wins. The rest of
+    /// the file stays each machine's own: for a settings file that also
+    /// holds what belongs to one machine (logins, window state).
+    case json
     /// An OptMem memory with one home machine: other machines forward writes
     /// to the home and read a mirrored copy.
     case optmem
@@ -24,6 +28,12 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// Glob patterns left out of a mirror: a name (`*.log`), a folder (`.trash/`)
     /// or a path inside the entry (`synced/`).
     public var excludes: [String]
+    /// json: the top-level keys kept the same on every machine.
+    public var keys: [String]
+    /// The path on a machine that keeps it somewhere else, by machine name
+    /// (any case) or id, e.g. `["box": "~/.config/other/config.json"]`.
+    /// A machine not named here uses `path`.
+    public var paths: [String: String]
     /// git: the origin to clone from on a machine that has no clone.
     public var remoteURL: String?
     /// optmem: machine name or id of the home; nil means the always-on master.
@@ -36,6 +46,8 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
         mode: SyncEntryMode,
         path: String,
         excludes: [String] = [],
+        keys: [String] = [],
+        paths: [String: String] = [:],
         remoteURL: String? = nil,
         home: String? = nil,
         ssh: String? = nil,
@@ -44,6 +56,8 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
         self.mode = mode
         self.path = path
         self.excludes = excludes
+        self.keys = keys
+        self.paths = paths
         self.remoteURL = remoteURL
         self.home = home
         self.ssh = ssh
@@ -51,7 +65,17 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, mode, path, excludes, remoteURL, home, ssh, enabled
+        case id, mode, path, excludes, keys, paths, remoteURL, home, ssh, enabled
+    }
+
+    /// Whether the entry copies files between machines (whole, or their named keys).
+    public var copiesFiles: Bool { mode == .mirror || mode == .json }
+
+    /// The entry's path on `machine`.
+    public func path(on machine: MachineIdentity) -> String {
+        if let own = paths[machine.id] { return own }
+        let name = machine.name.lowercased()
+        return paths.first { $0.key.lowercased() == name }?.value ?? path
     }
 
     public init(from decoder: Decoder) throws {
@@ -59,6 +83,8 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
         mode = try c.decode(SyncEntryMode.self, forKey: .mode)
         path = try c.decode(String.self, forKey: .path)
         excludes = (try? c.decodeIfPresent([String].self, forKey: .excludes)) ?? []
+        keys = (try? c.decodeIfPresent([String].self, forKey: .keys)) ?? []
+        paths = (try? c.decodeIfPresent([String: String].self, forKey: .paths)) ?? [:]
         remoteURL = try? c.decodeIfPresent(String.self, forKey: .remoteURL)
         home = try? c.decodeIfPresent(String.self, forKey: .home)
         ssh = try? c.decodeIfPresent(String.self, forKey: .ssh)
@@ -71,6 +97,8 @@ public struct SyncEntry: Codable, Sendable, Equatable, Identifiable, Hashable {
         try c.encode(mode, forKey: .mode)
         try c.encode(path, forKey: .path)
         if !excludes.isEmpty { try c.encode(excludes, forKey: .excludes) }
+        if !keys.isEmpty { try c.encode(keys, forKey: .keys) }
+        if !paths.isEmpty { try c.encode(paths, forKey: .paths) }
         try c.encodeIfPresent(remoteURL, forKey: .remoteURL)
         try c.encodeIfPresent(home, forKey: .home)
         try c.encodeIfPresent(ssh, forKey: .ssh)
