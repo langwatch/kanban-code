@@ -27,9 +27,11 @@ public enum RemoteAPI {
         public static let worktrees = "worktrees"
         /// `/v1/cards/{id}/side-chat` (`/btw` and `/catchup`) and `human` on prompts.
         public static let sideChat = "sideChat"
+        /// `GET /v1/cards/{id}/slash-commands`.
+        public static let slashCommands = "slashCommands"
     }
 
-    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat]
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.

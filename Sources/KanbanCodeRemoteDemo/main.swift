@@ -327,6 +327,17 @@ final class DemoHost: RemoteControlHost {
         return RemoteTranscript(cardId: cardId, messages: Array(all[start..<end]), olderCursor: start > 0 ? String(start) : nil)
     }
 
+    // MARK: Slash commands
+
+    func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] {
+        _ = try cardState(cardId)
+        return SlashCommandCatalog.merged(assistant: .claude, sideChat: true, disk: [
+            RemoteSlashCommand(name: "deploy", description: "Ship the current branch to staging", source: RemoteSlashCommand.Source.project),
+            RemoteSlashCommand(name: "review", description: "Review recent changes before merge", source: RemoteSlashCommand.Source.user),
+            RemoteSlashCommand(name: "catalog:search", description: "Search the product catalog", source: RemoteSlashCommand.Source.plugin),
+        ])
+    }
+
     // MARK: Side chat
 
     func startSideChat(cardId: String, _ request: RemoteSideChatRequest) async throws -> RemoteSideChatRun {

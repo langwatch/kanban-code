@@ -340,6 +340,33 @@ struct ChatPane: View {
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .onTapGesture { composerFocused = true }
         }
+        // The list lies over the chat, above the composer: it takes no
+        // room, so the chat keeps its place while it opens and closes.
+        .overlay(alignment: .top) {
+            if !slashMatches.isEmpty {
+                SlashCommandList(matches: slashMatches, onSelect: pickSlashCommand)
+                    .frame(height: 0, alignment: .bottom)
+                    .offset(y: -8)
+            }
+        }
+        // The list is read again each time a command name starts.
+        .onChange(of: SlashCommandMenu.query(in: draft.text) != nil) { _, typing in
+            if typing { board.loadSlashCommands(cardId: card.id) }
+        }
+    }
+
+    /// The commands matching the `/name` being typed; empty outside one.
+    private var slashMatches: [RemoteSlashCommand] {
+        guard secretOffer == nil, let query = SlashCommandMenu.query(in: draft.text) else { return [] }
+        let known = board.slashCommands[card.id] ?? RemoteSlashCommand.kanban
+        let usable = supportsSideChat ? known : known.filter { $0.source != RemoteSlashCommand.Source.kanban }
+        return SlashCommandMenu.matches(query: query, in: usable)
+    }
+
+    private func pickSlashCommand(_ command: RemoteSlashCommand) {
+        draft.text = SlashCommandMenu.completion(for: command)
+        composerSelection = TextSelection(insertionPoint: draft.text.endIndex)
+        composerFocused = true
     }
 
     /// The typed text; a deletion into an [Image #N] marker takes the

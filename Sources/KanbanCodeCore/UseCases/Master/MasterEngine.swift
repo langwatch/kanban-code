@@ -64,6 +64,9 @@ public final class MasterEngine {
     /// Each card's last catch-up, shown again while the session has nothing new.
     public lazy var catchUps = CatchUpKeep(kanbanHome: platform.kanbanHome)
 
+    /// The slash command lists read lately, by card.
+    let slashCommandCache = SlashCommandCache()
+
     /// The inbox of the `kanban` commands the CLI hands to this master.
     public lazy var subagentCommands = SubagentCommandStore(
         baseURL: URL(fileURLWithPath: platform.kanbanHome).appendingPathComponent("commands", isDirectory: true))

@@ -202,6 +202,11 @@ public struct RemoteClient: Sendable {
         try await sendEmpty(makeRequest("DELETE", "v1/cards/\(Self.escape(cardId))/side-chat/\(Self.escape(runId))"))
     }
 
+    /// What the card's chat composer offers after `/`.
+    public func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] {
+        try await send(makeRequest("GET", "v1/cards/\(Self.escape(cardId))/slash-commands"))
+    }
+
     /// Sends a queued prompt right away, interrupting the turn.
     public func sendQueuedPromptNow(cardId: String, promptId: String) async throws {
         try await sendEmpty(makeRequest("POST", "v1/cards/\(Self.escape(cardId))/queue/\(Self.escape(promptId))"))

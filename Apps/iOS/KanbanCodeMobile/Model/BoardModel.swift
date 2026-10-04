@@ -33,6 +33,9 @@ final class BoardModel {
     private(set) var isCached = false
     /// Decisions agents on this master wait on, oldest first.
     private(set) var attention: [AttentionRequest] = []
+    /// What each card's chat composer offers after `/`, as last read from
+    /// the master.
+    private(set) var slashCommands: [String: [RemoteSlashCommand]] = [:]
 
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
     @ObservationIgnored private var lastSaved = Date.distantPast
@@ -63,6 +66,21 @@ final class BoardModel {
     }
 
     func supports(_ feature: String) -> Bool { features.contains(feature) }
+
+    /// Reads the card's slash commands from the master; a failed read
+    /// keeps the last list.
+    func loadSlashCommands(cardId: String) {
+        guard supports(RemoteAPI.Feature.slashCommands), let client else { return }
+        Task {
+            guard let commands = try? await client.slashCommands(cardId: cardId) else { return }
+            slashCommands[cardId] = commands
+        }
+    }
+
+    /// Sets a card's slash commands, for previews and tests.
+    func setSlashCommands(_ commands: [RemoteSlashCommand], cardId: String) {
+        slashCommands[cardId] = commands
+    }
 
     var scope: RemoteScope { device?.scope ?? .full }
     var canUseTerminal: Bool { scope == .full }

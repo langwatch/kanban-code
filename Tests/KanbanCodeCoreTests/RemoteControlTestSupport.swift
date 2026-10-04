@@ -51,6 +51,13 @@ final class FakeRemoteHost: RemoteControlHost {
         state.withLock { $0.sideChatCancels.append(runId) }
     }
 
+    func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] {
+        _ = try card(cardId)
+        return SlashCommandCatalog.merged(assistant: .claude, sideChat: true, disk: [
+            RemoteSlashCommand(name: "deploy", description: "Ship it", source: RemoteSlashCommand.Source.user),
+        ])
+    }
+
     let state: Mutex<State>
 
     init(cards: [RemoteCard] = FakeRemoteHost.defaultCards) {

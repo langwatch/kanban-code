@@ -28,6 +28,7 @@ struct RemotePeerScopeTests {
         ("DELETE", ["cards", "c1", "queue", "p1"]),
         ("POST", ["cards", "c1", "side-chat"]), ("GET", ["cards", "c1", "side-chat", "r1"]),
         ("DELETE", ["cards", "c1", "side-chat", "r1"]),
+        ("GET", ["cards", "c1", "slash-commands"]),
     ]
 
     @Test("a peer token may make every call pairing uses")

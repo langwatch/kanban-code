@@ -397,6 +397,10 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         await engine.cancelSideChat(cardId: cardId, runId: runId)
     }
 
+    public func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] {
+        try await engine.slashCommands(cardId: cardId)
+    }
+
     public func interrupt(cardId: String) async throws {
         if let owner = await ownerClient(cardId) {
             return try await forwarded { try await owner.interrupt(cardId: cardId) }

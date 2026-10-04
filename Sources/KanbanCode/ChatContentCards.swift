@@ -781,10 +781,20 @@ struct ChatInputBar: View {
     var onCatchUp: (() -> Void)?
     var onQueuePrompt: ((String, Bool, [String]) -> Void)?
     var onEscape: (() -> Void)?
+    /// What the composer offers once the text starts with `/` (card chat).
+    var slashCommands: [RemoteSlashCommand] = []
+    /// The slash list just opened: time to read the commands again.
+    var onSlashMenuOpen: (() -> Void)?
 
     @Binding var text: String
     @Binding var pastedImages: [Data]
     @FocusState private var isFocused: Bool
+    /// The command name being typed after `/`, or nil outside one.
+    @State private var slashQuery: String?
+    @State private var slashSelectedIndex = 0
+    /// Esc closed the list; it stays closed until the text stops being a
+    /// command name.
+    @State private var slashDismissed = false
     @State private var showQueueDialog = false
     @State private var secretOffer = VaultSecretOffer()
     @State private var historyIndex: Int = -1 // -1 = current draft, 0 = last sent, 1 = second to last...
@@ -985,8 +995,12 @@ struct ChatInputBar: View {
                     onCmdSubmit: onQueuePrompt != nil ? { showQueueDialog = true } : nil,
                     onUpArrowAtStart: { recallHistoryUp() },
                     onDownArrowAtStart: { recallHistoryDown() },
+                    onArrowUp: { moveSlashSelection(by: -1) },
+                    onArrowDown: { moveSlashSelection(by: 1) },
+                    onEnterIntercept: { slashReplacement(isReturn: true) },
+                    onTabIntercept: { slashReplacement(isReturn: false) },
                     onImagePaste: insertPastedImage,
-                    onEscape: { escapeOrDecline(onEscape) },
+                    onEscape: { escapeOrDecline(escapeSlashMenuOr(onEscape)) },
                     onHeightChange: { height in
                         editorHeight = clampedEditorHeight(height, minHeight: 36, maxHeight: 160)
                     },
@@ -1043,7 +1057,23 @@ struct ChatInputBar: View {
                     .shadow(color: .black.opacity(isFocused ? 0.12 : 0.08), radius: isFocused ? 10 : 6, y: isFocused ? 4 : 3)
             )
             .animation(.easeInOut(duration: 0.15), value: isFocused)
+            // The list sits over the chat, above the composer, and takes
+            // no room in the layout.
+            .overlay(alignment: .top) {
+                let matches = slashMatches(for: text)
+                if !matches.isEmpty {
+                    SlashCommandList(
+                        matches: matches,
+                        selectedIndex: min(slashSelectedIndex, matches.count - 1),
+                        onHover: { slashSelectedIndex = $0 },
+                        onSelect: pickSlashCommand
+                    )
+                    .frame(height: 0, alignment: .bottom)
+                    .offset(y: -6)
+                }
+            }
         }
+        .zIndex(10)
         .frame(maxWidth: chatMaxWidth + 40)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
@@ -1051,6 +1081,7 @@ struct ChatInputBar: View {
         .padding(.bottom, 12)
         .onChange(of: text) { _, newValue in
             normalizeInlineImages(for: newValue)
+            trackSlashQuery(in: newValue)
         }
         .sheet(isPresented: $showQueueDialog) {
             let existingImages: [ImageAttachment] = pastedImages.compactMap { ImageAttachment(data: $0) }
@@ -1219,6 +1250,60 @@ struct ChatInputBar: View {
             mentionSelectedIndex = 0
         }
         return String(text[..<atIdx]) + "@\(handle) "
+    }
+
+    // MARK: - Slash command completion
+
+    /// The commands the list shows for `text`; empty while it is closed,
+    /// and while a sent message is being recalled with the up arrow.
+    private func slashMatches(for text: String) -> [RemoteSlashCommand] {
+        guard style == .card, !slashDismissed, !slashCommands.isEmpty, !secretOffer.isActive, historyIndex == -1,
+              let query = SlashCommandMenu.query(in: text) else { return [] }
+        return SlashCommandMenu.matches(query: query, in: slashCommands)
+    }
+
+    private func trackSlashQuery(in text: String) {
+        let query = SlashCommandMenu.query(in: text)
+        guard query != slashQuery else { return }
+        if slashQuery == nil { onSlashMenuOpen?() }
+        if query == nil { slashDismissed = false }
+        slashQuery = query
+        slashSelectedIndex = 0
+    }
+
+    /// Up and down move in the list while it shows; otherwise the editor
+    /// keeps the key.
+    private func moveSlashSelection(by delta: Int) -> Bool {
+        let matches = slashMatches(for: text)
+        guard !matches.isEmpty else { return false }
+        slashSelectedIndex = SlashCommandMenu.move(min(slashSelectedIndex, matches.count - 1), by: delta, count: matches.count)
+        return true
+    }
+
+    /// What Return or Tab writes in the editor for the selected command,
+    /// or nil when the key keeps its meaning (Return sends).
+    private func slashReplacement(isReturn: Bool) -> String? {
+        let matches = slashMatches(for: text)
+        guard !matches.isEmpty else { return nil }
+        let selected = matches[min(slashSelectedIndex, matches.count - 1)]
+        return SlashCommandMenu.replacement(text: text, selected: selected, isReturn: isReturn)
+    }
+
+    /// A click on a command. The editor ignores a new text while it has
+    /// the keyboard unless it is empty, so the text is emptied first.
+    private func pickSlashCommand(_ command: RemoteSlashCommand) {
+        let completed = SlashCommandMenu.completion(for: command)
+        text = ""
+        DispatchQueue.main.async {
+            text = completed
+            focusInput()
+        }
+    }
+
+    /// Esc closes the list when it shows.
+    private func escapeSlashMenuOr(_ fallback: (() -> Void)?) -> (() -> Void)? {
+        guard !slashMatches(for: text).isEmpty else { return fallback }
+        return { slashDismissed = true }
     }
 
     private func send() {

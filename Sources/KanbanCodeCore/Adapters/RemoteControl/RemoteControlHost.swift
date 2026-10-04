@@ -97,6 +97,9 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// The run and its answer so far.
     func sideChatRun(cardId: String, runId: String) async throws -> RemoteSideChatRun
     func cancelSideChat(cardId: String, runId: String) async throws
+
+    /// What the card's chat composer offers after `/`.
+    func slashCommands(cardId: String) async throws -> [RemoteSlashCommand]
 }
 
 extension RemoteControlHost {
@@ -173,6 +176,8 @@ extension RemoteControlHost {
     public func cancelSideChat(cardId: String, runId: String) async throws {
         throw RemoteHostError.notFound("this host has no side chat")
     }
+
+    public func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] { [] }
 }
 
 /// A host call that failed for a reason the client should see, with the

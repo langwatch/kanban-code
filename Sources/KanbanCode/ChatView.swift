@@ -66,6 +66,12 @@ struct ChatView: View {
         assistant == .claude && !cardId.isEmpty ? SideChatCenter.controller(for: cardId) : nil
     }
 
+    /// What the composer offers after `/`, from the board state.
+    private var slashCommands: [RemoteSlashCommand] {
+        guard !cardId.isEmpty else { return [] }
+        return AppComposition.shared.engine.slashCommandsShown(cardId: cardId, assistant: assistant)
+    }
+
     /// Sends a prompt to the session, with the waiting bubble until it lands.
     private func sendToSession(_ text: String, _ images: [String]) {
         pendingMessage = text
@@ -218,6 +224,11 @@ struct ChatView: View {
                 },
                 onQueuePrompt: onQueuePrompt,
                 onEscape: onEscape,
+                slashCommands: slashCommands,
+                onSlashMenuOpen: {
+                    guard !cardId.isEmpty else { return }
+                    AppComposition.shared.engine.refreshSlashCommands(cardId: cardId)
+                },
                 text: $draftText,
                 pastedImages: $draftImages
             )

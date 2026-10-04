@@ -37,6 +37,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 - `cardActions`: `pinned` on cards, `pinned` and `archived: false` on `PATCH /v1/cards/{id}`, and `DELETE /v1/cards/{id}`.
 - `worktrees`: `POST /v1/cards/{id}/worktree/remove` and `POST /v1/cards/{id}/discover`.
 - `sideChat`: the `/v1/cards/{id}/side-chat` routes, and `human` on prompts and tasks.
+- `slashCommands`: `GET /v1/cards/{id}/slash-commands`.
 
 | Method and path | Scope | Returns |
 |---|---|---|
@@ -54,6 +55,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 | `POST /v1/cards/{id}/side-chat` | any | `RemoteSideChatRequest` → `RemoteSideChatRun`, 201 |
 | `GET /v1/cards/{id}/side-chat/{runId}` | any | `RemoteSideChatRun` with the answer so far |
 | `DELETE /v1/cards/{id}/side-chat/{runId}` | any | 204, stops the run |
+| `GET /v1/cards/{id}/slash-commands` | any | `[RemoteSlashCommand]`: `name`, `description`, `source` |
 | `POST /v1/cards/{id}/interrupt` | any | 204 |
 | `POST /v1/cards/{id}/resume` | any | `RemoteCard` |
 | `PATCH /v1/cards/{id}` | any | `RemoteCardUpdate` (`name`, `column`, `archived`, `pinned`) → `RemoteCard` |
@@ -83,6 +85,7 @@ Behaviour:
 - A card's `queuedPrompts` lists the prompts waiting for the turn to end, oldest first, each with `id`, `text` and `imageCount`. `POST /v1/cards/{id}/queue/{promptId}` sends one now, interrupting the turn when one runs; `DELETE` on the same path drops it. Both return 404 when the prompt is no longer queued (sent or removed).
 - rush cards use rush's own queue. `mode: queue` hands the prompt to `rush session send` at once and rush holds it while Claude works; `mode: now` is `rush session send --now`, which gives it to Claude mid-turn without stopping the turn. Images always go at once. The card's `queuedPrompts` come from rush's queue (ids `agtop-<n>-<hash>`; `rush-<n>-<hash>` is accepted too), read on every session scan and every 2 seconds while something is queued, and `/queue/{promptId}` runs `rush queue send|remove <id> <n> --was <text>` (`agtop session queue <id> send|remove` where only agtop is installed).
 - `side-chat` starts a `/btw` or `/catchup` run (see [`side-chat.md`](side-chat.md)): `{"kind": "btw", "question", "history"}` or `{"kind": "catchup"}`. The run reads the session and writes nothing into it. Poll the run until `state` is `done` or `failed`; `text` grows while it is `running`. A catch-up run carries `since` (the human's last message) and `refs` (the messages it can cite, each with the transcript `offset` a `RemoteMessage.id` starts with). A `catchup` request for a card whose session has no message after the last one its previous catch-up covers returns that run again at once: `state` `done`, `reopened: true`, `finishedAt`, and `followUps` (the exchanges asked in its side chat); `fresh: true` in the request runs a new one. A `btw` request that follows up on a catch-up passes that run's id as `catchUpId`, so its exchange is kept with it. Other runs are kept for 15 minutes. A card another master owns is forwarded there. 409 for a card with no conversation or a session that is not Claude Code.
+- `slash-commands` lists what the chat composer offers after `/` (see [`slash-commands.md`](slash-commands.md)). The master that owns the card reads its disk; a card another master owns is forwarded there, and while that master does not answer the list is the last one it gave, else the chat's and the agent's commands. A list is kept for 30 seconds per card.
 - `human: true` on `prompt` and `tasks` says the human typed the text himself in a chat composer. The server records it per card and passes `--human` to rush. It is dropped for an agent-scope device.
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.
 - `resume` on a card that never ran launches it.
@@ -112,7 +115,7 @@ The Mac app and `kanban-code-server` (an always-on Linux box) are both masters: 
 The token a master holds for its peer has the `peer` scope, in both directions. It may call what pairing uses and nothing else (`RemoteScopePolicy`, an allow list: a route added later is refused until it is listed):
 
 - Card sync: `GET /v1/links`, `POST /v1/links/changed`, `GET /v1/peers`, `GET /v1/board`, `GET /v1/machines`, `GET /v1/events`, `GET /v1/me`.
-- What the human does to a card the peer owns: `POST /v1/tasks`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `discover`, `worktree/remove`.
+- What the human does to a card the peer owns: `POST /v1/tasks`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `discover`, `worktree/remove`.
 - Moves between masters: `POST /v1/cards/{id}/move`, `GET /v1/cards/{id}/handover`.
 - Approvals: `GET /v1/attention`, `POST /v1/attention/presence`, `POST /v1/attention/{id}/resolve`.
 - Channels: `POST /v1/cli` (`kanban channel` and `dm` only), `GET` and `PUT /v1/channels/files`.

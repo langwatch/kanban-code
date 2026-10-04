@@ -224,6 +224,28 @@ struct RemoteControlServerTests {
         #expect(f.host.state.withLock { $0.prompts.last?.request.human } == nil)
     }
 
+    @Test("a card's slash commands are listed for the phone and for an agent, and only read")
+    func slashCommands() async throws {
+        let f = try await RemoteServerFixture()
+        defer { f.shutdown() }
+        let cardId = try #require(await f.host.board().cards.first?.id)
+        for token in [f.fullToken, f.agentToken] {
+            let (status, data) = try await f.request("GET", "/v1/cards/\(cardId)/slash-commands", token: token)
+            #expect(status == 200)
+            let commands = try JSONDecoder.remote.decode([RemoteSlashCommand].self, from: data)
+            #expect(commands.first == RemoteSlashCommand.kanban.first)
+            #expect(commands.contains(RemoteSlashCommand(name: "deploy", description: "Ship it", source: "user")))
+        }
+        let raw = try #require(try JSONSerialization.jsonObject(
+            with: try await f.request("GET", "/v1/cards/\(cardId)/slash-commands", token: f.fullToken).1) as? [[String: String]])
+        #expect(raw.first.map { Set($0.keys) } == ["name", "description", "source"])
+        #expect(try await f.request("GET", "/v1/cards/nope/slash-commands", token: f.fullToken).0 == 404)
+        #expect(try await f.request("POST", "/v1/cards/\(cardId)/slash-commands", token: f.fullToken).0 == 405)
+        #expect(try await f.request("GET", "/v1/cards/\(cardId)/slash-commands").0 == 401)
+        let health = try JSONDecoder.remote.decode(RemoteHealth.self, from: try await f.request("GET", "/v1/health").1)
+        #expect(health.features?.contains(RemoteAPI.Feature.slashCommands) == true)
+    }
+
     @Test("a side chat run is started, read and cancelled")
     func sideChat() async throws {
         let f = try await RemoteServerFixture()
