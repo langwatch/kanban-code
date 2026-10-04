@@ -249,12 +249,16 @@ struct CardActionsMenu: View {
         Section {
             if card.archived {
                 if full {
-                    Button("Unarchive", systemImage: "tray.and.arrow.up") { act(.unarchive) }
+                    Button("Bring back to board", systemImage: "tray.and.arrow.up") { act(.unarchive) }
                         .disabled(!online)
                     Button("Delete Card", systemImage: "trash", role: .destructive) { act(.delete) }
                         .disabled(!online)
                 }
             } else {
+                if card.column == .allSessions {
+                    Button("Bring back to board", systemImage: "tray.and.arrow.up") { act(.moveToColumn(.backlog)) }
+                        .disabled(!online)
+                }
                 Button("Archive", systemImage: "archivebox", role: card.isLive ? .destructive : nil) { act(.archive) }
                     .disabled(!online)
             }
@@ -327,8 +331,9 @@ private struct CardActionsPresenter: ViewModifier {
     }
 }
 
-/// The archived cards of every online master, newest first, to bring back
-/// or delete. The board leaves them out.
+/// The archived cards of the masters, newest first, to open, bring back or
+/// delete. The board leaves them out. Its search field looks through every
+/// card the board does not hold: archived, All Sessions and older Done.
 struct ArchivedCardsSheet: View {
     let fleet: FleetModel
     @Environment(\.dismiss) private var dismiss
@@ -336,6 +341,12 @@ struct ArchivedCardsSheet: View {
     @State private var entries: [FleetCard] = []
     @State private var loaded = false
     @State private var failures: [String] = []
+    @State private var search = ""
+    @State private var found: CardSearchModel
+    @State private var path: [String] = []
+    /// The rows while a card is open on top of the list, which must not
+    /// change under it (see `BoardScreen.covered`).
+    @State private var covered: [FleetCard]?
 
     /// Archived cards listed, at most.
     static let limit = 200
@@ -343,38 +354,82 @@ struct ArchivedCardsSheet: View {
     init(fleet: FleetModel) {
         self.fleet = fleet
         _controller = State(initialValue: CardActionController(fleet: fleet))
+        _found = State(initialValue: CardSearchModel(fleet: fleet))
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The archive, or what the search found, without the cards that are
+    /// back on a board.
+    private var rows: [FleetCard] {
+        let onBoard = fleet.boardCardIds
+        return (isSearching ? found.results : entries).filter { !onBoard.contains($0.id) }
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
+            let rows = covered ?? self.rows
             Group {
-                if !loaded {
+                if !loaded && !isSearching {
                     ProgressView("Loading archived cards")
-                } else if entries.isEmpty {
+                } else if rows.isEmpty && !isSearching {
                     ContentUnavailableView("No archived cards", systemImage: "archivebox",
                                            description: Text(failures.joined(separator: "\n")))
+                } else if rows.isEmpty && found.phase == .loaded {
+                    ContentUnavailableView.search(text: search)
                 } else {
                     List {
                         Section {
-                            ForEach(entries) { entry in
-                                CardRow(card: entry.card, machine: fleet.showsMachines ? entry.machineName : nil,
-                                        machineOffline: !entry.master.isOnline)
-                                    .contextMenu { CardActionsMenu(entry: entry, controller: controller) }
-                                    .swipeActions(edge: .trailing) {
-                                        if controller.supportsCardActions(entry) {
-                                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                                controller.perform(.delete, on: entry)
-                                            }
-                                            Button("Unarchive", systemImage: "tray.and.arrow.up") {
-                                                controller.perform(.unarchive, on: entry)
-                                            }
-                                            .tint(.blue)
+                            ForEach(rows) { entry in
+                                NavigationLink(value: entry.card.id) {
+                                    CardRow(card: entry.card, showsColumn: isSearching,
+                                            machine: fleet.showsMachines ? entry.machineName : nil,
+                                            machineOffline: !entry.master.isOnline)
+                                }
+                                .contextMenu { CardActionsMenu(entry: entry, controller: controller) }
+                                .swipeActions(edge: .trailing) {
+                                    if entry.card.archived, controller.supportsCardActions(entry) {
+                                        Button("Delete", systemImage: "trash", role: .destructive) {
+                                            controller.perform(.delete, on: entry)
                                         }
+                                        Button("Bring back", systemImage: "tray.and.arrow.up") {
+                                            controller.perform(.unarchive, on: entry)
+                                        }
+                                        .tint(.blue)
                                     }
-                                    .accessibilityIdentifier("archived-\(entry.card.id)")
+                                }
+                                .accessibilityIdentifier("archived-\(entry.card.id)")
+                            }
+                            if isSearching {
+                                switch found.phase {
+                                case .loading:
+                                    HStack(spacing: 10) {
+                                        ProgressView()
+                                        Text("Searching older cards")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("olderLoading")
+                                case .failed:
+                                    Label("Could not search older cards", systemImage: "exclamationmark.triangle")
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("olderFailed")
+                                case .loaded, .idle:
+                                    EmptyView()
+                                }
                             }
                         } footer: {
-                            if !failures.isEmpty { Text(failures.joined(separator: "\n")) }
+                            if isSearching {
+                                if found.phase == .loaded {
+                                    Text(OlderSearchNote.text(truncated: found.truncated, unreachable: found.unreachable))
+                                }
+                            } else if !failures.isEmpty {
+                                Text(failures.joined(separator: "\n"))
+                            } else if entries.count >= Self.limit {
+                                Text("The \(Self.limit) most recent. Search to find an older one.")
+                            }
                         }
                     }
                     .listStyle(.insetGrouped)
@@ -382,36 +437,54 @@ struct ArchivedCardsSheet: View {
             }
             .navigationTitle("Archived cards")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search archived and older cards")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("archivedDone")
                 }
             }
+            .navigationDestination(for: String.self) { id in
+                FleetCardScreen(cardId: id, fleet: fleet)
+            }
             .refreshable { await load() }
             .task { await load() }
             .cardActions(controller)
         }
+        .onChange(of: search) { _, text in found.update(text) }
+        .onChange(of: path.isEmpty) { _, isEmpty in
+            covered = isEmpty ? nil : rows
+        }
         .onAppear {
-            controller.onChange = { id in entries.removeAll { $0.id == id } }
+            controller.onChange = { id in
+                // A card brought back is on a board and leaves the rows by
+                // itself; a deleted one is on none and is dropped here.
+                guard fleet.masters.allSatisfy({ $0.card(id: id) == nil }) else { return }
+                entries.removeAll { $0.id == id }
+                found.remove(cardId: id)
+            }
         }
     }
 
-    /// Every card of each online master (`?all=1`), archived ones only, a
-    /// card two masters list taken from its owner.
+    /// The newest archived cards of each online master, a card two masters
+    /// list taken from its owner. A master with card search sends only
+    /// those; an older one sends every card (`?all=1`).
     private func load() async {
         var byId: [String: FleetCard] = [:]
         var failed: [String] = []
         for master in fleet.onlineMasters {
             guard let client = master.client else { continue }
             do {
-                let board = try await client.board(all: true)
-                for card in board.cards where card.archived && card.parentCardId == nil {
-                    let owner = card.machineId.flatMap(fleet.master(machineId:)) ?? master
-                    let name = card.machineId.flatMap { fleet.master(machineId: $0)?.machineName }
-                        ?? card.machineName ?? master.machineName
-                    let entry = FleetCard(card: card, master: owner, machineName: name)
-                    if byId[card.id] == nil || owner === master { byId[card.id] = entry }
+                let cards: [RemoteCard]
+                if master.supports(RemoteAPI.Feature.cardSearch) {
+                    cards = try await client.searchCards("", scope: .archived, limit: Self.limit, local: true).cards
+                } else {
+                    cards = try await client.board(all: true).cards.filter { $0.archived && $0.parentCardId == nil }
+                }
+                for card in cards {
+                    let entry = fleet.fleetCard(card, listedBy: master)
+                    if byId[card.id] == nil || entry.master === master { byId[card.id] = entry }
                 }
             } catch {
                 failed.append("\(master.machineName): \(error.localizedDescription)")
@@ -420,6 +493,7 @@ struct ArchivedCardsSheet: View {
         entries = Array(byId.values
             .sorted { ($0.card.lastActivity ?? $0.card.updatedAt) > ($1.card.lastActivity ?? $1.card.updatedAt) }
             .prefix(Self.limit))
+        fleet.remember(entries)
         failures = failed
         loaded = true
     }

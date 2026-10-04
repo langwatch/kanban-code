@@ -33,6 +33,7 @@ struct CardScreen: View {
     @State private var transcript: TranscriptModel
     @State private var actionError: String?
     @State private var isResuming = false
+    @State private var isBringingBack = false
     @State private var showFullTerminal = false
     @State private var terminalSession: String?
     @State private var terminal = TerminalController()
@@ -62,6 +63,9 @@ struct CardScreen: View {
                 header(card)
                 if !board.isOnline {
                     offlineBanner
+                }
+                if !CardSearch.isOnBoard(card) {
+                    archivedBanner(card)
                 }
                 if showsTerminal {
                     Picker("View", selection: $tab) {
@@ -125,6 +129,50 @@ struct CardScreen: View {
             .padding(.vertical, 6)
             .background(Color(.secondarySystemBackground))
             .accessibilityIdentifier("machineOffline")
+    }
+
+    /// A card that is off the board: archived, or left in All Sessions. Its
+    /// conversation reads as it is; one tap puts it in the backlog.
+    private func archivedBanner(_ card: RemoteCard) -> some View {
+        HStack(spacing: 10) {
+            Label(card.archived ? "Archived" : "In All Sessions, not on the board", systemImage: "archivebox")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button {
+                bringBack(card)
+            } label: {
+                if isBringingBack {
+                    ProgressView()
+                } else {
+                    Label("Bring back to board", systemImage: "tray.and.arrow.up")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(isBringingBack || !board.isOnline || board.client == nil)
+            .accessibilityIdentifier("bringBack")
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground))
+    }
+
+    /// Unarchives the card, or places an All Sessions card in the backlog;
+    /// either way it lands in the backlog and stays.
+    private func bringBack(_ card: RemoteCard) {
+        guard let client = board.client, !isBringingBack else { return }
+        isBringingBack = true
+        Task {
+            defer { isBringingBack = false }
+            do {
+                let update = card.archived ? RemoteCardUpdate(archived: false) : RemoteCardUpdate(column: .backlog)
+                board.upsert(try await client.updateCard(cardId: cardId, update))
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                actionError = "Could not bring the card back: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func header(_ card: RemoteCard) -> some View {

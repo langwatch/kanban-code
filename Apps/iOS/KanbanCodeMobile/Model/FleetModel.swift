@@ -186,8 +186,34 @@ final class FleetModel {
         return order.compactMap { byId[$0]?.entry }
     }
 
+    /// A card of the boards, else one a search found outside them.
     func entry(cardId: String) -> FleetCard? {
-        cards.first { $0.id == cardId }
+        cards.first { $0.id == cardId } ?? found[cardId]
+    }
+
+    /// Cards found by a search that the boards do not hold (archived, All
+    /// Sessions, older Done), so they can be opened.
+    private(set) var found: [String: FleetCard] = [:]
+
+    func remember(_ entries: [FleetCard]) {
+        for entry in entries { found[entry.id] = entry }
+    }
+
+    /// `card` as `master` listed it, shown through the master that owns it
+    /// when that one is paired.
+    func fleetCard(_ card: RemoteCard, listedBy master: BoardModel) -> FleetCard {
+        let owner = card.machineId.flatMap(self.master(machineId:)) ?? master
+        let name = card.machineId.flatMap { self.master(machineId: $0)?.machineName } ?? card.machineName ?? master.machineName
+        return FleetCard(card: card, master: owner, machineName: name)
+    }
+
+    /// Ids of the cards on a board right now: not archived, not in All Sessions.
+    var boardCardIds: Set<String> {
+        var out = Set<String>()
+        for model in masters {
+            for card in model.board?.cards ?? [] where CardSearch.isOnBoard(card) { out.insert(card.id) }
+        }
+        return out
     }
 
     /// Projects of every master, once per name: the same repository sits at

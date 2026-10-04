@@ -7,8 +7,10 @@ struct BoardScreen: View {
     /// The board's rows while a card is open on top of it. A list that
     /// changes while covered reloads when focus comes back to one of its
     /// cells, which UIKit refuses with a crash; so it waits for the card to close.
-    @State private var covered: (sections: [BoardSection], down: [BoardModel])?
+    @State private var covered: (sections: [BoardSection], down: [BoardModel], older: [FleetCard])?
     @State private var search = ""
+    /// Matches among the cards the phone does not hold, from the masters.
+    @State private var older: CardSearchModel
     @State private var showNewTask = false
     @State private var showAddMac = false
     @State private var showMachines = false
@@ -26,6 +28,7 @@ struct BoardScreen: View {
     init(fleet: FleetModel) {
         self.fleet = fleet
         _actions = State(initialValue: CardActionController(fleet: fleet))
+        _older = State(initialValue: CardSearchModel(fleet: fleet))
     }
 
     /// The only master, when there is one.
@@ -45,8 +48,9 @@ struct BoardScreen: View {
                 .cardActions(actions)
         }
         .task { fleet.start() }
+        .onChange(of: search) { _, text in older.update(text) }
         .onChange(of: path.isEmpty) { _, isEmpty in
-            covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters)
+            covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters, olderRows)
         }
         .sheet(isPresented: $showNewTask) {
             NewTaskSheet(fleet: fleet) { card, master in
@@ -115,10 +119,11 @@ struct BoardScreen: View {
             }
         } else if fleet.hasBoard {
             let sections = covered?.sections ?? sections(of: fleet.cards)
+            let olderCards = covered?.older ?? olderRows
             if sections.isEmpty && fleet.isMulti && search.isEmpty {
                 List { machineStatusSection }
                     .listStyle(.insetGrouped)
-            } else if sections.isEmpty {
+            } else if sections.isEmpty && (!isSearching || (olderCards.isEmpty && older.phase == .loaded)) {
                 if search.isEmpty {
                     ContentUnavailableView {
                         Label("No cards", systemImage: "rectangle.stack")
@@ -168,6 +173,7 @@ struct BoardScreen: View {
                             }
                         }
                     }
+                    if isSearching { olderSection(olderCards) }
                 }
                 .listStyle(.insetGrouped)
             }
@@ -183,6 +189,71 @@ struct BoardScreen: View {
             }
         } else {
             ProgressView("Loading board")
+        }
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// What the masters found that the board above does not show, narrowed
+    /// to the project filter.
+    private var olderRows: [FleetCard] {
+        let onBoard = fleet.boardCardIds
+        let filterName = filteredProjectName
+        return older.results.filter { entry in
+            guard !onBoard.contains(entry.id) else { return false }
+            let card = entry.card
+            return projectFilter.isEmpty || card.projectPath == projectFilter
+                || (card.projectName != nil && card.projectName == filterName)
+        }
+    }
+
+    /// Archived, All Sessions and older Done cards that match the search.
+    private func olderSection(_ cards: [FleetCard]) -> some View {
+        Section {
+            ForEach(cards) { entry in
+                NavigationLink(value: entry.card.id) {
+                    CardRow(card: entry.card, showsColumn: true,
+                            machine: fleet.showsMachines ? entry.machineName : nil,
+                            machineOffline: !entry.master.isOnline)
+                }
+                .contextMenu { CardActionsMenu(entry: entry, controller: actions) }
+                .accessibilityIdentifier("older-\(entry.card.id)")
+            }
+            switch older.phase {
+            case .loading:
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Searching older cards")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("olderLoading")
+            case .failed:
+                Label("Could not search older cards", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("olderFailed")
+            case .loaded where cards.isEmpty:
+                Text("No archived or older card matches")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("olderEmpty")
+            case .loaded, .idle:
+                EmptyView()
+            }
+        } header: {
+            HStack {
+                Text("Archived and older")
+                Spacer()
+                if older.phase == .loaded {
+                    Text(older.truncated ? "\(cards.count)+" : "\(cards.count)")
+                        .monospacedDigit()
+                }
+            }
+        } footer: {
+            if older.phase == .loaded {
+                Text(OlderSearchNote.text(truncated: older.truncated, unreachable: older.unreachable))
+            }
         }
     }
 
@@ -289,7 +360,8 @@ struct BoardScreen: View {
     /// Live sessions first, whatever their column (busy ones on top), then
     /// the columns without them.
     private func sections(of entries: [FleetCard]) -> [BoardSection] {
-        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        // The same rule as the masters' search: every word, any field.
+        let query = CardSearchQuery(search)
         let filterName = filteredProjectName
         let visible = entries.filter { entry in
             let card = entry.card
@@ -297,11 +369,7 @@ struct BoardScreen: View {
             if !projectFilter.isEmpty, card.projectPath != projectFilter, card.projectName == nil || card.projectName != filterName {
                 return false
             }
-            guard !query.isEmpty else { return true }
-            return [card.title, card.projectName, card.branch, fleet.showsMachines ? entry.machineName : nil]
-                .compactMap { $0?.lowercased() }
-                .contains { $0.contains(query) }
-                || card.prs.contains { "#\($0.number)".contains(query) }
+            return query.matches(card, extra: fleet.showsMachines ? [entry.machineName] : [])
         }
         func recent(_ a: FleetCard, _ b: FleetCard) -> Bool {
             (a.card.lastActivity ?? a.card.updatedAt) > (b.card.lastActivity ?? b.card.updatedAt)
@@ -319,6 +387,18 @@ struct BoardScreen: View {
             if !cards.isEmpty { out.append(BoardSection(id: column.rawValue, title: column.displayName, cards: cards)) }
         }
         return out
+    }
+}
+
+/// What the footer of search results from the masters says.
+enum OlderSearchNote {
+    static func text(truncated: Bool, unreachable: [String]) -> String {
+        var parts: [String] = []
+        if truncated { parts.append("More cards match. Type more to narrow it down.") }
+        if !unreachable.isEmpty {
+            parts.append("No answer from \(unreachable.joined(separator: ", ")), so its older cards may be missing.")
+        }
+        return parts.joined(separator: " ")
     }
 }
 

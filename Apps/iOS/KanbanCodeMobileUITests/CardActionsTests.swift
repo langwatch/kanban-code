@@ -8,7 +8,9 @@ final class CardActionsTests: KanbanUITestCase {
     @discardableResult
     func row(_ id: String) -> XCUIElement {
         let card = app.buttons["card-\(id)"]
-        XCTAssertTrue(app.buttons["card-card_wait"].waitForExistence(timeout: 40))
+        // Any card: a scrolled list holds only the rows near the screen.
+        let anyCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'card-'")).firstMatch
+        XCTAssertTrue(anyCard.waitForExistence(timeout: 40))
         // Clear of the search field floating over the bottom of the list.
         let limit = app.windows.firstMatch.frame.height * 0.75
         for _ in 0..<8 where !card.isHittable || card.frame.maxY > limit { app.swipeUp(velocity: .slow) }
@@ -92,7 +94,7 @@ final class CardActionsTests: KanbanUITestCase {
         archived.press(forDuration: 1.0)
         XCTAssertTrue(menuItem("Delete Card").waitForExistence(timeout: 15))
         shot("act-06-archived-menu")
-        menuItem("Unarchive").tap()
+        menuItem("Bring back to board").tap()
         XCTAssertTrue(waitFor(10) { !archived.exists }, "unarchived card still listed")
         app.buttons["archivedDone"].tap()
         row("card_done")
@@ -111,7 +113,8 @@ final class CardActionsTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(10) { !archived.exists }, "deleted card still listed")
         shot("act-08-deleted")
         app.buttons["archivedDone"].tap()
-        XCTAssertTrue(app.buttons["card-card_wait"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["boardMenu"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitFor(10) { !self.app.buttons["archivedDone"].exists })
         XCTAssertFalse(app.buttons["card-card_done"].exists)
     }
 
