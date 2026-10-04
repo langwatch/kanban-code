@@ -28,7 +28,7 @@ struct RemotePeerScopeTests {
         ("DELETE", ["cards", "c1", "queue", "p1"]),
         ("POST", ["cards", "c1", "side-chat"]), ("GET", ["cards", "c1", "side-chat", "r1"]),
         ("DELETE", ["cards", "c1", "side-chat", "r1"]),
-        ("GET", ["cards", "c1", "slash-commands"]),
+        ("GET", ["cards", "c1", "slash-commands"]), ("POST", ["cards", "c1", "pasted-image"]),
     ]
 
     @Test("a peer token may make every call pairing uses")
@@ -87,6 +87,16 @@ struct RemotePeerScopeTests {
         #expect(try await f.request("POST", "/v1/attention/att_1/resolve", token: peer, body: Data("{}".utf8)).0 == 400)
         #expect(try await f.request("POST", "/v1/cards/card_live/interrupt", token: peer).0 == 204)
 
+        // An image pasted into the terminal of a card the peer owns.
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])
+        let (stored, answer) = try await f.request("POST", "/v1/cards/card_live/pasted-image", token: peer, body: png)
+        #expect(stored == 201)
+        #expect(try JSONDecoder().decode(RemotePastedImage.self, from: answer).path == "/owner/images/pasted/1.png")
+        #expect(f.host.state.withLock { $0.pastedImages.first?.bytes } == png)
+        #expect(try await f.request("POST", "/v1/cards/card_live/pasted-image", token: peer, body: Data("text".utf8)).0 == 400)
+        #expect(try await f.request("POST", "/v1/cards/card_none/pasted-image", token: peer, body: png).0 == 404)
+        #expect(try await f.request("GET", "/v1/cards/card_live/pasted-image", token: peer).0 == 403)
+
         let (terminal, body) = try await f.request("GET", "/v1/cards/card_live/terminal", token: peer)
         #expect(terminal == 403)
         #expect(String(decoding: body, as: UTF8.self).contains("cannot open terminals"))
@@ -105,6 +115,8 @@ struct RemotePeerScopeTests {
         let prompt = Data(#"{"text":"hello","mode":"queue"}"#.utf8)
         #expect(try await f.request("POST", "/v1/cards/card_live/prompt", token: terminal, body: prompt).0 == 403)
         #expect(try await f.request("POST", "/v1/cards/card_live/interrupt", token: terminal).0 == 403)
-        #expect(f.host.state.withLock { $0.prompts.isEmpty })
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        #expect(try await f.request("POST", "/v1/cards/card_live/pasted-image", token: terminal, body: png).0 == 403)
+        #expect(f.host.state.withLock { $0.prompts.isEmpty && $0.pastedImages.isEmpty })
     }
 }

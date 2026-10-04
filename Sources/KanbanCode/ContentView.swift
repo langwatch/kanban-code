@@ -817,6 +817,8 @@ struct ContentView: View {
                 if let card = store.state.selectedCard,
                    let sessionName = card.link.tmuxLink?.sessionName {
                     ImageDropZone(isTargeted: $isDroppingImage) { imageData in
+                        // Another master runs the card: the image goes to its session there.
+                        if AppComposition.shared.engine.sendDroppedImage(cardId: card.id, png: imageData) { return }
                         if let rushId = RushSessionName.rushId(fromName: sessionName) {
                             var image = ImageAttachment(data: imageData)
                             Task {

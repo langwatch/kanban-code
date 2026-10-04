@@ -104,6 +104,10 @@ public protocol RemoteControlHost: AnyObject, Sendable {
 
     /// What the card's chat composer offers after `/`.
     func slashCommands(cardId: String) async throws -> [RemoteSlashCommand]
+
+    /// Keeps an image pasted into the card's terminal as a file on the
+    /// master that owns the card, and returns where it is there.
+    func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage
 }
 
 extension RemoteControlHost {
@@ -186,6 +190,10 @@ extension RemoteControlHost {
     }
 
     public func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] { [] }
+
+    public func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage {
+        throw RemoteHostError.notFound("this host does not keep pasted images")
+    }
 }
 
 /// A host call that failed for a reason the client should see, with the

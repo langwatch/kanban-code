@@ -589,6 +589,17 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         }
     }
 
+    public func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage {
+        if let owner = await ownerClient(cardId) {
+            return try await forwarded { try await owner.uploadPastedImage(cardId: cardId, data: image) }
+        }
+        let home = try await MainActor.run {
+            _ = try card(cardId)
+            return engine.platform.kanbanHome
+        }
+        return RemotePastedImage(path: try PastedImages.store(image, kanbanHome: home))
+    }
+
     public func discoverBranches(cardId: String) async throws {
         if let owner = await ownerClient(cardId) {
             return try await forwarded { try await owner.discoverBranches(cardId: cardId) }

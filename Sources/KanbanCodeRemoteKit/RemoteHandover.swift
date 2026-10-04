@@ -109,7 +109,34 @@ public struct RemoteWorktreeRemoval: Codable, Sendable, Equatable {
     }
 }
 
+/// Answer of `POST /v1/cards/{id}/pasted-image`.
+public struct RemotePastedImage: Codable, Sendable, Equatable {
+    /// The file on the master that owns the card.
+    public var path: String
+
+    public init(path: String) {
+        self.path = path
+    }
+}
+
 extension RemoteClient {
+    /// POST /v1/cards/{id}/pasted-image: the master that owns the card keeps
+    /// the image as a file and answers with its path there, for a paste into
+    /// the card's terminal to type.
+    public func uploadPastedImage(cardId: String, data: Data) async throws -> RemotePastedImage {
+        var request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/pasted-image")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        request.timeoutInterval = 120
+        let (body, status) = try await rawData(for: request)
+        guard (200..<300).contains(status) else { throw RemoteClientError.from(status: status, body: body) }
+        do {
+            return try JSONDecoder.remote.decode(RemotePastedImage.self, from: body)
+        } catch {
+            throw RemoteClientError.decoding(String(describing: error))
+        }
+    }
+
     /// POST /v1/cards/{id}/worktree/remove: the master that owns the card
     /// removes its worktree where it lives.
     public func removeWorktree(cardId: String) async throws -> RemoteWorktreeRemoval {

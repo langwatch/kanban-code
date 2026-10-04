@@ -539,6 +539,9 @@ public final class RemoteControlServer: Sendable {
             case ("GET", "cards/*/slash-commands"):
                 return .response(.json(try await host.slashCommands(cardId: id)))
 
+            case ("POST", "cards/*/pasted-image"):
+                return .response(.json(try await host.storePastedImage(cardId: id, image: request.body), status: 201))
+
             case ("DELETE", "cards/*/side-chat/*"):
                 try await host.cancelSideChat(cardId: id, runId: rest[3])
                 return .response(.noContent)
@@ -673,7 +676,7 @@ public final class RemoteControlServer: Sendable {
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
         "cards/*/move", "cards/*/handover", "cards/*/transcript/raw",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
-        "cards/*/slash-commands",
+        "cards/*/slash-commands", "cards/*/pasted-image",
     ]
 
     static func response(for error: Error) -> RemoteHTTPResponse {

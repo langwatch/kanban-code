@@ -86,6 +86,13 @@ enum AppServices {
         return nil
     }
 
+    /// Where the assistant of the terminal `sessionName` runs, for an image
+    /// pasted into it.
+    @MainActor
+    static func terminalImageRoute(forSession sessionName: String) -> TerminalImageRoute {
+        TerminalImageRoute.route(peerCard: peerCard(forSession: sessionName), machine: machine(forSession: sessionName))
+    }
+
     /// Whether the terminal `sessionName` must wait before it starts: its
     /// card names an owner, and this Mac does not know yet whether that is
     /// itself or which peer it is (the identity and peer statuses load after

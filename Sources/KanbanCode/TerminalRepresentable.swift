@@ -266,8 +266,15 @@ final class BatchedTerminalView: LocalProcessTerminalView {
     /// Claude Code always expects bracketed paste for image detection.
     override func paste(_ sender: Any) {
         let clipboard = NSPasteboard.general
-        if pasteImageToMachine(clipboard) { return }
-        sendBracketedPaste(text: clipboard.string(forType: .string) ?? "")
+        let text = clipboard.string(forType: .string)
+        if text == nil, let session = enclosingSessionName(),
+           case .upload(let route) = TerminalPastePlan.plan(
+               hasText: false, hasImage: Self.hasImage(clipboard), route: AppServices.terminalImageRoute(forSession: session)),
+           let data = Self.pngData(from: clipboard),
+           pasteImage(data, session: session, route: route) {
+            return
+        }
+        sendBracketedPaste(text: text ?? "")
     }
 
     private func sendBracketedPaste(text: String) {
@@ -283,28 +290,56 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         send(data: pasteEnd[0...])
     }
 
-    /// An image pasted into the terminal of a session on a machine. Claude
-    /// there reads the machine's clipboard, which has nothing, so the bytes
-    /// go over the bridge and the paste types the path of the file on the
-    /// machine, as a dropped file does.
-    private func pasteImageToMachine(_ clipboard: NSPasteboard) -> Bool {
-        guard clipboard.string(forType: .string) == nil else { return false }
-        guard let session = enclosingSessionName(),
-              let machine = AppServices.machine(forSession: session),
-              let supervisor = AppServices.boxdSupervisor,
-              let data = Self.pngData(from: clipboard) else { return false }
-        Task {
-            do {
-                let remotePath = try await supervisor.uploadPastedImage(machineName: machine, data: data)
-                // Pasted through the tmux server of the machine, which runs
-                // after the upload on the same bridge, so the assistant
-                // finds the file when it checks the pasted path.
-                try await AppServices.tmux.pasteText(to: session, text: remotePath + " ")
-            } catch {
-                KanbanCodeLog.warn("terminal", "Image paste to \(machine) failed: \(error.localizedDescription)")
+    /// An image pasted into the terminal of a session that runs somewhere
+    /// else. The assistant there reads the clipboard of its own machine,
+    /// which has nothing, so the bytes go to that machine and the paste
+    /// types the path of the file there, as a dropped file does. False when
+    /// nothing can carry the bytes.
+    private func pasteImage(_ data: Data, session: String, route: TerminalImageRoute) -> Bool {
+        switch route {
+        case .local:
+            return false
+        case .peer(let machineId, let cardId):
+            let engine = AppComposition.shared.engine
+            Task { [weak self] in
+                do {
+                    let remotePath = try await engine.uploadPastedImage(cardId: cardId, data: data)
+                    // Typed through the terminal's own stream to the owner,
+                    // the way keystrokes go.
+                    self?.sendBracketedPaste(text: remotePath + " ")
+                } catch {
+                    Self.reportPasteFailure(session: session, place: engine.peerDisplayName(machineId), error: error)
+                }
             }
+            return true
+        case .machine(let machine):
+            guard let supervisor = AppServices.boxdSupervisor else { return false }
+            Task {
+                do {
+                    let remotePath = try await supervisor.uploadPastedImage(machineName: machine, data: data)
+                    // Pasted through the tmux server of the machine, which runs
+                    // after the upload on the same bridge, so the assistant
+                    // finds the file when it checks the pasted path.
+                    try await AppServices.tmux.pasteText(to: session, text: remotePath + " ")
+                } catch {
+                    Self.reportPasteFailure(session: session, place: machine, error: error)
+                }
+            }
+            return true
         }
-        return true
+    }
+
+    /// Says in the terminal and in the app's banner that the image did not
+    /// arrive, so the paste does not look like it did nothing.
+    private static func reportPasteFailure(session: String, place: String, error: Error) {
+        let message = "Could not paste the image on \(place): \(error.localizedDescription)"
+        KanbanCodeLog.warn("terminal", message)
+        TerminalCache.shared.showNotice(message, sessions: [session])
+        AppComposition.shared.store.dispatch(.setError(message))
+    }
+
+    private static func hasImage(_ clipboard: NSPasteboard) -> Bool {
+        clipboard.availableType(from: [.png, .tiff]) != nil
     }
 
     private func enclosingSessionName() -> String? {

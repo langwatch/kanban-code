@@ -170,6 +170,27 @@ extension MasterEngine {
         Task { try? await tmux.sendEscape(sessionName: session) }
     }
 
+    /// Keeps an image on the master that owns the card and returns its path
+    /// there, for a paste into the card's terminal here to type.
+    public func uploadPastedImage(cardId: String, data: Data) async throws -> String {
+        guard let client = await ownerClient(forCard: cardId) else {
+            throw MasterPeerError.unknownPeer(peerName(store.state.links[cardId]?.ownerMachine ?? "the owner"))
+        }
+        return try await client.uploadPastedImage(cardId: cardId, data: data).path
+    }
+
+    /// Sends an image dropped on a card another master owns to its session
+    /// there, as a message of its own. False when this master owns the card.
+    @discardableResult
+    public func sendDroppedImage(cardId: String, png: Data) -> Bool {
+        guard isForeign(cardId) else { return false }
+        let image = RemoteImage(mediaType: "image/png", data: png.base64EncodedString())
+        forwardToOwner(cardId, "send the image") { client in
+            try await client.sendPrompt(cardId: cardId, text: "", images: [image])
+        }
+        return true
+    }
+
     /// Asks the peers to pull now.
     public func notifyPeers() {
         guard let peerSync else { return }
@@ -286,6 +307,9 @@ extension MasterEngine {
         let line = store.state.handoverLine(cardId: cardId) ?? "Moving here"
         return "\(line). It resumes by itself once it is here."
     }
+
+    /// The name of the peer master with this machine id, as Settings shows it.
+    public func peerDisplayName(_ machineId: String) -> String { peerName(machineId) }
 
     func peerName(_ machineId: String) -> String {
         store.state.peerStatuses.values.first { $0.machine?.id == machineId }?.machine?.name ?? machineId

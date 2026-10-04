@@ -360,6 +360,50 @@ struct MasterHandoverTests {
         #expect(boxLink.queuedPrompts == nil || boxLink.queuedPrompts?.first?.body == "from the mac")
     }
 
+    @Test("an image pasted into the terminal of a card another master owns is stored on that master")
+    func pastedImageGoesToTheOwner() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("pasted-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        // The Mac holds a peer-scope token of the box, as a paired master does.
+        try await mac.start(peerURL: box.url, peerToken: try box.devices.add(name: "mac", scope: .peer).token)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        box.store.dispatch(.createManualTask(Link(
+            id: "card_box", name: "On the box", projectPath: "/tmp/acme", column: .waiting,
+            sessionLink: SessionLink(sessionId: "sid-box"), tmuxLink: TmuxLink(sessionName: "box-session")
+        )))
+        mac.store.dispatch(.createManualTask(Link(id: "card_mac", name: "On the Mac", projectPath: "/tmp/acme", column: .waiting)))
+        await mac.peerSync.pullAll()
+        await box.peerSync.pullAll()
+        #expect(mac.engine.isForeign("card_box"))
+
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data((0..<4096).map { UInt8($0 % 251) })
+        let path = try await mac.engine.uploadPastedImage(cardId: "card_box", data: png)
+        #expect(path.hasPrefix(PastedImages.directory(kanbanHome: box.home) + "/"))
+        #expect(path.hasSuffix(".png"))
+        #expect(FileManager.default.contents(atPath: path) == png)
+
+        // A device of the Mac asking for the box's card is passed on to the box.
+        let phone = RemoteClient(baseURL: URL(string: mac.url)!, token: try mac.devices.add(name: "phone", scope: .full).token)
+        let forwarded = try await phone.uploadPastedImage(cardId: "card_box", data: png).path
+        #expect(forwarded.hasPrefix(PastedImages.directory(kanbanHome: box.home) + "/"))
+        #expect(forwarded != path)
+        // Its own card is stored on the Mac.
+        let own = try await phone.uploadPastedImage(cardId: "card_mac", data: png).path
+        #expect(own.hasPrefix(PastedImages.directory(kanbanHome: mac.home) + "/"))
+
+        // The Mac's own card has no owner to upload to; a body that is no image is refused by the owner.
+        await #expect(throws: MasterPeerError.self) { try await mac.engine.uploadPastedImage(cardId: "card_mac", data: png) }
+        await #expect(throws: RemoteClientError.self) {
+            try await mac.engine.uploadPastedImage(cardId: "card_box", data: Data("not an image".utf8))
+        }
+    }
+
     @Test("renames, moves and archives from either master converge on both")
     func sharedEditsConverge() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("converge-\(UUID().uuidString)")

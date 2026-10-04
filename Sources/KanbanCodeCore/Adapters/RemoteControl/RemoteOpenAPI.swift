@@ -119,6 +119,10 @@ enum RemoteOpenAPI {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {"summary": "Re-scan the card's conversation for pushed branches and its pull requests, on the owning master", "responses": {"204": {"description": "done"}, "404": {"$ref": "#/components/responses/Error"}}}
     },
+    "/v1/cards/{id}/pasted-image": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}],
+      "post": {"summary": "Keep an image pasted into the card's terminal as a file on the owning master. The body is the image bytes (PNG, JPEG, GIF or WebP, at most 20 MiB)", "requestBody": {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "responses": {"201": {"description": "{\"path\"}: the file on the owning master"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/cards/{id}/handover": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "get": {"summary": "What a master adopting the card needs: repository origin, branch, uncommitted changes, transcript size", "responses": {"200": {"description": "RemoteHandoverInfo"}, "404": {"$ref": "#/components/responses/Error"}}}

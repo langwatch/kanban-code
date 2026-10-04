@@ -26,6 +26,18 @@ final class FakeRemoteHost: RemoteControlHost {
         var sideChats: [String: RemoteSideChatRun] = [:]
         var sideChatRequests: [RemoteSideChatRequest] = []
         var sideChatCancels: [String] = []
+        var pastedImages: [(cardId: String, bytes: Data)] = []
+    }
+
+    func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage {
+        _ = try card(cardId)
+        guard RemotePromptImages.fileExtension(of: image) != nil else {
+            throw RemoteHostError.badRequest("the image is not PNG, JPEG, GIF or WebP")
+        }
+        return state.withLock { s in
+            s.pastedImages.append((cardId, image))
+            return RemotePastedImage(path: "/owner/images/pasted/\(s.pastedImages.count).png")
+        }
     }
 
     func startSideChat(cardId: String, _ request: RemoteSideChatRequest) async throws -> RemoteSideChatRun {
