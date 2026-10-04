@@ -32,7 +32,21 @@ private final class FakeApprovals: VaultApprovals, @unchecked Sendable {
 }
 
 private let inside = VaultCaller(cardId: "card_1", sessionId: "s1", pid: 42, ancestry: ["kv", "zsh", "tmux"])
-private let outside = VaultCaller(claimedCardId: "card_1", pid: 43, ancestry: ["kv", "launchd"])
+private let outside = VaultCaller(claimedCardId: "card_1", pid: 43, ancestry: ["kv", "launchd"],
+                                  commandLines: ["node kv.js run OPEN -- /jobs/daily.sh", "/bin/bash -c /jobs/daily.sh"])
+private let overNetwork = VaultCaller(claimedCardId: "card_1", remoteDevice: "tablet")
+
+/// Records what Jev was asked.
+private final class RecordingJev: JevJudging, @unchecked Sendable {
+    let lock = NSLock()
+    let verdict: JevVerdict?
+    var questions: [JevReleaseQuestion] = []
+    init(verdict: JevVerdict?) { self.verdict = verdict }
+    func judge(_ question: JevReleaseQuestion) async -> JevVerdict? {
+        lock.withLock { questions.append(question) }
+        return verdict
+    }
+}
 
 private func makeBroker(jev: JevVerdict? = nil, answer: String? = nil, approvals: FakeApprovals? = nil) async throws -> (VaultBroker, VaultStore, FakeApprovals) {
     let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
@@ -153,10 +167,72 @@ struct VaultBrokerTests {
         #expect(done.status == .granted && done.values == ["JUDGED": "judged-value"])
     }
 
-    @Test func outsideACardAsksEvenForOpen() async throws {
-        let (broker, _, approvals) = try await makeBroker(answer: "Deny")
-        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"]), caller: outside)
+    @Test func aProcessOutsideACardGetsAnOpenSecretWithNoQuestion() async throws {
+        let (broker, store, approvals) = try await makeBroker(answer: "Deny")
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"], command: "/jobs/daily.sh"), caller: outside)
+        #expect(r.status == .granted && r.values == ["OPEN": "open-value"])
+        #expect(approvals.raised.isEmpty)
+        let line = try #require(await store.log(limit: 1, cardId: nil, secret: "OPEN").first)
+        #expect(line.outcome == .allowed && line.decider == .tier)
+        #expect(line.detail == "open tier, outside any card session, called by: node kv.js run OPEN -- /jobs/daily.sh <- /bin/bash -c /jobs/daily.sh")
+    }
+
+    @Test func aProcessOutsideACardIsJudgedByJev() async throws {
+        let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
+        try await store.ensureIdentity()
+        try await store.upsert(VaultSecret(name: "JUDGED", value: "judged-value", tier: .judged, rules: "deploys only"))
+        let jev = RecordingJev(verdict: JevVerdict(choice: .allow, confidence: 0.9))
+        let approvals = FakeApprovals(answer: nil)
+        let broker = VaultBroker(store: store, jev: jev, approvals: approvals, machine: "test")
+        let r = await broker.release(
+            VaultReleaseRequest(mode: "run", names: ["JUDGED"], command: "/jobs/daily.sh", reason: "Daily deploy of the docs site"),
+            caller: outside)
+        #expect(r.status == .granted && r.values == ["JUDGED": "judged-value"])
+        #expect(approvals.raised.isEmpty)
+        let question = try #require(jev.questions.first)
+        #expect(question.outsideCard && question.cardTitle == nil && question.prompts == nil)
+        #expect(question.processChain == "node kv.js run OPEN -- /jobs/daily.sh <- /bin/bash -c /jobs/daily.sh")
+        #expect(question.reason == "Daily deploy of the docs site")
+        let state = try #require(JevClient.body(for: question, model: "m")["state"] as? [String: Any])
+        #expect((state["caller"] as? String)?.contains("outside any Kanban card session") == true)
+        #expect(state["caller_process_chain"] as? String == question.processChain)
+        let line = try #require(await store.log(limit: 1, cardId: nil, secret: "JUDGED").first)
+        #expect(line.decider == .jev && line.detail?.hasPrefix("Jev allowed (90%), outside any card session, called by: ") == true)
+    }
+
+    @Test func anUnsureJevSendsAProcessOutsideACardToTheHuman() async throws {
+        let (broker, _, approvals) = try await makeBroker(jev: JevVerdict(choice: .allow, confidence: 0.4), answer: "Approve once")
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["JUDGED"]), caller: outside)
         #expect(r.status == .pending)
+        let raised = try #require(approvals.raised.first)
+        #expect(raised.options == ["Approve once", "Deny"])
+        #expect(raised.vault?.origin == .outside)
+        #expect(r.message.contains("up to"))
+        let done = await waitResult(broker, try #require(r.id))
+        #expect(done.status == .granted && done.values == ["JUDGED": "judged-value"])
+    }
+
+    @Test func aProcessOutsideACardStillAsksForAnAskSecret() async throws {
+        let (broker, _, approvals) = try await makeBroker(answer: "Deny")
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["ASK", "OPEN"]), caller: outside)
+        #expect(r.status == .pending)
+        #expect(approvals.raised.first?.vault?.secrets.map(\.name) == ["ASK"])
+        let never = await broker.release(VaultReleaseRequest(mode: "run", names: ["NEVER"]), caller: outside)
+        #expect(never.status == .denied)
+    }
+
+    @Test func theWaitingMessageNamesTwelveHours() async throws {
+        let (broker, _, _) = try await makeBroker(answer: nil)
+        await broker.configure(approvalTimeout: VaultPolicy.approvalTimeout)
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["ASK"]), caller: inside)
+        #expect(r.status == .pending && r.message.contains("up to 12 hours"))
+    }
+
+    @Test func overTheNetworkAsksEvenForOpen() async throws {
+        let (broker, _, approvals) = try await makeBroker(answer: "Deny")
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"]), caller: overNetwork)
+        #expect(r.status == .pending)
+        #expect(approvals.raised.first?.vault?.whys == [VaultPolicy.overNetworkReason])
         let raised = try #require(approvals.raised.first)
         #expect(raised.kind == .vaultApproval)
         #expect(raised.options == ["Approve once", "Deny"])

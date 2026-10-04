@@ -303,9 +303,9 @@ struct AttentionDeliveryTests {
         #expect(waiting.isEmpty)
     }
 
-    @Test("an approval waits an hour before it is denied")
-    func approvalTimeoutIsAnHour() {
-        #expect(VaultPolicy.approvalTimeout == 3600)
+    @Test("an approval waits twelve hours before it is denied")
+    func approvalTimeoutIsTwelveHours() {
+        #expect(VaultPolicy.approvalTimeout == 12 * 3600)
     }
 
     @Test("test runs log to their own file")

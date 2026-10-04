@@ -5,8 +5,10 @@ import KanbanCodeRemoteKit
 
 @Suite("Vault decision engine")
 struct VaultPolicyTests {
-    private func decide(_ tier: VaultTier, everyUse: Bool = false, inside: Bool = true, lease: Bool = false, recent: Int = 0) -> VaultVerdict {
-        VaultPolicy.decide(VaultDecisionInput(tier: tier, everyUseAsks: everyUse, insideCard: inside, hasLease: lease, recentReleases: recent))
+    private func decide(_ tier: VaultTier, everyUse: Bool = false, inside: Bool = true, network: Bool = false, lease: Bool = false,
+                        recent: Int = 0) -> VaultVerdict {
+        VaultPolicy.decide(VaultDecisionInput(tier: tier, everyUseAsks: everyUse, insideCard: inside, overNetwork: network,
+                                              hasLease: lease, recentReleases: recent))
     }
 
     @Test func neverTierRefusesWhateverElseHolds() {
@@ -18,12 +20,49 @@ struct VaultPolicyTests {
     }
 
     @Test(arguments: [VaultTier.open, .judged, .ask])
-    func outsideACardSessionAsksWhateverTheTier(tier: VaultTier) {
-        guard case .ask(let why) = decide(tier, inside: false, lease: true) else {
-            Issue.record("outside a card must ask")
+    func overTheNetworkAsksWhateverTheTier(tier: VaultTier) {
+        guard case .ask(let why) = decide(tier, inside: false, network: true, lease: true) else {
+            Issue.record("a request over the network must ask")
             return
         }
-        #expect(why.contains("card session"))
+        #expect(why == VaultPolicy.overNetworkReason)
+    }
+
+    @Test func aLocalProcessOutsideACardGetsOpenSecretsWithNoQuestion() {
+        #expect(decide(.open, inside: false) == .allow(.tier, "open tier, outside any card session"))
+    }
+
+    @Test func aLocalProcessOutsideACardGoesToJevForJudgedSecrets() {
+        #expect(decide(.judged, inside: false) == .consultJev)
+        #expect(VaultPolicy.afterJev(JevVerdict(choice: .allow, confidence: 0.9), insideCard: false)
+            == .allow(.jev, "Jev allowed (90%), outside any card session"))
+        if case .ask = VaultPolicy.afterJev(JevVerdict(choice: .allow, confidence: 0.4), insideCard: false) {} else {
+            Issue.record("an unsure Jev goes to the human")
+        }
+    }
+
+    @Test func aLocalProcessOutsideACardStillAsksForAskAndIsRefusedNever() {
+        if case .ask = decide(.ask, inside: false) {} else { Issue.record("ask tier must ask") }
+        if case .deny = decide(.never, inside: false) {} else { Issue.record("never must deny") }
+        if case .ask = decide(.open, inside: false, recent: 20) {} else { Issue.record("the rate limit still asks") }
+    }
+
+    @Test func theProcessChainIsTheCallerFirstAndCut() {
+        let ps = "  812 /usr/lib/systemd/systemd --user\n 9001 node /root/.kanban-code/cli/dist/kv.js run A -- job.sh\n 9000 /bin/bash -c job.sh >> log 2>&1\n"
+        let lines = VaultCallerResolver.parseCommandLines(ps, order: [9001, 9000, 7, 812], limit: 30)
+        #expect(lines == ["node /root/.kanban-code/cli/di...", "/bin/bash -c job.sh >> log 2>&...", "/usr/lib/systemd/systemd --use..."])
+        let caller = VaultCaller(pid: 9001, commandLines: ["kv run A -- job.sh", "bash -c job.sh"])
+        #expect(caller.auditNote == "called by: kv run A -- job.sh <- bash -c job.sh")
+        #expect(VaultCaller(cardId: "card_1", commandLines: ["kv run A"]).auditNote == nil)
+        #expect(VaultCaller(remoteDevice: "tablet", commandLines: ["kv run A"]).auditNote == nil)
+    }
+
+    @Test func anApprovalWaitsTwelveHours() {
+        #expect(VaultPolicy.approvalTimeout == 12 * 3600)
+        #expect(VaultPolicy.span(VaultPolicy.approvalTimeout) == "12 hours")
+        #expect(VaultPolicy.span(3600) == "1 hour")
+        #expect(VaultPolicy.span(90 * 60) == "90 minutes")
+        #expect(VaultPolicy.span(60) == "1 minute")
     }
 
     @Test func openTierAllows() {

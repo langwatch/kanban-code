@@ -7,6 +7,8 @@ public struct VaultDecisionInput: Sendable, Equatable {
     public var everyUseAsks: Bool
     /// The caller runs inside a card session the master verified.
     public var insideCard: Bool
+    /// The request came over the network, not from a process on this machine.
+    public var overNetwork: Bool
     /// The card holds an active lease on the secret.
     public var hasLease: Bool
     /// Releases of this secret in the rate window, this one excluded.
@@ -15,9 +17,10 @@ public struct VaultDecisionInput: Sendable, Equatable {
     /// own, and the card's process runs in that project's folder.
     public var ownProjectDev: Bool
 
-    public init(tier: VaultTier, everyUseAsks: Bool = false, insideCard: Bool, hasLease: Bool = false, recentReleases: Int = 0,
-                ownProjectDev: Bool = false) {
+    public init(tier: VaultTier, everyUseAsks: Bool = false, insideCard: Bool, overNetwork: Bool = false, hasLease: Bool = false,
+                recentReleases: Int = 0, ownProjectDev: Bool = false) {
         self.tier = tier
+        self.overNetwork = overNetwork
         self.everyUseAsks = everyUseAsks
         self.insideCard = insideCard
         self.hasLease = hasLease
@@ -54,11 +57,14 @@ public struct JevVerdict: Sendable, Equatable {
 /// The release rules of the vault, as pure functions:
 ///
 /// 1. tier never: deny.
-/// 2. not inside a verified card session: ask, whatever the tier.
+/// 2. the request came over the network: ask, whatever the tier.
 /// 3. more than `rateLimit` releases of the secret in the window: ask.
 /// 4. an active card lease (and the secret allows leases): allow.
 /// 5. tier open: allow. judged: allow the project's own development
 ///    secret, else Jev. ask: the human.
+///
+/// A local process outside every card session (a scheduled job, a shell)
+/// follows the same tiers as a card; it holds no lease.
 public enum VaultPolicy {
     /// The environment whose judged secrets a card gets in its own project
     /// without a Jev call.
@@ -86,14 +92,26 @@ public enum VaultPolicy {
     /// Jev must be at least this sure to allow on its own.
     public static let jevAllowConfidence = 0.6
     /// How long the human has to answer before the request is denied.
-    public static let approvalTimeout: TimeInterval = 60 * 60
+    public static let approvalTimeout: TimeInterval = 12 * 60 * 60
+    public static let overNetworkReason = "the request comes over the network, not from a process on this machine"
+    public static let outsideCardNote = "outside any card session"
+
+    /// A waiting time in words: "12 hours", "90 minutes", "1 hour".
+    public static func span(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        if minutes >= 60, minutes % 60 == 0 {
+            let hours = minutes / 60
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
 
     public static func decide(_ input: VaultDecisionInput, rateLimit: Int = VaultPolicy.rateLimit) -> VaultVerdict {
         if input.tier == .never {
             return .deny("this secret is never released")
         }
-        if !input.insideCard {
-            return .ask("the request does not come from a Kanban card session")
+        if input.overNetwork {
+            return .ask(overNetworkReason)
         }
         if input.recentReleases >= rateLimit {
             return .ask("released \(input.recentReleases) times in the last \(Int(rateWindow / 60)) minutes")
@@ -102,7 +120,7 @@ public enum VaultPolicy {
             return .allow(.lease, "the card holds a lease")
         }
         switch input.tier {
-        case .open: return .allow(.tier, "open tier")
+        case .open: return .allow(.tier, input.insideCard ? "open tier" : "open tier, \(outsideCardNote)")
         case .judged: return input.ownProjectDev ? .allow(.rule, ownProjectDevReason) : .consultJev
         case .ask: return .ask(input.everyUseAsks ? "every use of this secret asks" : "this secret always asks")
         case .never: return .deny("this secret is never released")
@@ -112,12 +130,13 @@ public enum VaultPolicy {
     /// Turns Jev's answer into a verdict. No answer (Jev unreachable, an
     /// error, a timeout) goes to the human: the vault never allows on a
     /// failure.
-    public static func afterJev(_ verdict: JevVerdict?) -> VaultVerdict {
+    public static func afterJev(_ verdict: JevVerdict?, insideCard: Bool = true) -> VaultVerdict {
         guard let verdict else { return .ask("Jev could not be reached") }
         switch verdict.choice {
         case .allow:
             if verdict.confidence >= jevAllowConfidence {
-                return .allow(.jev, "Jev allowed (\(percent(verdict.confidence)))")
+                let allowed = "Jev allowed (\(percent(verdict.confidence)))"
+                return .allow(.jev, insideCard ? allowed : "\(allowed), \(outsideCardNote)")
             }
             return .ask("Jev was unsure (\(percent(verdict.confidence)) allow)")
         case .ask:

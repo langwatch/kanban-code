@@ -611,7 +611,7 @@ public actor VaultBroker {
             switch answer {
             case .allow(let by, let why):
                 allowed.append((s, by, why))
-                if req.mode == "hook" { hookAllows["\(caller.cardId ?? "")|\(s.name)"] = now }
+                if req.mode == "hook" { hookAllows[Self.reuseKey(caller, s)] = now }
             case .ask(let why): asks.append((s, why))
             case .deny(let why): denies.append((s, why))
             case .consultJev: asks.append((s, "Jev was not consulted"))
@@ -682,10 +682,11 @@ public actor VaultBroker {
                 hasLease = await store.activeLease(cardId: card, secret: name, now: now) != nil
             }
         }
-        let reuseKey = "\(caller.cardId ?? "")|\(s.name)"
-        let reusing = req.mode == "hook" && caller.insideCard && (hookAllows[reuseKey].map { now.timeIntervalSince($0) < hookReuse } ?? false)
+        let reusing = req.mode == "hook" && caller.remoteDevice == nil
+            && (hookAllows[Self.reuseKey(caller, s)].map { now.timeIntervalSince($0) < hookReuse } ?? false)
         let input = VaultDecisionInput(
             tier: s.tier, everyUseAsks: s.leasePolicy.everyUseAsks, insideCard: caller.insideCard,
+            overNetwork: caller.remoteDevice != nil,
             // Hook-wrapped commands load the env on every Bash call: that
             // volume is ambient, so it neither counts nor trips the limit.
             hasLease: hasLease, recentReleases: req.mode == "hook" ? 0 : await store.recentReleases(s.name, now: now),
@@ -693,8 +694,14 @@ public actor VaultBroker {
         )
         let first = VaultPolicy.decide(input)
         guard first == .consultJev else { return first }
-        if reusing { return .allow(.jev, "reused Jev's allow for this card") }
+        if reusing { return .allow(.jev, caller.insideCard ? "reused Jev's allow for this card" : "reused Jev's allow for this caller") }
         return .consultJev
+    }
+
+    /// Under which a hook-wrapped command reuses Jev's allow: the card, or
+    /// for a caller outside a card what it claims and where it runs.
+    private static func reuseKey(_ caller: VaultCaller, _ s: VaultSecret) -> String {
+        "\(principalKey(caller))|\(s.name)"
     }
 
     /// Asks Jev about the judged secrets: one question per distinct rules
@@ -723,7 +730,8 @@ public actor VaultBroker {
                 let names = indexes.map { secrets[$0].name }
                 let question = JevReleaseQuestion(
                     secrets: names, rules: rules, command: req.command ?? "(no command given)",
-                    reason: req.reason, cardTitle: title, cwd: req.cwd, prompts: prompts
+                    reason: req.reason, cardTitle: title, cwd: req.cwd, prompts: prompts,
+                    processChain: caller.insideCard ? nil : caller.processChain, outsideCard: !caller.insideCard
                 )
                 let subject = "\(names.joined(separator: ", ")) for \(caller.cardId ?? "outside")"
                 let evidence = prompts.map { "\($0.typed.count + $0.earlier.count) prompts entered in the card, \($0.delivered.count) from other senders" }
@@ -732,7 +740,7 @@ public actor VaultBroker {
                     let verdict = await jev.judge(question)
                     let answer = verdict.map { "\($0.choice.rawValue) \(Int(($0.confidence * 100).rounded()))%" } ?? "no answer"
                     KanbanCodeLog.info("vault", "Jev on \(subject): \(answer) (\(evidence))")
-                    return (indexes, VaultPolicy.afterJev(verdict))
+                    return (indexes, VaultPolicy.afterJev(verdict, insideCard: !question.outsideCard))
                 }
             }
             var out = [(VaultSecret, VaultVerdict)?](repeating: nil, count: secrets.count)
@@ -1226,7 +1234,7 @@ public actor VaultBroker {
             await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
                                                secret: s.name, tier: s.tier, outcome: .asked, decider: .rule,
                                                action: actionName(action), command: command, reason: reason,
-                                               detail: caller.tokenNote.map { "\(why), \($0)" } ?? why, requestId: id))
+                                               detail: caller.auditNote.map { "\(why), \($0)" } ?? why, requestId: id))
         }
         await approvals.raise(request)
         Task { await self.waitForHuman(id: id) }
@@ -1238,7 +1246,7 @@ public actor VaultBroker {
         var waitingOn = caller.insideCard
             ? "Waiting for Rogerio's approval on his phone or Mac (\(caller.openClawAgent == nil ? "card " : "")\(title ?? caller.cardId ?? "?"))"
             : "Waiting for Rogerio's approval on his phone or Mac (this process is not in a Kanban card session)"
-        waitingOn += ", up to \(Int(approvalTimeout / 60)) minutes"
+        waitingOn += ", up to \(VaultPolicy.span(approvalTimeout))"
         if AttentionCopy.usableReason(reason) == nil {
             waitingOn += ". He sees no reason from you; next time: \(AttentionCopy.reasonGuidance)"
         }
@@ -1437,7 +1445,7 @@ public actor VaultBroker {
         case (.deny, _):
             let timedOut = by == "timeout"
             let message = timedOut
-                ? "No answer in \(Int(approvalTimeout / 60)) minutes, so it was denied. Ask again with a reason: kv request NAME --reason \"...\""
+                ? "No answer in \(VaultPolicy.span(approvalTimeout)), so it was denied. Ask again with a reason: kv request NAME --reason \"...\""
                 : "Rogerio denied it."
             for name in names(of: p.action) {
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: p.caller.cardId, sessionId: p.caller.sessionId,
@@ -1628,7 +1636,7 @@ public actor VaultBroker {
             at: Date(), machine: machine, cardId: caller.cardId ?? caller.claimedCardId.map { "unverified:\($0)" },
             sessionId: caller.sessionId ?? req.sessionId, secret: s.name, tier: s.tier, outcome: outcome, decider: decider,
             action: req.mode, command: req.command.map { String($0.prefix(2000)) }, reason: req.reason,
-            detail: caller.tokenNote.map { [detail, $0].compactMap { $0 }.joined(separator: ", ") } ?? detail,
+            detail: caller.auditNote.map { [detail, $0].compactMap { $0 }.joined(separator: ", ") } ?? detail,
             requestId: requestId
         ))
     }

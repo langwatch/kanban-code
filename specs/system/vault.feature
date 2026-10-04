@@ -97,7 +97,7 @@ Feature: Vault projects, environments and card identity
   Scenario: A wrong or missing token changes nothing
     Given a process outside every card session
     When it calls kv with no token, or with one the master has no hash for
-    Then the release asks the human as before
+    Then it is treated as a process outside every card
 
   Scenario: A token ends with its session
     Given a card whose session ended more than 15 minutes ago
@@ -110,6 +110,50 @@ Feature: Vault projects, environments and card identity
     Then KANBAN_CARD_ID and KANBAN_CARD_TOKEN are set with "tmux new-session -e"
     And the command typed into the pane does not contain them
     And an app or tmux server started from that card's shell drops both before starting other sessions
+
+  # Processes outside a card
+
+  Scenario: An open secret is released to a process outside every card
+    Given a scheduled job on the master's machine that is in no card session
+    When it runs "kv run" for a secret of tier open
+    Then the secret is released with no question
+    And the audit line says "outside any card session" and names the process chain
+
+  Scenario: A judged secret from outside a card goes to Jev first
+    Given a scheduled job on the master's machine that is in no card session
+    When it asks for a secret of tier judged with a reason
+    Then Jev gets the command, the reason, the secret's rules and the process chain
+    And an allow of at least 60% releases it with no question
+    And anything else asks the human, with "Approve once" and "Deny"
+
+  Scenario Outline: What still asks from outside a card
+    Given a process outside every card
+    When it <action>
+    Then <outcome>
+
+    Examples:
+      | action                              | outcome             |
+      | asks for a secret of tier ask       | the human is asked  |
+      | asks for a secret of tier never     | it is refused       |
+      | edits, deletes or renames a secret  | the human is asked  |
+      | changes a secret's tier             | the human is asked  |
+
+  Scenario: A request over the network always asks
+    Given a device that calls the vault over the tailnet
+    When it asks for a secret of tier open
+    Then the human is asked
+
+  Scenario: An unanswered request waits 12 hours
+    Given a request that asks the human
+    When no answer comes
+    Then it stays open on the Mac and the phone for 12 hours
+    And kv waits as long, and says so when it starts waiting
+    And after 12 hours it is denied by timeout
+
+  Scenario: A caller that gave up leaves its request open
+    Given a job whose own timeout ended its kv call
+    Then the request stays open for the rest of the 12 hours
+    And the same call made again waits on the same request
 
   # Owner-only secrets
 

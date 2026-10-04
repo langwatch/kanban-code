@@ -101,25 +101,36 @@ Listings also carry a `fingerprint`: an HMAC of the value under the vault key, c
 
 | Tier | Release |
 |------|---------|
-| open | Any card session, logged |
-| judged | Jev reads the command, the reason, the card title, the card's recent prompts and the secret's rules: allow, ask or deny |
+| open | Any card session and any process on the machine, logged |
+| judged | Jev reads the command, the reason, the card title, the card's recent prompts (or, outside a card, the caller's process chain) and the secret's rules: allow, ask or deny |
 | ask | Rogerio approves on the Mac or the phone; the approval unlocks the value with Touch ID or Face ID |
 | never | Refused. Used for the long-lived AWS keys, which only a device opens to mint credentials |
 
 Order, first match wins:
 
 1. Tier never: deny.
-2. The caller is not inside a card session: ask, whatever the tier.
+2. The request came over the network: ask, whatever the tier.
 3. More than 20 releases of the secret in 5 minutes: ask. A yes from the human starts the count again.
 4. The card holds a lease and the secret allows leases: allow.
 5. Open: allow. Judged: the project's own development secret is allowed, anything else goes to Jev (allow needs at least 60% probability; Jev unreachable asks). Ask: the human.
 6. Allowed, but the value is sealed and the master holds no value for it (or it is an AWS profile and the master holds no credentials): ask, for the device to unlock it.
 
+### Processes outside a card
+
+A process on the master's own machine that is in no card session (a systemd timer, a cron job, a shell) follows the same tiers:
+
+- Open: released with no question. The audit line reads "open tier, outside any card session, called by: <process chain>".
+- Judged: Jev decides from the command, the `--reason`, the secret's rules and the process chain, with no card title and no prompts. Its question says the caller is outside any card (`caller`, `caller_process_chain`). Allow at 60% or more releases, with "Jev allowed (N%), outside any card session" in the audit line; anything else goes to the human.
+- Ask: the human, with "Approve once" and "Deny". Never: refused.
+- Edits, deletes, renames and tier changes ask the human, as they do from a card.
+
+The process chain is the command line of the caller and of up to four parents, the caller first, as the master read them with `ps` (each cut to 300 characters). It is what the master saw, not what the request claims. Such a caller holds no lease, so every judged use is a Jev call (a hook-wrapped command reuses Jev's allow for 10 minutes per folder and secret) and every ask use is a question.
+
 "The project's own development secret" is a judged secret with environment `dev` and no rules, asked for by a process inside a card whose working directory is in that secret's project folder (or a worktree of it, or a subfolder). The master reads the working directory from the process itself (`lsof` on macOS, `/proc` on Linux), not from the request. It is allowed with no Jev call and logged with decider `rule`. Shared secrets, other environments, secrets with rules, with "every use asks", of tier ask or never, AWS profiles, and callers that are OpenClaw agents or outside a card keep the path above.
 
 Jev gets one question per distinct rules text in a request, naming every secret under those rules (`secret_names`); its answer is the verdict of each. Every secret still gets its own audit line.
 
-"Inside a card session" is checked by the master, not claimed by the client. kv calls the local master over loopback; the master finds the calling process from the TCP connection (`lsof` on macOS, `/proc/net/tcp` on Linux), walks its parents, and matches them against the pane shells of the cards' tmux sessions and the assistant processes rush hosts for cards. A rush host belongs to the card whose terminal is `rush-<host id>` (or `agtop-<host id>` for a host started before rush was renamed from agtop) in Kanban's links, whoever started it (the master, a rush view, `rush session start`); its own `--meta kanban_card` is never read. Accepted risk: a local process can start a host for a card's session id and act as that card; such a process already runs as the user. `KANBAN_CARD_ID` is only shown to the human when it could not be verified. Requests over the network are never inside a card.
+"Inside a card session" is checked by the master, not claimed by the client. kv calls the local master over loopback; the master finds the calling process from the TCP connection (`lsof` on macOS, `/proc/net/tcp` on Linux), walks its parents, and matches them against the pane shells of the cards' tmux sessions and the assistant processes rush hosts for cards. A rush host belongs to the card whose terminal is `rush-<host id>` (or `agtop-<host id>` for a host started before rush was renamed from agtop) in Kanban's links, whoever started it (the master, a rush view, `rush session start`); its own `--meta kanban_card` is never read. Accepted risk: a local process can start a host for a card's session id and act as that card; such a process already runs as the user. `KANBAN_CARD_ID` is only shown to the human when it could not be verified. Requests over the network are never inside a card, and always ask.
 
 A process that left its session's tree (`setsid nohup ... &` reparents it to launchd or init) is placed by its session token. When the master starts or resumes a card session on its own machine it makes a random token (`VaultCardTokens`), keeps only its SHA-256 in `vault/card-tokens.json`, and gives the session `KANBAN_CARD_ID` and `KANBAN_CARD_TOKEN` in its environment: `tmux new-session -e` for a tmux card and `rush session start --env` for a rush card, never typed into the pane or logged. kv sends the token in `X-Kanban-Card-Token`. The ancestry is checked first; when it finds no card, a token whose hash is on file and whose card still has a session makes the caller that card, and the audit line says "by session token". A wrong or missing token changes nothing. A card has one token: a new session replaces it, and a token whose card has had no session for 15 minutes is removed. Sessions started before the token existed have none. `KANBAN_CARD_TOKEN` is in `InheritedSessionEnvironment`, so an app or tmux server started from a card's shell does not hand it to other cards. On Linux, rush hosts are also subreapers, so the ancestry usually still finds such a process.
 
@@ -137,9 +148,9 @@ A yes is kept for 60 seconds, a no for 15. A peer that does not answer is neithe
 
 The variables an ssh login brought do not reach sessions started later on that machine: `InheritedSessionEnvironment` unsets both from a tmux server's environment before a card session starts there, a card session gets its own values, and `kanban-code-server` drops them from its own environment at start.
 
-OpenClaw agents on a Linux master count like card sessions under the principal `openclaw:<agent>`: the master finds, in the caller's ancestry, a process whose cgroup is the gateway's systemd unit (`openclaw-gateway.service`, set by systemd, not by the process), then the topmost process below the gateway whose working directory is an agent workspace from `~/.openclaw/openclaw.json` (the agent runtime the gateway started; a child that changes directory does not change it). The gateway itself, resolving SecretRefs, is `openclaw:gateway`. Each principal holds its own leases. Commands an agent starts outside the unit (`systemd-run`, cron) are outside, so they ask.
+OpenClaw agents on a Linux master count like card sessions under the principal `openclaw:<agent>`: the master finds, in the caller's ancestry, a process whose cgroup is the gateway's systemd unit (`openclaw-gateway.service`, set by systemd, not by the process), then the topmost process below the gateway whose working directory is an agent workspace from `~/.openclaw/openclaw.json` (the agent runtime the gateway started; a child that changes directory does not change it). The gateway itself, resolving SecretRefs, is `openclaw:gateway`. Each principal holds its own leases. Commands an agent starts outside the unit (`systemd-run`, cron) are processes outside a card.
 
-Human approvals are attention requests of kind `vaultApproval` with the options "Approve for this card (2 days)", "Approve once", "Deny". A secret with "every use asks" never offers the lease. No answer in 60 minutes denies; kv says so when it starts waiting.
+Human approvals are attention requests of kind `vaultApproval` with the options "Approve for this card (2 days)", "Approve once", "Deny". A secret with "every use asks" never offers the lease. No answer in 12 hours denies (`VaultPolicy.approvalTimeout`); kv says so when it starts waiting, and waits as long with no timeout of its own. Nothing else ends the request earlier: the attention request, the Mac notification and the phone row stay until it is answered or the 12 hours pass, and the Pushover message has no expiry.
 
 ### One question per thing asked
 
@@ -149,7 +160,7 @@ A request that asks the human what an open request already asks joins it: no sec
 - A release that asks the same secrets but returns something else (other open secrets next to them, another folder) waits under its own id on the same question and gets its own values.
 - The answer goes to every waiter: approve, deny or timeout.
 
-The open request does not depend on its caller. When the caller gives up (a tool call that timed out, a `credential_process` that was killed), the request stays open for the 60 minutes, and the same call made again waits on it. An approval that was not fetched stays for 10 minutes: the same call made again takes it at once, then it is used up. A fetched result stays 30 seconds for the other callers waiting on the same id.
+The open request does not depend on its caller. When the caller gives up (a tool call that timed out, a `credential_process` that was killed), the request stays open for the 12 hours, and the same call made again waits on it. A job that runs once a day and gave up finds the answer only through a lease: a card that got "Approve for this card" uses the lease on its next run, while a process outside a card has no lease and its next run asks again. An approval that was not fetched stays for 10 minutes: the same call made again takes it at once, then it is used up. A fetched result stays 30 seconds for the other callers waiting on the same id.
 
 "Approve for this card" grants the lease and then settles every other open request of that card whose secrets its leases now cover: their callers get the secrets (audit decider `lease`), their attention requests close on every master, and the Mac notifications and the phone rows go. A Pushover message cannot be taken back; with one question per thing asked there is one message.
 

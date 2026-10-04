@@ -15,15 +15,22 @@ struct VaultRoutesTests {
         return (try await RemoteServerFixture(vault: vault), vault)
     }
 
-    @Test func loopbackCallersNeedNoTokenButOutsideACardAreNotServed() async throws {
-        let (f, _) = try await fixture()
+    @Test func aLoopbackCallerOutsideACardGetsOpenSecretsAndNothingThatAsks() async throws {
+        let (f, vault) = try await fixture()
         defer { f.shutdown() }
-        let body = try JSONEncoder().encode(VaultReleaseRequest(mode: "run", names: ["OPEN"], cardId: "card_fake"))
-        let (status, data) = try await f.request("POST", "/v1/vault/release", body: body)
-        #expect(status == 403)
-        let text = String(decoding: data, as: UTF8.self)
-        #expect(text.contains("human approval"))
-        #expect(!text.contains("open-value"))
+        try await vault.store.upsert(VaultSecret(name: "ASK", value: "ask-value", tier: .ask))
+        let open = try JSONEncoder().encode(VaultReleaseRequest(mode: "run", names: ["OPEN"], cardId: "card_fake"))
+        let (status, data) = try await f.request("POST", "/v1/vault/release", body: open)
+        #expect(status == 200)
+        #expect(String(decoding: data, as: UTF8.self).contains("open-value"))
+        let line = try #require(await vault.store.log(limit: 1, secret: "OPEN").first)
+        #expect(line.cardId == "unverified:card_fake" && line.detail?.hasPrefix("open tier, outside any card session") == true)
+
+        let ask = try JSONEncoder().encode(VaultReleaseRequest(mode: "run", names: ["ASK"], cardId: "card_fake"))
+        let (askStatus, askData) = try await f.request("POST", "/v1/vault/release", body: ask)
+        #expect(askStatus == 403)
+        let text = String(decoding: askData, as: UTF8.self)
+        #expect(text.contains("human approval") && !text.contains("ask-value"))
         // Other routes still want a token.
         #expect(try await f.request("GET", "/v1/board").0 == 401)
     }

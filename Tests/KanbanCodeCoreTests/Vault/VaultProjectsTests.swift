@@ -335,8 +335,7 @@ struct VaultProjectsTests {
         #expect(!VaultPolicy.isOwnProjectDev(dev, caller: remote, callerProjects: ["shop"]))
         #expect(VaultPolicy.decide(.init(tier: .judged, insideCard: true, ownProjectDev: true)) == .allow(.rule, VaultPolicy.ownProjectDevReason))
         #expect(VaultPolicy.decide(.init(tier: .ask, insideCard: true, ownProjectDev: true)) == .ask("this secret always asks"))
-        #expect(VaultPolicy.decide(.init(tier: .judged, insideCard: false, ownProjectDev: true))
-            == .ask("the request does not come from a Kanban card session"))
+        #expect(VaultPolicy.decide(.init(tier: .judged, insideCard: false)) == .consultJev)
     }
 
     // MARK: Jev batching

@@ -323,10 +323,15 @@ public struct VaultCaller: Codable, Sendable, Equatable {
     public var verifiedByPeer: String?
     /// The card's title as that master gave it.
     public var peerTitle: String?
+    /// The command lines of the caller and its parents, the caller first,
+    /// as the master read them from the system. Set for a caller outside
+    /// every card.
+    public var commandLines: [String]?
 
     public init(cardId: String? = nil, claimedCardId: String? = nil, sessionId: String? = nil, pid: Int? = nil,
                 ancestry: [String] = [], remoteDevice: String? = nil, cwd: String? = nil, byToken: Bool? = nil,
-                verifiedByPeer: String? = nil, peerTitle: String? = nil) {
+                verifiedByPeer: String? = nil, peerTitle: String? = nil, commandLines: [String]? = nil) {
+        self.commandLines = commandLines
         self.verifiedByPeer = verifiedByPeer
         self.peerTitle = peerTitle
         self.cardId = cardId
@@ -353,6 +358,21 @@ public struct VaultCaller: Codable, Sendable, Equatable {
     public var tokenNote: String? {
         guard byToken == true else { return nil }
         return verifiedByPeer.map { "by session token, verified by \($0)" } ?? "by session token"
+    }
+
+    /// The caller's process chain on one line, for the audit log and Jev:
+    /// "kv run X -- job.sh <- bash -c job.sh <- systemd".
+    public var processChain: String? {
+        guard let lines = commandLines?.filter({ !$0.isEmpty }), !lines.isEmpty else { return nil }
+        return String(lines.joined(separator: " <- ").prefix(700))
+    }
+
+    /// What the audit log adds about who asked: how a card was found, or
+    /// the process chain of a caller outside every card.
+    public var auditNote: String? {
+        if let tokenNote { return tokenNote }
+        guard !insideCard, remoteDevice == nil else { return nil }
+        return processChain.map { "called by: \($0)" }
     }
 
     /// The OpenClaw agent behind `cardId` when the caller is an OpenClaw

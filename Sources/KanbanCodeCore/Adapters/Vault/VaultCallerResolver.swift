@@ -174,6 +174,29 @@ public enum VaultCallerResolver {
         return parsePS(result.stdout)
     }
 
+    /// The command lines of `pids`, in that order, each cut to `limit`
+    /// characters. A process that is gone is left out.
+    public static func commandLines(of pids: [Int], limit: Int = 300) async -> [String] {
+        guard !pids.isEmpty else { return [] }
+        let ps = ShellCommand.findExecutable("ps") ?? "/bin/ps"
+        guard let result = try? await ShellCommand.run(
+            ps, arguments: ["-ww", "-o", "pid=", "-o", "args=", "-p", pids.map(String.init).joined(separator: ",")])
+        else { return [] }
+        return parseCommandLines(result.stdout, order: pids, limit: limit)
+    }
+
+    /// `pid args` lines of `ps -o pid= -o args=`, in the order of `order`.
+    public static func parseCommandLines(_ output: String, order: [Int], limit: Int = 300) -> [String] {
+        var byPid: [Int: String] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, let pid = Int(parts[0]) else { continue }
+            let args = parts[1].trimmingCharacters(in: .whitespaces)
+            byPid[pid] = args.count > limit ? String(args.prefix(limit)) + "..." : args
+        }
+        return order.compactMap { byPid[$0] }
+    }
+
     /// Pane pid -> session name of the local tmux server.
     public static func tmuxPanes() async -> [(pid: Int, session: String)] {
         guard let tmux = ShellCommand.findExecutable("tmux"),
@@ -342,10 +365,15 @@ public struct LiveVaultCallerResolver: Sendable {
             peer = found
             KanbanCodeLog.info("vault", "caller pid \(pid) carries the session token of card \(found.cardId.prefix(12)) on \(found.machine)")
         }
+        // A caller outside every card has no card to name it: its command
+        // lines say what it is.
+        let commandLines = card == nil
+            ? await VaultCallerResolver.commandLines(of: chain.prefix(5).map(\.pid))
+            : []
         return VaultCaller(
             cardId: card, claimedCardId: claimedCardId, sessionId: sessionId, pid: pid,
             ancestry: chain.map(\.name), cwd: await VaultCallerResolver.workingDirectory(of: pid), byToken: byToken,
-            verifiedByPeer: peer?.machine, peerTitle: peer?.title
+            verifiedByPeer: peer?.machine, peerTitle: peer?.title, commandLines: commandLines.isEmpty ? nil : commandLines
         )
     }
 }

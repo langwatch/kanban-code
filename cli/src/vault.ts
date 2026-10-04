@@ -1009,7 +1009,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
         "status"
       );
       out(`${body.machine}: ${body.unlocked ? "unlocked" : "LOCKED (no vault key on this machine)"}, ${body.secrets} secrets\n`);
-      out(`you are: ${body.caller ?? "outside every card session (every release asks Rogerio)"}\n`);
+      out(`you are: ${body.caller ?? "outside every card session (open secrets are released, judged ones go past Jev)"}\n`);
       return 0;
     }
 
