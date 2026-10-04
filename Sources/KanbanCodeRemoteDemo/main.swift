@@ -185,6 +185,8 @@ final class DemoHost: RemoteControlHost {
                   messages: Self.awayConversation("Move the reports to the new API")),
             .init(card: card("card_compact", "Trim the session after the audit", .done, project: 0, runtime: .tmux, live: true, minutesAgo: 180),
                   messages: Self.compactedConversation("Trim the session after the audit")),
+            .init(card: card("card_table", "Spring cleaning", .waiting, project: 0, runtime: .tmux, live: true, minutesAgo: 40),
+                  messages: Self.tableConversation("Spring cleaning")),
             .init(card: card("card_backlog", "Write the migration guide", .backlog, project: 0, runtime: .none, live: false, minutesAgo: 600),
                   messages: []),
             .init(card: card("card_huge", "Read the crash dump", .backlog, project: 1, runtime: .tmux, live: false, minutesAgo: 900),
@@ -258,6 +260,47 @@ final class DemoHost: RemoteControlHost {
         out.append(RemoteMessage(id: "\(out.count)", role: .assistant, text: long("Draft", paragraphs: 40, last: "That was the first draft."), at: t))
         out.append(RemoteMessage(id: "\(out.count)", role: .assistant, text: long("Final", paragraphs: 60, last: "End of the release notes."), at: t.addingTimeInterval(30)))
         return out
+    }
+
+    /// A session whose answers hold markdown tables: three columns with
+    /// long text in the first and last, a table too wide for a phone, and
+    /// lines with pipes that are not a table.
+    static func tableConversation(_ task: String) -> [RemoteMessage] {
+        let t = Date().addingTimeInterval(-2400)
+        let wide = """
+            Per folder, widest first:
+
+            | Folder | Size on disk | Files | Last touched | Owner | Safe to delete | Why |
+            |---|---:|---:|:---:|---|:---:|---|
+            | `~/Projects/acme-web/.claude/worktrees` | 48 GB | 1,204,331 | 12 days ago | you | yes | Every worktree older than a week has its branch merged |
+            | `~/Library/Caches/go-build` | 8 GB | 90,112 | today | go | yes | Rebuilt on the next build |
+            | `~/Movies/Screen recordings` | 22 GB | 41 | 3 months ago | you | ask | Not backed up anywhere |
+
+            To list them yourself run `du -sh * | sort -h` and then `ls | wc -l`.
+            """
+        let three = """
+            Here is what can go:
+
+            | What | Frees | Notes |
+            |---|---:|---|
+            | Go build cache in `~/Library/Caches/go-build`, rebuilt on demand | 8 GB | Safe. The next `go build` takes about **4 minutes** longer |
+            | Worktrees not touched for 14 days, `a \\| b` branches included | 48 GB | Each one is checked with `git status` first, see [the list](https://example.com/list) |
+            | Old `links.json` backups | 3.5 GB | Keeps the newest 5 |
+
+            - Totals by kind:
+
+              | Kind | Size |
+              |:---:|---:|
+              | Caches | 8 GB |
+              | Worktrees | 48 GB |
+
+            Say the word and I delete them.
+            """
+        return [
+            RemoteMessage(id: "0", role: .user, text: task, at: t),
+            RemoteMessage(id: "1", role: .assistant, text: wide, at: t.addingTimeInterval(40)),
+            RemoteMessage(id: "2", role: .assistant, text: three, at: t.addingTimeInterval(80)),
+        ]
     }
 
     /// A session that was compacted as its last act: the `/compact` note,

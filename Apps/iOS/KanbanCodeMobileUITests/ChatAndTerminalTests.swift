@@ -431,3 +431,34 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         text.range(of: #"\[\d+/\d+\]"#, options: .regularExpression).map { String(text[$0]) }
     }
 }
+
+/// Markdown tables in assistant messages, against the demo server's
+/// `card_table`.
+final class MarkdownTableTests: KanbanUITestCase {
+    func testTablesShowAsGridsAndAWideOneScrollsOnItsOwn() throws {
+        openCard("card_table")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let tables = app.descendants(matching: .any).matching(identifier: "markdownTable")
+        XCTAssertTrue(tables.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(message(containing: "Say the word").waitForExistence(timeout: 5))
+
+        // Cells are text of their own, with no pipes and no separator row.
+        XCTAssertTrue(message(containing: "Old links.json backups").exists)
+        XCTAssertFalse(message(containing: "|---").exists)
+        XCTAssertFalse(message(containing: "| What").exists)
+        // An escaped pipe is in its cell.
+        XCTAssertTrue(message(containing: "a | b branches").exists)
+        let suffix = ProcessInfo.processInfo.environment["KC_SHOT_SUFFIX"] ?? ""
+        shot("73-table-three-columns\(suffix)")
+
+        // The seven-column table is above; it scrolls sideways alone.
+        app.swipeDown()
+        let wide = app.scrollViews["markdownTableScroll"]
+        XCTAssertTrue(wide.waitForExistence(timeout: 5))
+        XCTAssertTrue(message(containing: "du -sh * | sort -h").exists)
+        shot("74-table-wide\(suffix)")
+        wide.swipeLeft()
+        XCTAssertTrue(waitFor(5) { self.message(containing: "Rebuilt on the next build").isHittable })
+        shot("75-table-wide-scrolled\(suffix)")
+    }
+}

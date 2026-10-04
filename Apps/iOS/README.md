@@ -52,6 +52,22 @@ Or skip the confirmation prompt by passing the link at launch:
 SIMCTL_CHILD_KANBANCODE_PAIR_LINK='kanbancode://pair?...' xcrun simctl launch booted io.kanbancode.mobile
 ```
 
+## Markdown in chat messages
+
+`MarkdownText` in `Views/ChatPane.swift` draws assistant messages: fenced code, headings, lists, inline styles and tables.
+
+A table is read by `MarkdownTable` in `Sources/KanbanCodeRemoteKit/MarkdownTable.swift` and drawn by `Views/MarkdownTableView.swift`:
+
+- A header row, a separator row with as many cells, then rows until a blank line or a line with no pipe. A line with pipes and no separator row under it stays text.
+- Column alignment comes from the separator row (`:---`, `:---:`, `---:`).
+- A pipe inside a code span or written `\|` belongs to its cell.
+- Short rows are filled with empty cells, long rows are cut.
+- A separator row still being written at the end of a message already counts, so the header never shows as text first.
+- Columns are as wide as their content. When that is wider than the chat, columns narrower than their share keep their width and the others wrap in what is left, never under 96 points. A table that cannot fit that way scrolls sideways on its own, with columns up to 220 points.
+- Every cell is selectable text with inline markdown.
+
+The Mac chat draws tables through MarkdownUI.
+
 ## Install on your iPhone
 
 1. `make ios-project`, then open `Apps/iOS/KanbanCodeMobile.xcodeproj` in Xcode.

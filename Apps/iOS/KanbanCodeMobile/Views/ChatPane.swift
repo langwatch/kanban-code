@@ -1005,8 +1005,8 @@ struct MessageView: View {
     }
 }
 
-/// Assistant markdown: fenced code as monospaced blocks, headings and lists
-/// by line, inline styles through AttributedString.
+/// Assistant markdown: fenced code as monospaced blocks, tables as grids,
+/// headings and lists by line, inline styles through AttributedString.
 struct MarkdownText: View {
     let text: String
 
@@ -1014,6 +1014,7 @@ struct MarkdownText: View {
         case code(String)
         case heading(String)
         case paragraph(String)
+        case table(MarkdownTable)
     }
 
     var body: some View {
@@ -1044,6 +1045,8 @@ struct MarkdownText: View {
                 case .paragraph(let para):
                     SelectableText(text: SelectableTextStyle.markdown(para))
                         .fixedSize(horizontal: false, vertical: true)
+                case .table(let table):
+                    MarkdownTableView(table: table)
                 }
             }
         }
@@ -1065,7 +1068,11 @@ struct MarkdownText: View {
             if !joined.isEmpty { out.append(.paragraph(joined)) }
             paragraph = []
         }
-        for raw in text.components(separatedBy: "\n") {
+        let lines = text.components(separatedBy: "\n")
+        var index = 0
+        while index < lines.count {
+            let raw = lines[index]
+            index += 1
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 if let lines = code {
@@ -1078,6 +1085,12 @@ struct MarkdownText: View {
                 continue
             }
             if code != nil { code!.append(raw); continue }
+            if let (table, lineCount) = MarkdownTable.parse(lines, at: index - 1) {
+                flush()
+                out.append(.table(table))
+                index += lineCount - 1
+                continue
+            }
             if trimmed.hasPrefix("#") {
                 flush()
                 out.append(.heading(String(trimmed.drop { $0 == "#" }).trimmingCharacters(in: .whitespaces)))
