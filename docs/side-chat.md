@@ -12,7 +12,7 @@ Type them in the chat composer:
 The panel has a follow-up field with two actions:
 
 - **Ask here** (Return on the Mac) continues in the side chat. Earlier questions and answers go along.
-- **Send to main chat** (Command-Return on the Mac) sends your reply to the session, followed by the side chat as context for the agent. The panel closes.
+- **Send to main chat** (Command-Return on the Mac) sends your reply to the session, followed by the side chat as context for the agent. The panel closes at once, with no animation. On the phone the message shows right away as a pending bubble and the composer stays free while the machine takes it. A send that fails removes the bubble and puts the text in the composer, with what was typed there stashed.
 
 Closing the panel (the x button, or Esc on the Mac) forgets the side chat and stops a run that is still answering. The fold button keeps it and shows the chat under it.
 

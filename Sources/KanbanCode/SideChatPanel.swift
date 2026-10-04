@@ -204,7 +204,11 @@ struct SideChatPanel: View {
         guard canFollowUp else { return }
         let prompt = controller.mainChatPrompt(reply: followUp)
         followUp = ""
-        controller.dismiss()
+        // The panel leaves in one step: the chat is about to show the
+        // message, and its layout does not wait on a closing animation.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { controller.dismiss() }
         onSendToMain(prompt)
     }
 }

@@ -47,6 +47,23 @@ struct ChatPane: View {
     private final class FollowState {
         var followsEnd = true
         var userScrolling = false
+        /// A scroll to the end waits for the next turn of the run loop.
+        var scrollScheduled = false
+        /// When the last scrolls to the end were made, newest last.
+        var recentScrolls: [Date] = []
+
+        /// Scrolls to the end allowed within one second. A chat that
+        /// cannot reach its end (rows whose height keeps changing) then
+        /// retries at this pace instead of in every layout pass.
+        static let scrollsPerSecond = 30
+
+        /// Whether another scroll to the end may be made now, counting it.
+        func takeScroll(now: Date = .now) -> Bool {
+            recentScrolls.removeAll { now.timeIntervalSince($0) > 1 }
+            guard recentScrolls.count < Self.scrollsPerSecond else { return false }
+            recentScrolls.append(now)
+            return true
+        }
     }
 
     /// Distance from the end of the conversation to the bottom of what is shown.
@@ -127,13 +144,16 @@ struct ChatPane: View {
         // One scrollTo can still land short: the long rows it brings on
         // screen are measured only then and push the end further down. So
         // while the chat follows its end, every change that leaves it off
-        // the end scrolls again, until it is there.
+        // the end scrolls again, until it is there. The scroll is made on
+        // the next turn of the run loop, never inside the layout pass that
+        // reported the change: a scroll made there changes the geometry
+        // again within the same pass, and a chat whose end keeps moving
+        // (an inset in the middle of an animation, a long row measured
+        // late) would keep the main thread in that pass.
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             Self.distanceToEnd(geo).rounded()
         } action: { _, distance in
-            if follow.followsEnd && !follow.userScrolling && distance > 1 {
-                scrollPosition.scrollTo(id: Self.bottomID, anchor: .bottom)
-            }
+            if distance > 1 { followEnd() }
         }
         .onScrollPhaseChange { _, phase, context in
             switch phase {
@@ -152,26 +172,31 @@ struct ChatPane: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .overlay { emptyState }
+        // The room the folded panel takes at the top of the chat comes and
+        // goes in one step. Only the panel itself animates, inside its
+        // overlay: the chat's layout never follows an animated height.
         .safeAreaInset(edge: .top, spacing: 0) {
             if sideChat?.state.isOpen == true {
                 Color.clear.frame(height: SideChatPanel.foldedHeight)
             }
         }
         .overlay(alignment: .top) {
-            if let sideChat, sideChat.state.isOpen {
-                // The reader's height is what shows above the composer and
-                // the keyboard: the panel never reaches under them.
-                GeometryReader { geo in
-                    SideChatPanel(controller: sideChat, collapsed: $sideChatCollapsed,
-                                  maxHeight: geo.size.height - keyboardShortfall - 12,
-                                  onJump: jump(toOffset:),
-                                  onSendToMain: { deliver($0, .queue, fromDraft: false) },
-                                  machineName: board.machineName, machineOffline: !board.isOnline)
+            ZStack(alignment: .top) {
+                if let sideChat, sideChat.state.isOpen {
+                    // The reader's height is what shows above the composer and
+                    // the keyboard: the panel never reaches under them.
+                    GeometryReader { geo in
+                        SideChatPanel(controller: sideChat, collapsed: $sideChatCollapsed,
+                                      maxHeight: geo.size.height - keyboardShortfall - 12,
+                                      onJump: jump(toOffset:),
+                                      onSendToMain: handOff,
+                                      machineName: board.machineName, machineOffline: !board.isOnline)
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .transition(.move(edge: .top).combined(with: .opacity))
             }
+            .animation(.snappy, value: sideChat?.state.isOpen)
         }
-        .animation(.snappy, value: sideChat?.state.isOpen)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomBar
                 .padding(.bottom, keyboardShortfall)
@@ -694,6 +719,45 @@ struct ChatPane: View {
         }
     }
 
+    /// Scrolls to the end on the next turn of the run loop, when the chat
+    /// follows its end. Changes reported in between share that one scroll.
+    private func followEnd() {
+        guard follow.followsEnd, !follow.userScrolling, !follow.scrollScheduled else { return }
+        follow.scrollScheduled = true
+        Task { @MainActor in
+            follow.scrollScheduled = false
+            guard follow.followsEnd, !follow.userScrolling, follow.takeScroll() else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                scrollPosition.scrollTo(id: Self.bottomID, anchor: .bottom)
+            }
+        }
+    }
+
+    /// Sends a side chat follow-up to the session. The message shows at
+    /// once as a pending bubble and the composer stays free while the
+    /// machine takes it. A send that fails takes the bubble away and puts
+    /// the text in the composer, with what was typed there stashed.
+    private func handOff(_ text: String) {
+        guard !text.isEmpty, let client = board.client else { return }
+        sendError = nil
+        follow.followsEnd = true
+        let pending = transcript.appendPending(text)
+        Task {
+            do {
+                try await client.sendPrompt(cardId: card.id, text: text, mode: .queue, human: true)
+                sentCount += 1
+            } catch {
+                transcript.removePending(pending)
+                if !draft.isEmpty { draft.stash() }
+                draft.load(text: text, images: [])
+                sendError = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
     private enum QueueAction { case sendNow, edit, delete }
 
     private func queueAction(_ prompt: RemoteQueuedPrompt, _ action: QueueAction) {
@@ -893,10 +957,50 @@ struct MessageView: View {
             }
             .buttonStyle(.plain)
         case .system:
-            SelectableText(text: SelectableTextStyle.plain(text, font: .preferredFont(forTextStyle: .caption1),
-                                                           color: .secondaryLabel),
-                           alignment: .center)
+            if let detail = message.detail {
+                systemNote(detail: detail)
+            } else {
+                SelectableText(text: SelectableTextStyle.plain(text, font: .preferredFont(forTextStyle: .caption1),
+                                                               color: .secondaryLabel),
+                               alignment: .center)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// A note that opens to the long text behind it: a compaction and
+    /// its summary.
+    private func systemNote(detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    Text(message.text)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("systemNote")
+            if expanded {
+                let shown = !showsWhole && detail.utf16.count > Self.shownLimit
+                    ? String(detail.prefix(Self.shownLimit)) + "\n…" : detail
+                SelectableText(text: SelectableTextStyle.plain(shown, font: .preferredFont(forTextStyle: .caption1),
+                                                               color: .secondaryLabel))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                if detail.utf16.count > Self.shownLimit, !showsWhole {
+                    Button("Show the whole text (\(detail.count.formatted()) characters)") { showsWhole = true }
+                        .font(.caption.weight(.medium))
+                }
+            }
         }
     }
 }

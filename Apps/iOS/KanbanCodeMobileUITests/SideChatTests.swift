@@ -111,4 +111,50 @@ final class SideChatTests: KanbanUITestCase {
         sleep(1)
         shot("66-btw-sent-to-main")
     }
+
+    /// A follow-up on a catch-up goes to the main chat of a session that
+    /// ends in a long message, on a master that takes seconds to accept
+    /// it: the panel closes at once and the chat stays usable.
+    func testACatchUpFollowUpSentToTheMainChatClosesThePanelAndTheChatStillResponds() throws {
+        openCard("card_compact")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+
+        // The compaction is a folded note, not a message of the human.
+        let note = app.buttons["systemNote"]
+        XCTAssertTrue(note.waitForExistence(timeout: 10))
+        XCTAssertFalse(message(containing: "This session is being continued").exists)
+        shot("69-compaction-note")
+        note.tap()
+        XCTAssertTrue(message(containing: "This session is being continued").waitForExistence(timeout: 5))
+        shot("69-compaction-note-open")
+        app.buttons["systemNote"].tap()
+        XCTAssertTrue(waitFor(5) { !self.message(containing: "This session is being continued").exists })
+
+        clearComposer()
+        composer.tap()
+        composer.typeText("/catchup")
+        app.buttons["send"].tap()
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["catchUpRefresh"].waitForExistence(timeout: 20))
+
+        followUp.tap()
+        followUp.typeText("Ship it tonight")
+        shot("69-catchup-follow-up")
+        app.buttons["sideChatSendToMain"].tap()
+        // The master takes 4 seconds to accept it; the message shows before that.
+        let sent = Date()
+        XCTAssertTrue(waitFor(3) { !panel.exists }, "the panel stayed open while the message was on its way")
+        XCTAssertTrue(message(containing: "Ship it tonight").waitForExistence(timeout: 3))
+        XCTAssertLessThan(Date().timeIntervalSince(sent), 3.5, "the message showed only after the master accepted it")
+        shot("69-catchup-sent-to-main")
+
+        // The chat still takes input while and after the send.
+        composer.tap()
+        composer.typeText("One more thing")
+        XCTAssertTrue(waitFor(15) { self.app.buttons["send"].isEnabled })
+        app.buttons["send"].tap()
+        XCTAssertTrue(message(containing: "One more thing").waitForExistence(timeout: 20))
+        XCTAssertTrue(message(containing: "Got it: Ship it tonight").waitForExistence(timeout: 30))
+        shot("69-catchup-chat-after")
+    }
 }

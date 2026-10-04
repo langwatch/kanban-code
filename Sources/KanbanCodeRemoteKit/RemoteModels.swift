@@ -475,12 +475,16 @@ public struct RemoteMessage: Codable, Sendable, Equatable, Identifiable {
     public var role: Role
     public var text: String
     public var at: Date?
+    /// The long text behind a `system` note, shown when the note is
+    /// opened: the summary of a compaction.
+    public var detail: String?
 
-    public init(id: String, role: Role, text: String, at: Date? = nil) {
+    public init(id: String, role: Role, text: String, at: Date? = nil, detail: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.at = at
+        self.detail = detail
     }
 }
 

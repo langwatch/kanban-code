@@ -169,6 +169,8 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "tool" | "system";
   text: string;
   at?: string | null;
+  /** The long text behind a system note: the summary of a compaction. */
+  detail?: string | null;
 }
 
 export interface RemoteTranscript {

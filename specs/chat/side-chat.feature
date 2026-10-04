@@ -35,6 +35,26 @@ Feature: Side chat (/btw and /catchup)
     And the message counts as typed by me
     And the panel closes
 
+  Scenario: Sending to the main chat on the phone does not wait for the machine
+    Given the side chat on the phone shows a catch-up
+    And the machine takes seconds to accept a prompt
+    When I type a reply and choose "Send to main chat"
+    Then the panel closes at once, with no animation
+    And my reply shows at once as a pending bubble
+    And the composer takes a new message while the first is on its way
+
+  Scenario: A reply the machine does not accept is not lost
+    Given the side chat on the phone shows a catch-up
+    When I choose "Send to main chat" and the send fails
+    Then the pending bubble leaves and the error shows
+    And the text is in the composer, with what was typed there stashed
+
+  Scenario: A compaction shows as a note
+    Given a session that was compacted
+    Then its summary shows as the folded note "Conversation compacted", not as a message of mine
+    And the note opens to the summary
+    And the "/compact" command shows as a note too
+
   Scenario: Dismiss
     When I close the panel
     Then the side chat is forgotten

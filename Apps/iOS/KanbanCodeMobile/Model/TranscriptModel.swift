@@ -37,8 +37,9 @@ final class TranscriptModel {
             let page = try await client.transcript(cardId: cardId, limit: Self.pageSize)
             let pending = messages.filter { $0.id.hasPrefix("pending-") }
             merge(latest: page)
-            // A sent prompt shows until the transcript has it.
-            let delivered = page.messages.filter { $0.role == .user }
+            // A sent prompt shows until the transcript has it, as a
+            // message or as the note a command such as /compact becomes.
+            let delivered = page.messages.filter { $0.role == .user || $0.role == .system }
             messages += pending.filter { p in !delivered.contains { Self.delivers($0, pending: p) } }
             error = nil
         } catch {
@@ -83,9 +84,18 @@ final class TranscriptModel {
 
     /// Shows a sent prompt before the transcript catches up, written the way
     /// the transcript writes a prompt with images.
-    func appendPending(_ text: String, imageCount: Int = 0) {
-        messages.append(RemoteMessage(id: "pending-\(UUID().uuidString)", role: .user,
+    /// Returns the id of the pending message.
+    @discardableResult
+    func appendPending(_ text: String, imageCount: Int = 0) -> String {
+        let id = "pending-\(UUID().uuidString)"
+        messages.append(RemoteMessage(id: id, role: .user,
                                       text: Self.displayText(text, imageCount: imageCount), at: .now))
+        return id
+    }
+
+    /// Takes away a pending message whose send failed.
+    func removePending(_ id: String) {
+        messages.removeAll { $0.id == id }
     }
 
     /// Drops sent prompts that now wait in the card's queue: the queue shows

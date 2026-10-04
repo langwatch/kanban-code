@@ -1,5 +1,6 @@
 import SwiftUI
 import KanbanCodeCore
+import KanbanCodeRemoteKit
 import MarkdownUI
 
 // MARK: - Chat Message View
@@ -26,6 +27,7 @@ struct ChatMessageView: View, Equatable {
     @Binding var expandedTextBlocks: Set<String>
     @Binding var expandedToolRuns: Set<String>
     @State private var isHovered = false
+    @State private var showsCompactionSummary = false
 
     /// A row is worth building again only when what it shows has changed.
     ///
@@ -63,6 +65,12 @@ struct ChatMessageView: View, Equatable {
             .map(\.text).joined(separator: "\n")
     }
 
+    /// The note this turn is when the harness wrote it: a compaction
+    /// summary or the `/compact` command.
+    private var harnessNote: HarnessNote? {
+        turn.role == "user" ? HarnessNote.classify(turnText) : nil
+    }
+
     private var isTaskNotification: Bool {
         turn.role == "user" && turn.contentBlocks.contains {
             if case .text = $0.kind { return $0.text.hasPrefix("✓ ") || $0.text.hasPrefix("⏳ ") }
@@ -96,6 +104,13 @@ struct ChatMessageView: View, Equatable {
                         .frame(maxWidth: chatMaxWidth, alignment: .leading)
                     Spacer(minLength: 0)
                 }
+            } else if let note = harnessNote {
+                HStack {
+                    Spacer(minLength: 0)
+                    harnessNoteView(note)
+                        .frame(maxWidth: chatMaxWidth, alignment: .center)
+                    Spacer(minLength: 0)
+                }
             } else if suppressBackground {
                 // Inside a grouped tool box — no centering wrapper, no frame constraint
                 assistantMessage
@@ -117,6 +132,40 @@ struct ChatMessageView: View, Equatable {
                     .contentShape(Rectangle())
                     .onHover { isHovered = $0 }
                     Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    // MARK: Harness note
+
+    /// A centered line; a compaction opens to its summary.
+    @ViewBuilder
+    private func harnessNoteView(_ note: HarnessNote) -> some View {
+        switch note {
+        case .compactCommand:
+            Text(note.title)
+                .font(.app(.caption))
+                .foregroundStyle(.tertiary)
+        case .compactionSummary:
+            VStack(alignment: .center, spacing: 6) {
+                Button {
+                    showsCompactionSummary.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        Text(note.title)
+                        Image(systemName: showsCompactionSummary ? "chevron.up" : "chevron.down")
+                    }
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(showsCompactionSummary ? "Hide the summary" : "Show the summary the session continues from")
+                if showsCompactionSummary {
+                    truncatedSystemText(turnText, blockIndex: 0, color: .secondaryLabelColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

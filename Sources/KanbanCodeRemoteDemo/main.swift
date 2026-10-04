@@ -183,6 +183,8 @@ final class DemoHost: RemoteControlHost {
                   messages: Self.longEnding("Write the release notes")),
             .init(card: card("card_catchup", "Move the reports to the new API", .waiting, project: 1, runtime: .tmux, live: true, minutesAgo: 25),
                   messages: Self.awayConversation("Move the reports to the new API")),
+            .init(card: card("card_compact", "Trim the session after the audit", .done, project: 0, runtime: .tmux, live: true, minutesAgo: 180),
+                  messages: Self.compactedConversation("Trim the session after the audit")),
             .init(card: card("card_backlog", "Write the migration guide", .backlog, project: 0, runtime: .none, live: false, minutesAgo: 600),
                   messages: []),
             .init(card: card("card_huge", "Read the crash dump", .backlog, project: 1, runtime: .tmux, live: false, minutesAgo: 900),
@@ -257,6 +259,28 @@ final class DemoHost: RemoteControlHost {
         out.append(RemoteMessage(id: "\(out.count)", role: .assistant, text: long("Final", paragraphs: 60, last: "End of the release notes."), at: t.addingTimeInterval(30)))
         return out
     }
+
+    /// A session that was compacted as its last act: the `/compact` note,
+    /// then the note that opens to the long summary the harness wrote.
+    static func compactedConversation(_ task: String) -> [RemoteMessage] {
+        var out = conversation(task)
+        let t = Date().addingTimeInterval(-10_800)
+        let parts = (1...45).map { i in
+            "\(i). Part \(i) of the earlier work: what was asked, which files changed, what failed and how it was fixed. Long enough to wrap over several lines on a phone."
+        }
+        let summary = "This session is being continued from a previous conversation that ran out of context. "
+            + "The summary below covers the earlier portion of the conversation.\n\nSummary:\n"
+            + parts.joined(separator: "\n\n")
+            + "\n\nContinue the conversation from where it left off without asking the user any further questions."
+        out.append(RemoteMessage(id: "\(out.count)", role: .system, text: "/compact", at: t))
+        out.append(RemoteMessage(id: "\(out.count)", role: .system, text: HarnessNote.compactedTitle,
+                                 at: t.addingTimeInterval(30), detail: summary))
+        return out
+    }
+
+    /// Cards whose prompts take a few seconds to be accepted, as a master
+    /// that forwards to a slow peer does.
+    static let slowSendCards: Set<String> = ["card_compact"]
 
     /// A pasted log of thousands of lines and a code block with one line of
     /// minified JSON a few hundred KB long: what made the phone's text
@@ -444,6 +468,7 @@ final class DemoHost: RemoteControlHost {
     func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws {
         let c = try cardState(cardId)
         guard c.card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first") }
+        if Self.slowSendCards.contains(cardId) { try? await Task.sleep(for: .seconds(4)) }
         let text = Self.promptText(request.text, imageCount: images.count)
         if c.card.isBusy && request.mode != .now {
             let prompt = RemoteQueuedPrompt(id: "prompt_\(UUID().uuidString.prefix(8))", text: request.text, imageCount: images.count)

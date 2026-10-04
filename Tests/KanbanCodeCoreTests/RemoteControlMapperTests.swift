@@ -185,6 +185,24 @@ struct RemoteControlMapperTests {
         #expect(Set(messages.map(\.id)).count == messages.count)
     }
 
+    @Test("a compaction summary and the /compact command are system notes, not messages of the human")
+    func harnessNotes() {
+        let summary = "This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. The export."
+        let turns = [
+            ConversationTurn(index: 0, lineNumber: 0, role: "user", textPreview: "/compact", isQueued: true),
+            ConversationTurn(index: 1, lineNumber: 100, role: "user", textPreview: "",
+                             contentBlocks: [ContentBlock(kind: .text, text: summary)]),
+            ConversationTurn(index: 2, lineNumber: 200, role: "user", textPreview: "",
+                             contentBlocks: [ContentBlock(kind: .text, text: "/compact\n\ncompact")]),
+            ConversationTurn(index: 3, lineNumber: 300, role: "user", textPreview: "",
+                             contentBlocks: [ContentBlock(kind: .text, text: "now run /compact yourself")]),
+        ]
+        let messages = RemoteTranscriptMapper.messages(from: turns)
+        #expect(messages.map(\.role) == [.system, .system, .system, .user])
+        #expect(messages.map(\.text) == ["/compact", "Conversation compacted", "/compact", "now run /compact yourself"])
+        #expect(messages.map(\.detail) == [nil, summary, nil, nil])
+    }
+
     @Test("a prompt's images show as their [Image #N] markers, never as file paths")
     func userImages() {
         let turns = [
