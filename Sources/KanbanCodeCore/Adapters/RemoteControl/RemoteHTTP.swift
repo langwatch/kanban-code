@@ -12,11 +12,26 @@ struct RemoteHTTPRequest: Sendable {
     var segments: [String]
     var rawPath: String
     var query: [String: String]
+    /// The query as sent, still percent-encoded.
+    var rawQuery = ""
     /// Header names lowercased.
     var headers: [String: String]
     var body: Data
 
     func header(_ name: String) -> String? { headers[name.lowercased()] }
+
+    /// A query value read as a form field: `+` is a space, as browsers,
+    /// `URLSearchParams` and curl's `--data-urlencode` send it, and `%2B`
+    /// is a plus. `query` keeps `+` as it is.
+    func formValue(_ name: String) -> String? {
+        for pair in rawQuery.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let key = parts.first, (String(key).removingPercentEncoding ?? String(key)) == name else { continue }
+            let raw = parts.count > 1 ? String(parts[1]).replacingOccurrences(of: "+", with: " ") : ""
+            return raw.removingPercentEncoding ?? raw
+        }
+        return nil
+    }
 
     var wantsWebSocket: Bool {
         header("upgrade")?.lowercased() == "websocket"
@@ -140,6 +155,7 @@ final class RemoteConnection: @unchecked Sendable {
             segments: segments,
             rawPath: rawPath,
             query: query,
+            rawQuery: components?.percentEncodedQuery ?? "",
             headers: headers,
             body: body
         )

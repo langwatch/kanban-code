@@ -168,6 +168,12 @@ public struct RemoteClient: Sendable {
         if scope != .all { items.append(URLQueryItem(name: "scope", value: scope.rawValue)) }
         if local { items.append(URLQueryItem(name: "local", value: "1")) }
         var request = makeRequest("GET", "v1/cards/search", query: items)
+        // The server reads `q` as a form field, where a bare plus is a space.
+        if let url = request.url, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let encoded = parts.percentEncodedQuery, encoded.contains("+") {
+            parts.percentEncodedQuery = encoded.replacingOccurrences(of: "+", with: "%2B")
+            request.url = parts.url
+        }
         if let timeout { request.timeoutInterval = timeout }
         return try await send(request)
     }

@@ -459,7 +459,7 @@ public final class RemoteControlServer: Sendable {
                     return .response(.error(400, "scope must be all, older or archived"))
                 }
                 return .response(.json(await host.searchCards(RemoteCardSearchRequest(
-                    query: request.query["q"] ?? "",
+                    query: request.formValue("q") ?? "",
                     scope: scope.flatMap(RemoteCardSearchScope.init(rawValue:)) ?? .all,
                     limit: Int(request.query["limit"] ?? "") ?? CardSearch.defaultLimit,
                     local: Self.isOn(request.query["local"])))))

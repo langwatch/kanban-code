@@ -133,13 +133,20 @@ struct RemoteCardSearchTests {
 
     @Test("the route answers the phone and an agent, reads q, scope and limit, and is refused without a token")
     func route() async throws {
-        let f = try await RemoteServerFixture(host: FakeRemoteHost(cards: Self.cards))
+        let f = try await RemoteServerFixture(host: FakeRemoteHost(cards: Self.cards + [Self.card("cpp", "Port to C++", .waiting)]))
         defer { f.shutdown() }
         for token in [f.fullToken, f.agentToken] {
             let (status, data) = try await f.request("GET", "/v1/cards/search?q=parquet%20EXPORT", token: token)
             #expect(status == 200)
             #expect(try JSONDecoder.remote.decode(RemoteCardSearchResult.self, from: data).cards.map(\.id) == ["arch"])
         }
+        // A form-encoded query: plus is a space, %2B a plus.
+        let form = try JSONDecoder.remote.decode(RemoteCardSearchResult.self, from:
+            try await f.request("GET", "/v1/cards/search?q=parquet+invoices", token: f.fullToken).1)
+        #expect(form.cards.map(\.id) == ["arch"])
+        #expect(try JSONDecoder.remote.decode(RemoteCardSearchResult.self, from:
+            try await f.request("GET", "/v1/cards/search?q=c%2B%2B", token: f.fullToken).1).cards.map(\.id) == ["cpp"])
+
         let older = try JSONDecoder.remote.decode(RemoteCardSearchResult.self, from:
             try await f.request("GET", "/v1/cards/search?q=export&scope=older&limit=2&local=1", token: f.fullToken).1)
         #expect(older.cards.map(\.id) == ["done30", "done31"])
@@ -151,6 +158,7 @@ struct RemoteCardSearchTests {
         let client = RemoteClient(baseURL: URL(string: f.base)!, token: f.fullToken, session: f.session)
         let viaClient = try await client.searchCards("Export scratch", scope: .older, limit: 10, local: true, timeout: 5)
         #expect(viaClient.cards.map(\.id) == ["sessions"])
+        #expect(try await client.searchCards("c++ port").cards.map(\.id) == ["cpp"])
         let health = try JSONDecoder.remote.decode(RemoteHealth.self, from: try await f.request("GET", "/v1/health").1)
         #expect(health.features?.contains(RemoteAPI.Feature.cardSearch) == true)
     }

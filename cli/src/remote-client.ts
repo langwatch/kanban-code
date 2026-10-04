@@ -307,9 +307,8 @@ export class RemoteClient {
    * then the most recently active.
    */
   searchCards(query: string, opts: { limit?: number } = {}): Promise<RemoteCardSearchResult> {
-    const params = new URLSearchParams({ q: query });
-    if (opts.limit) params.set("limit", String(opts.limit));
-    return this.request("GET", `/v1/cards/search?${params.toString()}`);
+    const limit = opts.limit ? `&limit=${opts.limit}` : "";
+    return this.request("GET", `/v1/cards/search?q=${encodeURIComponent(query)}${limit}`);
   }
 
   card(id: string): Promise<RemoteCard> {
