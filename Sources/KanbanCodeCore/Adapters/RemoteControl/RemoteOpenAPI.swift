@@ -24,6 +24,15 @@ enum RemoteOpenAPI {
       "parameters": [{"$ref": "#/components/parameters/All"}],
       "get": {"summary": "The working set (no archived, no All Sessions, the 30 most recent Done) and projects; all=1 for every card", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Board"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
     },
+    "/v1/cards/search": {
+      "parameters": [
+        {"name": "q", "in": "query", "schema": {"type": "string"}, "description": "words separated by spaces; every word must be in the card's title, the first lines of its prompt, its project, branch, or a pull request (#N, title), whatever the case or the accents. Empty lists the most recent cards of the scope."},
+        {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 50, "maximum": 200}},
+        {"name": "scope", "in": "query", "schema": {"type": "string", "enum": ["all", "older", "archived"], "default": "all"}, "description": "older: only cards outside the working set (archived, All Sessions, older Done). archived: archived cards that are not subagents."},
+        {"name": "local", "in": "query", "schema": {"type": "string", "enum": ["1"]}, "description": "answer from this master's cards only, without asking its peers"}
+      ],
+      "get": {"summary": "Search every card this master and its peers know, archived and All Sessions included: board cards first, then the most recently active", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CardSearchResult"}}}}, "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/machines": {
       "get": {"summary": "The machines a task can run on: this master (kind this, where a task with no machine runs), the other masters and the ssh machines", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MachineList"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
     },
@@ -182,6 +191,7 @@ enum RemoteOpenAPI {
       "MachineList": {"type": "object", "properties": {"machines": {"type": "array", "items": {"type": "object", "required": ["name", "kind"], "properties": {"id": {"type": "string", "description": "machine id of a master"}, "name": {"type": "string", "description": "what TaskRequest.machine accepts"}, "kind": {"type": "string", "enum": ["this", "master", "ssh"]}, "online": {"type": "boolean"}, "alwaysOn": {"type": "boolean"}}}}}},
       "Machine": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}},
       "Project": {"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}}},
+      "CardSearchResult": {"type": "object", "required": ["cards"], "properties": {"cards": {"type": "array", "items": {"$ref": "#/components/schemas/Card"}}, "truncated": {"type": "boolean", "description": "more cards matched than limit; absent when false"}, "unreachable": {"type": "array", "items": {"type": "string"}, "description": "peer masters that did not answer in time; absent when empty"}}},
       "Board": {"type": "object", "properties": {"cards": {"type": "array", "items": {"$ref": "#/components/schemas/Card"}}, "projects": {"type": "array", "items": {"$ref": "#/components/schemas/Project"}}, "generatedAt": {"type": "string", "format": "date-time"}, "machine": {"$ref": "#/components/schemas/Machine", "description": "the master serving this board"}}},
       "Message": {"type": "object", "properties": {"id": {"type": "string"}, "role": {"type": "string", "enum": ["user", "assistant", "tool", "system"]}, "text": {"type": "string"}, "at": {"type": ["string", "null"], "format": "date-time"}}},
       "Transcript": {"type": "object", "properties": {"cardId": {"type": "string"}, "messages": {"type": "array", "items": {"$ref": "#/components/schemas/Message"}}, "olderCursor": {"type": ["string", "null"]}}},

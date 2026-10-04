@@ -1010,13 +1010,15 @@ public enum Reducer {
     }
 
     /// Takes a card out of the archive. A card in All Sessions goes to the
-    /// backlog, and reconciliation promotes it by real activity from there.
+    /// backlog as a manual placement, which reconciliation keeps: without
+    /// it a card whose session ended long ago is sent back to All Sessions
+    /// on the next pass. Resuming the card lifts the placement.
     static func unarchive(_ link: inout Link) {
         guard link.manuallyArchived else { return }
         link.manuallyArchived = false
         if link.column == .allSessions {
             link.column = .backlog
-            link.manualOverrides.column = false
+            link.manualOverrides.column = true
         }
     }
 

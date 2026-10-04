@@ -972,4 +972,53 @@ struct MasterRolesTests {
         try (data + data).write(to: URL(fileURLWithPath: mirror))
         #expect(await MasterEngine.mirroredPrefix(at: mirror, size: data.count, cardId: "card_seed", client: client) == nil)
     }
+
+    @Test("a search on one master finds the cards only its peer knows, and still answers when the peer is gone")
+    func searchAcrossMasters() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("search-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        let macPeerToken = try mac.devices.add(name: "box as peer", scope: .peer).token
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: macPeerToken)
+        defer { mac.server.stop(); box.server.stop() }
+
+        // An archived card syncs to the box; an unclaimed All Sessions card does not.
+        mac.store.dispatch(.createManualTask(Link(
+            id: "card_archived", name: "Export invoices to Parquet", projectPath: root, column: .allSessions,
+            manuallyArchived: true)))
+        mac.store.dispatch(.createManualTask(Link(
+            id: "card_session", projectPath: root, column: .allSessions,
+            source: .discovered, promptBody: "Draft the parquet schema notes")))
+        box.store.dispatch(.createManualTask(Link(id: "card_box", name: "Parquet reader on the box", projectPath: root, column: .waiting)))
+        await box.peerSync.pullAll()
+        #expect(box.store.state.links["card_archived"] != nil)
+        #expect(box.store.state.links["card_session"] == nil)
+
+        let host = MasterRemoteControlHost(engine: box.engine)
+        let found = await host.searchCards(RemoteCardSearchRequest(query: "parquet"))
+        #expect(found.cards.map(\.id) == ["card_box", "card_archived", "card_session"]
+            || found.cards.map(\.id) == ["card_box", "card_session", "card_archived"])
+        #expect(found.unreachable.isEmpty)
+        #expect(found.cards.first { $0.id == "card_archived" }?.archived == true)
+        #expect(found.cards.first { $0.id == "card_session" }?.machineId == mac.identity.id)
+
+        let localOnly = await host.searchCards(RemoteCardSearchRequest(query: "parquet", local: true))
+        #expect(Set(localOnly.cards.map(\.id)) == ["card_box", "card_archived"])
+
+        // Over HTTP, as the phone asks the box.
+        let phone = RemoteClient(baseURL: URL(string: box.url)!, token: box.tokenForPeer)
+        let older = try await phone.searchCards("parquet", scope: .older)
+        #expect(Set(older.cards.map(\.id)) == ["card_archived", "card_session"])
+
+        mac.server.stop()
+        let started = Date()
+        let without = await host.searchCards(RemoteCardSearchRequest(query: "parquet"))
+        #expect(Date().timeIntervalSince(started) < RemoteCardSearch.peerTimeout + 2)
+        #expect(Set(without.cards.map(\.id)) == ["card_box", "card_archived"])
+        #expect(without.unreachable == ["mac"])
+    }
 }

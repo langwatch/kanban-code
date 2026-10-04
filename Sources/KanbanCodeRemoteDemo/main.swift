@@ -148,6 +148,11 @@ final class DemoHost: RemoteControlHost {
                 machineId: machine?.id, machineName: machine?.name
             )
         }
+        func archived(_ card: RemoteCard) -> RemoteCard {
+            var card = card
+            card.archived = true
+            return card
+        }
         if flavor == "box" {
             var cards: [CardState] = [
                 .init(card: card("box_backfill", "Nightly data backfill", .inProgress, project: 1, runtime: .tmux, live: true, busy: true, minutesAgo: 2),
@@ -194,6 +199,12 @@ final class DemoHost: RemoteControlHost {
             .init(card: card("card_done", "Bump dependencies", .done, project: 1, runtime: .tmux, live: false,
                              prs: [RemotePR(number: 398, title: "chore: bump deps", status: "merged")], minutesAgo: 2000),
                   messages: Self.conversation("Bump dependencies")),
+            .init(card: archived(card("card_old", "Export invoices to Parquet", .allSessions, project: 1, runtime: .tmux, live: false,
+                                      minutesAgo: 30_000)),
+                  messages: Self.conversation("Export invoices to Parquet")),
+            .init(card: archived(card("card_older", "Résumé parser for the careers page", .allSessions, project: 0, runtime: .tmux,
+                                      live: false, minutesAgo: 60_000)),
+                  messages: Self.conversation("Résumé parser for the careers page")),
         ]
         state.withLock { $0.cards = cards }
     }

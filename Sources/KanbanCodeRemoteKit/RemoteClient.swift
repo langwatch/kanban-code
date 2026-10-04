@@ -159,6 +159,19 @@ public struct RemoteClient: Sendable {
         try await send(makeRequest("GET", "v1/board", query: all ? [URLQueryItem(name: "all", value: "1")] : []))
     }
 
+    /// Cards matching `query` among every card the master and its peers
+    /// know, board cards first. `local` keeps the master from asking its
+    /// peers; `timeout` bounds the wait for the answer.
+    public func searchCards(_ query: String, scope: RemoteCardSearchScope = .all, limit: Int = CardSearch.defaultLimit,
+                            local: Bool = false, timeout: TimeInterval? = nil) async throws -> RemoteCardSearchResult {
+        var items = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: String(limit))]
+        if scope != .all { items.append(URLQueryItem(name: "scope", value: scope.rawValue)) }
+        if local { items.append(URLQueryItem(name: "local", value: "1")) }
+        var request = makeRequest("GET", "v1/cards/search", query: items)
+        if let timeout { request.timeoutInterval = timeout }
+        return try await send(request)
+    }
+
     public func card(id: String) async throws -> RemoteCard {
         try await send(makeRequest("GET", "v1/cards/\(Self.escape(id))"))
     }

@@ -522,11 +522,35 @@ struct ReducerTests {
         #expect(pinned?.isPinned == true)
         #expect(pinned?.manuallyArchived == false, "a pinned card must not stay archived")
         #expect(pinned?.column != .allSessions)
-        #expect(pinned?.manualOverrides.column == false, "reconcile should be free to place it")
+        #expect(pinned?.column == .backlog)
+        #expect(pinned?.manualOverrides.column == true, "reconcile must keep it on the board")
+        #expect(AssignColumn.assign(link: pinned!, activityState: .ended) == .backlog)
         #expect(state.pinnedCards.map(\.id) == ["card_arch1"])
     }
 
-    @Test("unarchiveCard puts an archived card in the backlog for reconcile to place, and leaves other cards alone")
+    @Test("an unarchived card whose session ended long ago is still in the backlog after a reconcile")
+    func unarchivedOldCardStaysOnBoard() {
+        var archived = makeLink(id: "card_old", column: .allSessions)
+        archived.manuallyArchived = true
+        archived.sessionLink = SessionLink(sessionId: "s-old")
+        archived.lastActivity = Date.now.addingTimeInterval(-40 * 24 * 3600)
+        var state = stateWith([archived])
+
+        _ = Reducer.reduce(state: &state, action: .unarchiveCard(cardId: "card_old"))
+        var link = state.links["card_old"]!
+        #expect(link.column == .backlog)
+        for activity in [ActivityState.ended, .stale, nil] {
+            #expect(AssignColumn.assign(link: link, activityState: activity) == .backlog)
+            UpdateCardColumn.update(link: &link, activityState: activity, hasWorktree: false, hasLiveSession: false)
+            #expect(link.column == .backlog)
+            #expect(!link.manuallyArchived)
+        }
+        // Resuming lifts the placement, and activity moves the card again.
+        link.manualOverrides.column = false
+        #expect(AssignColumn.assign(link: link, activityState: .activelyWorking, hasLiveSession: true) == .inProgress)
+    }
+
+    @Test("unarchiveCard puts an archived card in the backlog as a manual placement, and leaves other cards alone")
     func unarchiveCard() {
         var archived = makeLink(id: "card_ua1", column: .allSessions)
         archived.manuallyArchived = true
@@ -537,7 +561,7 @@ struct ReducerTests {
         let effects = Reducer.reduce(state: &state, action: .unarchiveCard(cardId: "card_ua1"))
         #expect(state.links["card_ua1"]?.manuallyArchived == false)
         #expect(state.links["card_ua1"]?.column == .backlog)
-        #expect(state.links["card_ua1"]?.manualOverrides.column == false)
+        #expect(state.links["card_ua1"]?.manualOverrides.column == true)
         #expect(effects.contains(where: { if case .upsertLink = $0 { return true }; return false }))
 
         #expect(Reducer.reduce(state: &state, action: .unarchiveCard(cardId: "card_ua2")).isEmpty)

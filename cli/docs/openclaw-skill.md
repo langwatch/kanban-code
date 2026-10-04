@@ -79,6 +79,7 @@ kanban remote resume <card>                              # restart a stopped ses
 kanban remote cards                          # every card: column, busy/idle/stopped, project, title
 kanban remote cards --column waiting         # cards waiting for input
 kanban remote cards --project langwatch --json
+kanban remote cards --search "billing export" # any card of any master, archived and old ones too
 ```
 
 Add `--json` to any command for machine-readable output.

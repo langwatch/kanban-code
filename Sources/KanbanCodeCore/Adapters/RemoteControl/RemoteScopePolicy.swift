@@ -5,12 +5,13 @@ import KanbanCodeRemoteKit
 /// route in the server; `peer` and `terminal` are allow lists, so a route
 /// added later is refused for them until it is listed here.
 enum RemoteScopePolicy {
-    /// A route as the lists name it: `cards/*/queue/*`, `attention/*/resolve`,
+    /// A route as the lists name it: `cards/search`, `cards/*/queue/*`, `attention/*/resolve`,
     /// `channels/files`, `vault/replica`.
     static func shape(_ rest: [String]) -> String {
         guard let first = rest.first else { return "" }
         switch first {
         case "cards":
+            if rest == ["cards", "search"] { return "cards/search" }
             return rest.enumerated().map { item in
                 item.offset == 1 || (item.offset == 3 && (rest[2] == "queue" || rest[2] == "side-chat")) ? "*" : item.element
             }.joined(separator: "/")
@@ -36,7 +37,7 @@ enum RemoteScopePolicy {
         "GET vault/replica", "POST vault/replica", "POST vault/card-token",
         "GET vault/audit/hashes", "GET vault/audit/mirror", "POST vault/audit/mirror",
         "GET scrub/status", "GET scrub/index", "POST scrub/run", "PUT scrub/schedule",
-        "POST tasks", "GET cards/*", "PATCH cards/*", "DELETE cards/*",
+        "POST tasks", "GET cards/search", "GET cards/*", "PATCH cards/*", "DELETE cards/*",
         "GET cards/*/transcript", "GET cards/*/transcript/raw", "GET cards/*/handover",
         "POST cards/*/prompt", "POST cards/*/interrupt", "POST cards/*/resume", "POST cards/*/move",
         "POST cards/*/worktree/remove", "POST cards/*/discover",

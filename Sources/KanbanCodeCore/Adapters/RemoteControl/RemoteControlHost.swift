@@ -6,6 +6,10 @@ import KanbanCodeRemoteKit
 public protocol RemoteControlHost: AnyObject, Sendable {
     func board() async -> RemoteBoard
 
+    /// Cards matching the request among every card this master knows and,
+    /// unless the request is `local`, the ones its peers know.
+    func searchCards(_ request: RemoteCardSearchRequest) async -> RemoteCardSearchResult
+
     /// Newest `limit` messages of the card's conversation, older than
     /// `before` when given.
     func transcript(cardId: String, limit: Int, before: String?) async throws -> RemoteTranscript
@@ -104,6 +108,10 @@ public protocol RemoteControlHost: AnyObject, Sendable {
 
 extension RemoteControlHost {
     public func machines() async -> [RemoteMachineEntry] { [] }
+
+    public func searchCards(_ request: RemoteCardSearchRequest) async -> RemoteCardSearchResult {
+        RemoteCardSearch.search(await board().cards, request)
+    }
 
     public func rawTranscript(cardId: String, offset: Int, limit: Int) async throws -> RemoteRawTranscript {
         throw RemoteHostError.notFound("this host does not serve raw transcripts")

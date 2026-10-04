@@ -16,6 +16,7 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
     /// machine that hosts the session.
     private let rushFor: @Sendable (String) throws -> RushCliAdapter
     private let queueWatch = QueueWatchFlag()
+    private let searchIndex = CardSearchIndex()
     /// How long a resume request waits for the start to succeed or fail
     /// before it answers with the card as it is. Below the clients' 30 s.
     public var resumeOutcomeWait: TimeInterval = 20
@@ -55,6 +56,61 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         }
         await watchRushQueues()
         return board
+    }
+
+    /// Searches every card of this master's store, the prompt of each
+    /// included, then asks the peer masters for the cards only they know
+    /// (their unclaimed All Sessions cards are not synced here).
+    public func searchCards(_ request: RemoteCardSearchRequest) async -> RemoteCardSearchResult {
+        let snapshot = await MainActor.run {
+            (cards: store.state.cards, live: store.state.tmuxSessions, queues: store.state.rushQueues,
+             machine: store.state.localMachineIdentity, names: store.state.peerMachineNames,
+             peers: request.local ? [] : store.state.peerStatuses.values.compactMap { status in
+                 status.machine.map { (machine: $0, online: status.online) }
+             })
+        }
+        let local = Self.search(snapshot.cards, request, index: searchIndex) { card in
+            RemoteBoardMapper.card(card, liveSessions: snapshot.live, rushQueues: snapshot.queues,
+                                   machine: snapshot.machine, machineNames: snapshot.names)
+        }
+        guard !request.local, !snapshot.peers.isEmpty else { return local }
+        var peers: [RemoteCardSearch.Peer] = []
+        var offline: [String] = []
+        for peer in snapshot.peers.sorted(by: { $0.machine.id < $1.machine.id }) {
+            guard peer.online, let client = await engine.peerClient(machineId: peer.machine.id) else {
+                offline.append(peer.machine.name)
+                continue
+            }
+            peers.append(RemoteCardSearch.Peer(machineId: peer.machine.id, name: peer.machine.name) {
+                try await client.searchCards(request.query, scope: request.scope, limit: request.limit, local: true,
+                                             timeout: RemoteCardSearch.peerTimeout)
+            })
+        }
+        return await RemoteCardSearch.fanOut(local: local, peers: peers, offline: offline, limit: request.limit)
+    }
+
+    /// The search over this master's own cards. Only the cards that make
+    /// the answer are turned into wire cards.
+    static func search(_ cards: [KanbanCodeCard], _ request: RemoteCardSearchRequest, index: CardSearchIndex,
+                       wire: (KanbanCodeCard) -> RemoteCard) -> RemoteCardSearchResult {
+        func column(_ card: KanbanCodeCard) -> RemoteColumn { RemoteColumn(rawValue: card.link.column.rawValue) ?? .backlog }
+        func activity(_ card: KanbanCodeCard) -> Date { card.link.lastActivity ?? card.link.updatedAt }
+        let workingSet = request.scope == .older
+            ? RemoteWorkingSet.ids(cards.map {
+                RemoteWorkingSet.Member(id: $0.id, column: column($0), archived: $0.link.manuallyArchived, activity: activity($0))
+            })
+            : []
+        let admitted = cards.filter {
+            RemoteCardSearch.admits(scope: request.scope, id: $0.id, archived: $0.link.manuallyArchived,
+                                    isSubagent: $0.link.parentCardId != nil, workingSet: workingSet)
+        }
+        let matches = index.matching(admitted, query: CardSearchQuery(request.query))
+        let ranked = matches.map { card in
+            (card: card, entry: CardSearch.Entry(
+                id: card.id, onBoard: !card.link.manuallyArchived && card.link.column != .allSessions, activity: activity(card)))
+        }.sorted { CardSearch.ranks($0.entry, before: $1.entry) }
+        return RemoteCardSearchResult(cards: ranked.prefix(request.limit).map { wire($0.card) },
+                                      truncated: ranked.count > request.limit)
     }
 
     public func machines() async -> [RemoteMachineEntry] {

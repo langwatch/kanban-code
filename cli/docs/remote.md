@@ -58,6 +58,7 @@ Only the `kanban remote` commands are meant for that machine. The other `kanban`
 | Command | Does |
 |---|---|
 | `cards [--column c] [--project p] [--all]` | Lists cards. Archived cards only with `--all`. Columns: `backlog`, `in_progress`, `waiting`, `in_review`, `done`. |
+| `cards --search <text> [--limit n]` | Cards matching every word (title, first lines of the prompt, project, branch, pull request), among all cards of every master, archived and All Sessions included. Board cards first. Needs a master with the `cardSearch` feature. |
 | `projects` | Lists project names and paths that `task --project` accepts. |
 | `show <card>` | One card: column, state, project, branch, worktree, PRs. |
 | `machines` | Lists the machines a task can run on: the master this CLI is logged into (the default), the other masters with their online state, and the ssh machines. |

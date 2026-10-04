@@ -451,12 +451,19 @@ public final class RemoteControlServer: Sendable {
                 }
             }
             let id = rest.count >= 2 && rest[0] == "cards" ? rest[1] : ""
-            let shape = rest.enumerated().map { item in
-                let wildcard = rest[0] == "cards"
-                    && (item.offset == 1 || (item.offset == 3 && (rest[2] == "queue" || rest[2] == "side-chat")))
-                return wildcard ? "*" : item.element
-            }.joined(separator: "/")
+            let shape = RemoteScopePolicy.shape(rest)
             switch (method, shape) {
+            case ("GET", "cards/search"):
+                let scope = request.query["scope"].flatMap { $0.isEmpty ? nil : $0 }
+                guard scope == nil || RemoteCardSearchScope(rawValue: scope!) != nil else {
+                    return .response(.error(400, "scope must be all, older or archived"))
+                }
+                return .response(.json(await host.searchCards(RemoteCardSearchRequest(
+                    query: request.query["q"] ?? "",
+                    scope: scope.flatMap(RemoteCardSearchScope.init(rawValue:)) ?? .all,
+                    limit: Int(request.query["limit"] ?? "") ?? CardSearch.defaultLimit,
+                    local: Self.isOn(request.query["local"])))))
+
             case ("GET", "me"):
                 return .response(.json(device))
 
@@ -652,12 +659,17 @@ public final class RemoteControlServer: Sendable {
 
     /// `?all=1` asks for every card instead of the working set.
     static func wantsAll(_ request: RemoteHTTPRequest) -> Bool {
-        guard let value = request.query["all"]?.lowercased() else { return false }
+        isOn(request.query["all"])
+    }
+
+    /// A query flag: present with no value, or `1`, `true`, `yes`.
+    static func isOn(_ value: String?) -> Bool {
+        guard let value = value?.lowercased() else { return false }
         return value == "" || value == "1" || value == "true" || value == "yes"
     }
 
     private static let knownShapes: Set<String> = [
-        "me", "board", "machines", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt", "cards/*/queue/*",
+        "me", "board", "machines", "cards/search", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt", "cards/*/queue/*",
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
         "cards/*/move", "cards/*/handover", "cards/*/transcript/raw",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",

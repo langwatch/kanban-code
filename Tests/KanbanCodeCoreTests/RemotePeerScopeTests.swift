@@ -19,7 +19,7 @@ struct RemotePeerScopeTests {
         ("GET", ["vault", "replica"]), ("POST", ["vault", "replica"]), ("POST", ["vault", "card-token"]),
         ("GET", ["vault", "audit", "hashes"]), ("GET", ["vault", "audit", "mirror"]), ("POST", ["vault", "audit", "mirror"]),
         ("GET", ["scrub", "status"]), ("GET", ["scrub", "index"]), ("POST", ["scrub", "run"]), ("PUT", ["scrub", "schedule"]),
-        ("POST", ["tasks"]), ("GET", ["cards", "c1"]), ("PATCH", ["cards", "c1"]), ("DELETE", ["cards", "c1"]),
+        ("POST", ["tasks"]), ("GET", ["cards", "search"]), ("GET", ["cards", "c1"]), ("PATCH", ["cards", "c1"]), ("DELETE", ["cards", "c1"]),
         ("GET", ["cards", "c1", "transcript"]), ("GET", ["cards", "c1", "transcript", "raw"]),
         ("GET", ["cards", "c1", "handover"]), ("POST", ["cards", "c1", "prompt"]),
         ("POST", ["cards", "c1", "interrupt"]), ("POST", ["cards", "c1", "resume"]), ("POST", ["cards", "c1", "move"]),

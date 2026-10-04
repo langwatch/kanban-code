@@ -127,6 +127,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       generatedAt: "2026-09-26T10:00:00.000Z",
     });
   }
+  if (req.method === "GET" && path === "/v1/cards/search") {
+    const words = (url.searchParams.get("q") ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const matches = state.cards.filter((c: any) => words.every((w) => `${c.title} ${c.projectName ?? ""}`.toLowerCase().includes(w)));
+    return send(res, 200, {
+      cards: matches.slice(0, limit),
+      ...(matches.length > limit ? { truncated: true } : {}),
+      ...(words.includes("old") ? { unreachable: ["studio"] } : {}),
+    });
+  }
   if (req.method === "GET" && path === "/v1/machines") {
     return send(res, 200, {
       machines: [
@@ -353,6 +363,26 @@ describe("kanban remote cards / show / projects", () => {
 
     r = await run(["cards", "--all", "--json"]);
     assert.equal(JSON.parse(r.out).length, 4);
+  });
+
+  test("cards --search asks the master, finds archived cards and says what is missing", async () => {
+    let r = await run(["cards", "--search", "archived ONE", "--json"]);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(JSON.parse(r.out).map((c: RemoteCard) => c.id), ["card_4arch"]);
+
+    r = await run(["cards", "--search", "old"]);
+    assert.match(r.out, /card_3zzzSTOPPED\s+Backlog/);
+    assert.match(r.err, /No answer from: studio\./);
+
+    r = await run(["cards", "--search", "e", "--limit", "1"]);
+    assert.equal(r.out.trim().split("\n").length, 1);
+    assert.match(r.err, /More cards match/);
+
+    r = await run(["cards", "--search", "e", "--column", "backlog", "--json"]);
+    assert.deepEqual(JSON.parse(r.out).map((c: RemoteCard) => c.id), ["card_3zzzSTOPPED"]);
+
+    r = await run(["cards", "--search", "nothing-like-this"]);
+    assert.match(r.out, /No cards match\./);
   });
 
   test("an unknown column lists the known ones", async () => {

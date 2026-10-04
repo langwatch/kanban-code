@@ -38,12 +38,14 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 - `worktrees`: `POST /v1/cards/{id}/worktree/remove` and `POST /v1/cards/{id}/discover`.
 - `sideChat`: the `/v1/cards/{id}/side-chat` routes, and `human` on prompts and tasks.
 - `slashCommands`: `GET /v1/cards/{id}/slash-commands`.
+- `cardSearch`: `GET /v1/cards/search`.
 
 | Method and path | Scope | Returns |
 |---|---|---|
 | `GET /v1/health` | none | `RemoteHealth` |
 | `GET /v1/me` | any | `RemoteDevice` |
 | `GET /v1/board?all=1` | any | `RemoteBoard` |
+| `GET /v1/cards/search?q=&limit=50&scope=&local=1` | full, agent, peer | `RemoteCardSearchResult`: `cards`, `truncated`, `unreachable` |
 | `GET /v1/cards/{id}` | any | `RemoteCard` |
 | `GET /v1/cards/{id}/transcript?limit=50&before=<cursor>` | any | `RemoteTranscript`, oldest first |
 | `GET /v1/machines` | any | `RemoteMachineList`: this master (`kind` `this`), the other masters and the ssh machines |
@@ -78,6 +80,8 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 
 Behaviour:
 - `board` and `events` return the working set: no archived cards, no All Sessions cards, and only the 30 most recent Done cards (by `lastActivity`, else `updatedAt`). `?all=1` returns every card.
+- `cards/search` looks at every card the master knows, archived and All Sessions included, which the working set leaves out. Every word of `q` must be in the card's title, the first lines of its prompt, its project name, a branch, or a pull request (`#N` or its title); case and accents do not count. Board cards come first, then the most recently active. `limit` is 50 by default, 200 at most; `truncated` says more cards matched. `scope=older` leaves out the working set (what a client already holds), `scope=archived` keeps archived cards that are not subagents, and an empty `q` lists the most recent cards of the scope. No transcript is read: the folded text of each card is kept between searches, so a search over 2,500 cards takes a few milliseconds.
+- A master does not have its peers' unclaimed All Sessions cards (they are not synced), so it asks each online peer the same search with `local=1` and merges the answers, each card once, the owner's copy kept. A peer has 2.5 seconds; one that is off, late or failing is named in `unreachable` and the answer goes out without it.
 - `POST /v1/tasks` resolves `project` as a project path first, then as a project name (case-insensitive). An unknown project is a 400 that lists the known names. The card launches with the app's defaults for that project: runtime (`tmux`, or `agtop` for rush, its name before the rename, which older clients expect), skip permissions, and the command template. `machine` picks where it runs: `mac`, `local` or `here` for the master that answers, its own name from `GET /v1/machines`, or the name of an ssh machine, a boxd machine or a peer master. An ssh machine that runs a paired master is that master: the card is handed to it. Without it the card runs where the New Task dialog would start it for that project.
 - `prompt` with `mode: queue` delivers the text when the current turn ends, or at once when the session is idle. `mode: now` interrupts the turn first. A card with no live session returns 409 until it is resumed.
 - `prompt` and `tasks` take `images`: up to 6 `RemoteImage` objects, `{"mediaType": "image/png", "data": "<base64>"}`, each at most 5 MiB decoded, PNG, JPEG, GIF or WebP (the server reads the format from the bytes). `text` may be empty when there are images. The Mac writes them to files and sends them the way its own chat does: pasted into Claude in tmux, `--image` for rush. A bad image fails the whole request with 400. An older server ignores `images` and sends the text alone, so check the `images` feature first.
@@ -90,7 +94,7 @@ Behaviour:
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.
 - A user record the harness wrote is a `system` message, not a `user` one: the summary of a compaction is `{"role": "system", "text": "Conversation compacted", "detail": "<the summary>"}`, and the `/compact` command is a `system` message with the command as `text`. `detail` is absent on every other message. The chats show such a message as a centered note; one with `detail` opens to it. The rule is `HarnessNote` in `Sources/KanbanCodeRemoteKit/HarnessNotes.swift`, which the Mac chat applies to its own turns.
 - `resume` on a card that never ran launches it.
-- `PATCH /v1/cards/{id}` does what the Mac's card menu does. `archived: true` archives the card and ends its sessions; `archived: false` puts an archived card back in the backlog, from where activity moves it. `pinned: true` pins it on top of the board and brings an archived card back; a subagent card cannot be pinned (409). `DELETE` removes an archived card with its subagents, sessions and conversation file, as Delete Card on the Mac; a card still on the board, or an archived GitHub issue, is refused with 409.
+- `PATCH /v1/cards/{id}` does what the Mac's card menu does. `archived: true` archives the card and ends its sessions; `archived: false` puts an archived card back in the backlog as a manual placement, so it stays there however old its session is; resuming it lets activity move it again. `pinned: true` pins it on top of the board and brings an archived card back; a subagent card cannot be pinned (409). `DELETE` removes an archived card with its subagents, sessions and conversation file, as Delete Card on the Mac; a card still on the board, or an archived GitHub issue, is refused with 409.
 - `worktree/remove` runs where the worktree is: on this master's disk, over ssh on the ssh machine that runs the card, or on the master that owns the card (the request is forwarded there). Then the card loses its worktree, or is deleted when it has no session. A card on a disposable boxd machine is left alone: the worktree goes with the machine. A failure is a 409 that names the machine: `Worktree cleanup on <machine> failed: <git's answer>`. `discover` re-scans the card for pushed branches and pull requests on the owning master.
 - `/v1/events` (also `?all=1`) sends a `board` event with the whole board on connect, then `cards` events at most once per second: `upserted` holds the cards whose value changed or that joined the set, `removed` the ids that left it (archived, moved out of the recent Done, deleted), and `projects` the project list when it changed. A client applies them by id (`RemoteEvent.apply(to:)` in RemoteKit). A text frame `{"type":"resync"}` from the client gets a whole `board` again; so does every new connection. A `ping` event arrives every 20 seconds.
 - `terminal` without `session` opens the card's primary terminal. A terminal that is not running returns 409.
@@ -116,7 +120,7 @@ The Mac app and `kanban-code-server` (an always-on Linux box) are both masters: 
 The token a master holds for its peer has the `peer` scope, in both directions. It may call what pairing uses and nothing else (`RemoteScopePolicy`, an allow list: a route added later is refused until it is listed):
 
 - Card sync: `GET /v1/links`, `POST /v1/links/changed`, `GET /v1/peers`, `GET /v1/board`, `GET /v1/machines`, `GET /v1/events`, `GET /v1/me`.
-- What the human does to a card the peer owns: `POST /v1/tasks`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `discover`, `worktree/remove`.
+- What the human does to a card the peer owns: `POST /v1/tasks`, `GET /v1/cards/search`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `discover`, `worktree/remove`.
 - Moves between masters: `POST /v1/cards/{id}/move`, `GET /v1/cards/{id}/handover`.
 - Approvals: `GET /v1/attention`, `POST /v1/attention/presence`, `POST /v1/attention/{id}/resolve`.
 - Channels: `POST /v1/cli` (`kanban channel` and `dm` only), `GET` and `PUT /v1/channels/files`.
@@ -167,7 +171,7 @@ The command runs in a pseudo-terminal on the Mac.
 
 - iOS app: `Apps/iOS`. See its README for building and installing on a phone.
 - CLI: `kanban remote login <url> --token <token>` saves the server in `~/.kanban-code/remote-client.json`. `KANBAN_REMOTE_URL` and `KANBAN_REMOTE_TOKEN` override the file. Then:
-  - `kanban remote cards`
+  - `kanban remote cards [--all] [--search <text>]`
   - `kanban remote show <card>`
   - `kanban remote task --project <name|path> [--worktree [name]] [--name <n>] [--image <path>]... "<prompt>"`
   - `kanban remote send <card> [--now] [--image <path>]... "<text>"`

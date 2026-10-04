@@ -15,6 +15,7 @@ Feature: Peer scope
       | route                                 |
       | GET /v1/links                         |
       | GET /v1/board                         |
+      | GET /v1/cards/search                  |
       | GET /v1/sync/state                    |
       | POST /v1/optmem/run                   |
       | POST /v1/cli                          |

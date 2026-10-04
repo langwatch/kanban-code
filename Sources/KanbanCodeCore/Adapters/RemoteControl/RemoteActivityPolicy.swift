@@ -14,9 +14,10 @@ public enum RemoteActivityPolicy {
         }
     }
 
-    /// The card a request is about: any route under `cards/{id}`.
+    /// The card a request is about: any route under `cards/{id}`. A card
+    /// search is about no card.
     public static func card(rest: [String]) -> String? {
-        guard rest.count >= 2, rest[0] == "cards", !rest[1].isEmpty else { return nil }
+        guard rest.count >= 2, rest[0] == "cards", !rest[1].isEmpty, rest != ["cards", "search"] else { return nil }
         return rest[1]
     }
 }
