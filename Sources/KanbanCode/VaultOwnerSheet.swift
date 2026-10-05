@@ -83,7 +83,7 @@ struct VaultOwnerSheet: View {
             } else {
                 GroupBox("Check the recovery key") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Paste the recovery key from 1Password to check that it opens a sealed secret. It is used once, here, and not kept.")
+                        Text("Paste the recovery key from your password manager to check that it opens a sealed secret. It is used once, here, and not kept.")
                             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         HStack {
                             SecureField("AGE-SECRET-KEY-1...", text: $checkKey)
@@ -127,7 +127,7 @@ struct VaultOwnerSheet: View {
         GroupBox("Set up") {
             VStack(alignment: .leading, spacing: 10) {
                 if let recovery {
-                    Text("Recovery key. It is shown this once and kept nowhere on this Mac or the box. Store it in 1Password now: it is the only way back if the Mac and the phone are both lost.")
+                    Text("Recovery key. It is shown this once and kept nowhere on this Mac or the box. Store it in your password manager (e.g. 1Password) now: it is the only way back if the Mac and the phone are both lost.")
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Text(recovery.text)
@@ -142,7 +142,7 @@ struct VaultOwnerSheet: View {
                         }
                     }
                     Text("Public key \(recovery.recipient.text)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    Toggle("I stored the recovery key in 1Password", isOn: $stored)
+                    Toggle("I stored the recovery key in my password manager", isOn: $stored)
                     HStack {
                         Button("Seal \(counts.plain) Secrets") { Task { await activate(recovery) } }
                             .keyboardShortcut(.defaultAction)

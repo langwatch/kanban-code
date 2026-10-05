@@ -37,7 +37,7 @@ Two sets of secrets:
 An owner key is one of:
 
 - A device key: P-256, made inside the Secure Enclave of the Mac (Kanban Code) or the iPhone (Kanban Code Mobile), not exportable, usable only after biometry with the fingers or face enrolled when it was made (`.biometryCurrentSet`, no password or passcode fallback). Adding a finger or resetting Face ID ends that key; enrol the device again from another one.
-- The recovery key: an age X25519 identity, shown once in Settings > Vault > Owner Keys and kept only in 1Password.
+- The recovery key: an age X25519 identity, shown once in Settings > Vault > Owner Keys and kept only in the owner's password manager (e.g. 1Password).
 
 Each owner-only secret is its own age file, encrypted to every owner key (`piv-p256` stanzas for the devices, an `X25519` stanza for recovery), holding `{"name", "value"}`. It is the `sealed` field of the secret; `value` is empty. The store keeps that invariant on every write: with owner keys in place, a secret of tier ask or never is sealed, also one a replica merge brought in plain.
 
@@ -63,7 +63,7 @@ The device checks what it opens: the name inside the sealed value must be the se
 
 ### Devices
 
-`Settings > Vault > Owner Keys` on the Mac sets it up: "Create Keys" makes the Mac's key and the recovery key, shows the recovery key once, and "Seal N Secrets" (enabled by "I stored the recovery key in 1Password") encrypts every ask and never secret. The recovery key is then gone from the Mac: it was only in the sheet, and the clipboard is cleared when it still holds it. "Check the recovery key" takes a pasted key and tries it on a sealed secret.
+`Settings > Vault > Owner Keys` on the Mac sets it up: "Create Keys" makes the Mac's key and the recovery key, shows the recovery key once, and "Seal N Secrets" (enabled by "I stored the recovery key in my password manager") encrypts every ask and never secret. The recovery key is then gone from the Mac: it was only in the sheet, and the clipboard is cleared when it still holds it. "Check the recovery key" takes a pasted key and tries it on a sealed secret.
 
 A second device (the iPhone: Machines > Vault key > Enrol this phone) sends its public key to a master (`POST /v1/vault/owner/enrol`). That raises an approval, "wants to change the keys that unlock the owner-only secrets", listing every key after the change with its fingerprint. Approve it on a device that already holds a key, after comparing the fingerprint with the one the new device shows: that device opens each sealed secret and encrypts it again to the new set, and only ciphertext goes back. Removing a key works the same way from the Owner Keys sheet.
 
