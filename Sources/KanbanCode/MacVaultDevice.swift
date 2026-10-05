@@ -33,26 +33,30 @@ enum MacVaultDevice {
         case failed(String)
     }
 
+    private struct NoKey: Error {}
+
     /// Answers `request` from this Mac. An approval that needs the device
     /// key unlocks with it (Touch ID, no password); any other approval
-    /// that wants biometry asks for Touch ID or the password first.
+    /// that wants biometry asks for Touch ID or the password first. A
+    /// refusal is sent as it is (`AttentionAnswerGate`).
     static func answer(_ request: AttentionRequest, option: String) async -> Answer {
-        let approving = !AttentionCopy.isDenial(option)
-        var unsealed: VaultUnsealed?
-        if approving, let challenge = request.unseal, !challenge.isEmpty {
-            guard key.exists else {
-                return .failed("This Mac has no vault key yet. Set it up in Settings > Vault, or answer on the phone.")
-            }
-            do {
-                unsealed = try await key.answer(challenge, reason: "\(option): \(request.title)")
-            } catch {
-                let text = describe(error)
-                approvals.record(request, resolution: option, error: text)
-                KanbanCodeLog.warn("vault", "Unlocking for \(request.id) on this Mac failed: \(text)")
-                return isCancel(error) ? .cancelled : .failed("Not unlocked: \(text)")
-            }
-        } else if request.requiresBiometry, !(await AppDelegate.confirmWithBiometry(reason: "\(option): \(request.title)")) {
-            return .cancelled
+        let unsealed: VaultUnsealed?
+        do {
+            let passed = try await AttentionAnswerGate.pass(request, option: option, unlock: { challenge in
+                guard key.exists else { throw NoKey() }
+                return try await key.answer(challenge, reason: "\(option): \(request.title)")
+            }, confirm: {
+                await AppDelegate.confirmWithBiometry(reason: "\(option): \(request.title)")
+            })
+            guard case .send(let opened) = passed else { return .cancelled }
+            unsealed = opened
+        } catch is NoKey {
+            return .failed("This Mac has no vault key yet. Set it up in Settings > Vault, or answer on the phone.")
+        } catch {
+            let text = describe(error)
+            approvals.record(request, resolution: option, error: text)
+            KanbanCodeLog.warn("vault", "Unlocking for \(request.id) on this Mac failed: \(text)")
+            return isCancel(error) ? .cancelled : .failed("Not unlocked: \(text)")
         }
         if let problem = await AppServices.resolveAttention?(request.id, option, unsealed) {
             if request.kind == .vaultApproval { approvals.record(request, resolution: option, error: problem) }

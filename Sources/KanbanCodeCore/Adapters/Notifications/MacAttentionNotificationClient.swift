@@ -32,7 +32,7 @@ public actor MacAttentionNotificationClient: MacAttentionNotifier {
         let actions = request.options.prefix(10).enumerated().map { index, option in
             UNNotificationAction(
                 identifier: Self.optionPrefix + String(index), title: option,
-                options: request.requiresBiometry ? [.authenticationRequired] : [])
+                options: AttentionAnswerGate.need(for: request, option: option) == .nothing ? [] : [.authenticationRequired])
         }
         categories[categoryId] = UNNotificationCategory(
             identifier: categoryId, actions: Array(actions), intentIdentifiers: [], options: [])

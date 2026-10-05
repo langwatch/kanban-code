@@ -120,7 +120,7 @@ struct AttentionListView: View {
                         if sending == option {
                             Text("Sending...").font(.footnote).foregroundStyle(.secondary)
                             ProgressView()
-                        } else if request.requiresBiometry {
+                        } else if AttentionAnswerGate.need(for: request, option: option) != .nothing {
                             Image(systemName: "faceid").foregroundStyle(.secondary)
                         }
                     }
@@ -260,7 +260,7 @@ struct AttentionDetailView: View {
                             if sending == option {
                                 Text("Sending...").font(.footnote).foregroundStyle(.secondary)
                                 ProgressView()
-                            } else if request.requiresBiometry {
+                            } else if AttentionAnswerGate.need(for: request, option: option) != .nothing {
                                 Image(systemName: "faceid").foregroundStyle(.secondary)
                             }
                         }
