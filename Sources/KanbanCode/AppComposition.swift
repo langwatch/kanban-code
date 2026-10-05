@@ -201,6 +201,7 @@ final class AppComposition {
                 guard let link = await MainActor.run(body: { boardStore?.vaultCardLink(id) }) else { return nil }
                 return CardPromptReader.read(link: link, kanbanHome: NSHomeDirectory() + "/.kanban-code")
             },
+            cardFamily: { [weak boardStore] id in await MainActor.run { boardStore?.vaultCardFamily(id) ?? [] } },
             cardSessions: { [weak boardStore] in await MainActor.run { boardStore?.vaultCardSessions() ?? [:] } },
             peers: { await peerSync.configuredPeers() },
             deviceApprovals: (MacVaultDevice.approvals, MacVaultDevice.deviceName)

@@ -320,6 +320,10 @@ public actor VaultBroker {
     public let cardTitle: @Sendable (String) async -> String?
     /// A card's recent prompts for Jev, nil when its transcript is not here.
     public let cardPrompts: @Sendable (String) async -> CardPrompts?
+    /// The other cards of a card's subagent tree (its root and every card
+    /// under it). A lease one of them holds covers the card too, except on
+    /// ask-tier secrets.
+    public let cardFamily: @Sendable (String) async -> [String]
     public let sts: @Sendable (AwsAccessKey, VaultAwsRole, String) async throws -> AwsProcessCredentials
     /// How long a hook-wrapped command reuses Jev's allow for the same card.
     public var hookReuse: TimeInterval = 10 * 60
@@ -426,6 +430,7 @@ public actor VaultBroker {
         machine: String,
         cardTitle: @escaping @Sendable (String) async -> String? = { _ in nil },
         cardPrompts: @escaping @Sendable (String) async -> CardPrompts? = { _ in nil },
+        cardFamily: @escaping @Sendable (String) async -> [String] = { _ in [] },
         sts: @escaping @Sendable (AwsAccessKey, VaultAwsRole, String) async throws -> AwsProcessCredentials = { key, role, name in
             try await AwsSts(region: "us-east-1").credentials(key: key, role: role, sessionName: name)
         }
@@ -436,6 +441,7 @@ public actor VaultBroker {
         self.machine = machine
         self.cardTitle = cardTitle
         self.cardPrompts = cardPrompts
+        self.cardFamily = cardFamily
         self.sts = sts
     }
 
@@ -701,9 +707,18 @@ public actor VaultBroker {
                          now: Date) async -> VaultVerdict {
         let lease = caller.cardId.flatMap { _ in caller.insideCard ? caller.cardId : nil }
         var hasLease = false
+        var familyLease: String?
         if let card = lease {
             for name in s.allNames where !hasLease {
                 hasLease = await store.activeLease(cardId: card, secret: name, now: now) != nil
+            }
+            if !hasLease, Self.familyShares(s), caller.openClawAgent == nil, caller.verifiedByPeer == nil {
+                for other in await cardFamily(card) where familyLease == nil {
+                    for name in s.allNames where familyLease == nil {
+                        if await store.activeLease(cardId: other, secret: name, now: now) != nil { familyLease = other }
+                    }
+                }
+                hasLease = familyLease != nil
             }
         }
         let reusing = req.mode == "hook" && caller.remoteDevice == nil
@@ -713,13 +728,24 @@ public actor VaultBroker {
             overNetwork: caller.remoteDevice != nil,
             // Hook-wrapped commands load the env on every Bash call: that
             // volume is ambient, so it neither counts nor trips the limit.
-            hasLease: hasLease, recentReleases: req.mode == "hook" ? 0 : await store.recentReleases(s.name, now: now),
+            hasLease: hasLease,
+            recentReleases: req.mode == "hook" ? 0 : await store.recentReleases(s.name, excluding: Self.principalKey(caller), now: now),
             ownProjectDev: VaultPolicy.isOwnProjectDev(s, caller: caller, callerProjects: callerProjects)
         )
         let first = VaultPolicy.decide(input)
+        if let familyLease, case .allow(.lease, _) = first {
+            return .allow(.lease, "\(await principalTitle(familyLease) ?? familyLease), of the same subagent tree, holds a lease")
+        }
         guard first == .consultJev else { return first }
         if reusing { return .allow(.jev, caller.insideCard ? "reused Jev's allow for this card" : "reused Jev's allow for this caller") }
         return .consultJev
+    }
+
+    /// Whether a lease of another card of the subagent tree covers `s`:
+    /// not for secrets that always ask, ask on every use, or mint AWS
+    /// credentials. Those stay with the card the human approved.
+    static func familyShares(_ s: VaultSecret) -> Bool {
+        s.tier != .ask && s.tier != .never && !s.leasePolicy.everyUseAsks && s.aws == nil
     }
 
     /// Under which a hook-wrapped command reuses Jev's allow: the card, or
@@ -842,7 +868,7 @@ public actor VaultBroker {
                 }
             }
             for (s, by, why) in allowed {
-                await store.recordRelease(s.name, now: now)
+                await store.recordRelease(s.name, caller: Self.principalKey(caller), now: now)
                 await audit(s, req: req, caller: caller, outcome: .allowed, decider: by,
                             detail: [why, note].compactMap { $0 }.joined(separator: ", "), requestId: requestId)
             }
@@ -857,7 +883,7 @@ public actor VaultBroker {
             return .denied("\(missing.map(\.name).joined(separator: ", ")): approved, but not unlocked on a device. Ask again; Rogerio answers in Kanban Code on his Mac or phone")
         }
         for (s, by, why) in allowed {
-            await store.recordRelease(s.name, now: now)
+            await store.recordRelease(s.name, caller: Self.principalKey(caller), now: now)
             await audit(s, req: req, caller: caller, outcome: .allowed, decider: by, detail: why, requestId: requestId)
         }
         let given = answer(wanted, allowed: Set(allowed.map(\.0.name)), unlocked: unlocked)

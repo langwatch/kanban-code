@@ -110,8 +110,8 @@ Order, first match wins:
 
 1. Tier never: deny.
 2. The request came over the network: ask, whatever the tier.
-3. More than 20 releases of the secret in 5 minutes: ask. A yes from the human starts the count again.
-4. The card holds a lease and the secret allows leases: allow.
+3. The card holds a lease and the secret allows leases: allow. A lease of another card in the same subagent tree (the root card and every card under it) counts too, except on secrets of tier ask, secrets where every use asks, and AWS profiles: those stay with the card the human approved. The audit line names the card that holds the lease.
+4. 10 other callers took the secret in the last 5 minutes: ask. The same caller taking it again does not count, since it already holds the value. A yes from the human starts the count again.
 5. Open: allow. Judged: the project's own development secret is allowed, anything else goes to Jev (allow needs at least 60% probability; Jev unreachable asks). Ask: the human.
 6. Allowed, but the value is sealed and the master holds no value for it (or it is an AWS profile and the master holds no credentials): ask, for the device to unlock it.
 
@@ -147,6 +147,8 @@ A card on one master that runs a command on the other over ssh (`ssh root@box 'k
 A yes is kept for 60 seconds, a no for 15. A peer that does not answer is neither: the caller is outside every card, as before, and the next call asks again. The own-project development rule does not apply to such a caller: this master verified neither the session nor the folder the card works in, so a judged secret goes to Jev.
 
 The variables an ssh login brought do not reach sessions started later on that machine: `InheritedSessionEnvironment` unsets both from a tmux server's environment before a card session starts there, a card session gets its own values, and `kanban-code-server` drops them from its own environment at start.
+
+Claude subagents started with the Agent tool run inside the card's Claude process, so the vault sees them as the card. Subagent cards (`kanban subagent`) are cards of their own that share leases with their tree, as rule 3 says.
 
 OpenClaw agents on a Linux master count like card sessions under the principal `openclaw:<agent>`: the master finds, in the caller's ancestry, a process whose cgroup is the gateway's systemd unit (`openclaw-gateway.service`, set by systemd, not by the process), then the topmost process below the gateway whose working directory is an agent workspace from `~/.openclaw/openclaw.json` (the agent runtime the gateway started; a child that changes directory does not change it). The gateway itself, resolving SecretRefs, is `openclaw:gateway`. Each principal holds its own leases. Commands an agent starts outside the unit (`systemd-run`, cron) are processes outside a card.
 

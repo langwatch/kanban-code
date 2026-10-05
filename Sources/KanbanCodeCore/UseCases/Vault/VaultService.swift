@@ -23,6 +23,7 @@ public final class VaultService: Sendable {
         approvals: (any VaultApprovals)?,
         cardTitle: @escaping @Sendable (String) async -> String?,
         cardPrompts: @escaping @Sendable (String) async -> CardPrompts? = { _ in nil },
+        cardFamily: @escaping @Sendable (String) async -> [String] = { _ in [] },
         cardSessions: @escaping @Sendable () async -> [String: String],
         peers: (@Sendable () async -> [PeerConfig])?,
         deviceApprovals: (log: VaultDeviceApprovals, name: String)? = nil
@@ -32,7 +33,7 @@ public final class VaultService: Sendable {
         self.store = store
         let jev = JevClient(apiKey: { await VaultService.jevKey(store: store) })
         broker = VaultBroker(store: store, jev: jev, approvals: approvals, machine: machine, cardTitle: cardTitle,
-                             cardPrompts: cardPrompts)
+                             cardPrompts: cardPrompts, cardFamily: cardFamily)
         let tokens = VaultCardTokens(directory: VaultStore.defaultDirectory(kanbanHome: kanbanHome))
         cardTokens = tokens
         resolver = LiveVaultCallerResolver(tokens: tokens, peerTokens: peers.map { VaultPeerTokenVerifier(peers: $0) },

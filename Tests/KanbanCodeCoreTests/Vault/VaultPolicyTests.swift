@@ -86,10 +86,13 @@ struct VaultPolicyTests {
         if case .ask = decide(.ask, everyUse: true, lease: true) {} else { Issue.record("every-use must ask despite a lease") }
     }
 
-    @Test func rateLimitPausesEvenOpenAndLeasedSecrets() {
-        #expect(decide(.open, recent: 19) == .allow(.tier, "open tier"))
-        if case .ask(let why) = decide(.open, recent: 20) { #expect(why.contains("20 times")) } else { Issue.record("must ask") }
-        if case .ask = decide(.judged, lease: true, recent: 25) {} else { Issue.record("must ask") }
+    @Test func rateLimitAsksWhenManyCallersTakeASecret() {
+        #expect(decide(.open, recent: 9) == .allow(.tier, "open tier"))
+        if case .ask(let why) = decide(.open, recent: 10) { #expect(why.contains("10 other callers")) } else { Issue.record("must ask") }
+    }
+
+    @Test func aLeaseWinsOverTheRateLimit() {
+        #expect(decide(.judged, lease: true, recent: 25) == .allow(.lease, "the card holds a lease"))
     }
 
     @Test func jevUnreachableGoesToTheHuman() {
@@ -117,12 +120,15 @@ struct VaultPolicyTests {
         #expect(VaultPolicy.approval(from: "whatever") == .deny)
     }
 
-    @Test func rateCounterSlides() {
+    @Test func rateCounterCountsDistinctCallers() {
         var counter = VaultRateCounter(window: 300)
         let t0 = Date(timeIntervalSince1970: 1_000_000)
-        for i in 0..<5 { counter.record("A", at: t0.addingTimeInterval(Double(i))) }
-        #expect(counter.count("A", now: t0.addingTimeInterval(10)) == 5)
-        #expect(counter.count("A", now: t0.addingTimeInterval(302)) == 2)
+        for i in 0..<50 { counter.record("A", caller: "card:1", at: t0.addingTimeInterval(Double(i))) }
+        #expect(counter.count("A", now: t0.addingTimeInterval(60)) == 1)
+        #expect(counter.count("A", excluding: "card:1", now: t0.addingTimeInterval(60)) == 0)
+        for i in 0..<5 { counter.record("A", caller: "card:o\(i)", at: t0.addingTimeInterval(Double(i))) }
+        #expect(counter.count("A", excluding: "card:1", now: t0.addingTimeInterval(60)) == 5)
+        #expect(counter.count("A", now: t0.addingTimeInterval(302)) == 3)
         #expect(counter.count("B", now: t0) == 0)
     }
 

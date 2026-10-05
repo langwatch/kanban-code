@@ -128,6 +128,7 @@ final class ServerMaster {
                 guard let link = await MainActor.run(body: { store?.vaultCardLink(id) }) else { return nil }
                 return CardPromptReader.read(link: link, kanbanHome: home)
             },
+            cardFamily: { [weak store] id in await MainActor.run { store?.vaultCardFamily(id) ?? [] } },
             cardSessions: { [weak store] in await MainActor.run { store?.vaultCardSessions() ?? [:] } },
             peers: { [peerSync] in await peerSync.configuredPeers() }
         )

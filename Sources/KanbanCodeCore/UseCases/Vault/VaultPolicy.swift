@@ -11,7 +11,8 @@ public struct VaultDecisionInput: Sendable, Equatable {
     public var overNetwork: Bool
     /// The card holds an active lease on the secret.
     public var hasLease: Bool
-    /// Releases of this secret in the rate window, this one excluded.
+    /// Other callers that took this secret in the rate window. The same
+    /// caller again does not count: it already holds the value.
     public var recentReleases: Int
     /// The secret is a project's development secret without rules of its
     /// own, and the card's process runs in that project's folder.
@@ -58,8 +59,8 @@ public struct JevVerdict: Sendable, Equatable {
 ///
 /// 1. tier never: deny.
 /// 2. the request came over the network: ask, whatever the tier.
-/// 3. more than `rateLimit` releases of the secret in the window: ask.
-/// 4. an active card lease (and the secret allows leases): allow.
+/// 3. an active card lease (and the secret allows leases): allow.
+/// 4. `rateLimit` other callers took the secret in the window: ask.
 /// 5. tier open: allow. judged: allow the project's own development
 ///    secret, else Jev. ask: the human.
 ///
@@ -87,7 +88,7 @@ public enum VaultPolicy {
         return callerProjects.contains(project)
     }
 
-    public static let rateLimit = 20
+    public static let rateLimit = 10
     public static let rateWindow: TimeInterval = 5 * 60
     /// Jev must be at least this sure to allow on its own.
     public static let jevAllowConfidence = 0.6
@@ -113,11 +114,11 @@ public enum VaultPolicy {
         if input.overNetwork {
             return .ask(overNetworkReason)
         }
-        if input.recentReleases >= rateLimit {
-            return .ask("released \(input.recentReleases) times in the last \(Int(rateWindow / 60)) minutes")
-        }
         if input.hasLease && !input.everyUseAsks {
             return .allow(.lease, "the card holds a lease")
+        }
+        if input.recentReleases >= rateLimit {
+            return .ask("\(input.recentReleases) other callers took it in the last \(Int(rateWindow / 60)) minutes")
         }
         switch input.tier {
         case .open: return .allow(.tier, input.insideCard ? "open tier" : "open tier, \(outsideCardNote)")
@@ -184,22 +185,23 @@ public enum VaultPolicy {
     }
 }
 
-/// Releases per secret in a sliding window, in memory.
+/// Who took each secret in a sliding window, in memory.
 public struct VaultRateCounter: Sendable {
-    private var events: [String: [Date]] = [:]
+    private var events: [String: [(caller: String, at: Date)]] = [:]
     public let window: TimeInterval
 
     public init(window: TimeInterval = VaultPolicy.rateWindow) {
         self.window = window
     }
 
-    public func count(_ secret: String, now: Date) -> Int {
-        (events[secret] ?? []).filter { now.timeIntervalSince($0) < window }.count
+    /// The distinct callers that took `secret` in the window, `excluding` one.
+    public func count(_ secret: String, excluding: String? = nil, now: Date) -> Int {
+        Set((events[secret] ?? []).filter { now.timeIntervalSince($0.at) < window && $0.caller != excluding }.map(\.caller)).count
     }
 
-    public mutating func record(_ secret: String, at now: Date) {
-        var list = (events[secret] ?? []).filter { now.timeIntervalSince($0) < window }
-        list.append(now)
+    public mutating func record(_ secret: String, caller: String, at now: Date) {
+        var list = (events[secret] ?? []).filter { now.timeIntervalSince($0.at) < window && $0.caller != caller }
+        list.append((caller, now))
         events[secret] = list
     }
 

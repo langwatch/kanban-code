@@ -552,12 +552,13 @@ public actor VaultStore {
 
     // MARK: - Rate
 
-    public func recentReleases(_ secret: String, now: Date = Date()) -> Int {
-        rate.count(secret, now: now)
+    /// The distinct callers that took `secret` in the rate window, `excluding` one.
+    public func recentReleases(_ secret: String, excluding caller: String? = nil, now: Date = Date()) -> Int {
+        rate.count(secret, excluding: caller, now: now)
     }
 
-    public func recordRelease(_ secret: String, now: Date = Date()) {
-        rate.record(secret, at: now)
+    public func recordRelease(_ secret: String, caller: String, now: Date = Date()) {
+        rate.record(secret, caller: caller, at: now)
     }
 
     /// Starts the count of a secret's releases again.

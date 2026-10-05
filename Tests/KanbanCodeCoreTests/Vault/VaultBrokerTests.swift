@@ -309,14 +309,50 @@ struct VaultBrokerTests {
         #expect(approvals.raised.isEmpty)
     }
 
-    @Test func rateLimitAsks() async throws {
+    @Test func oneCardTakingAnOpenSecretOftenNeverAsks() async throws {
         let (broker, _, approvals) = try await makeBroker(answer: "Deny")
-        for _ in 0..<20 {
+        for _ in 0..<60 {
             #expect(await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"]), caller: inside).status == .granted)
+        }
+        #expect(approvals.raised.isEmpty)
+    }
+
+    @Test func rateLimitAsksWhenManyCallersTakeASecret() async throws {
+        let (broker, _, approvals) = try await makeBroker(answer: "Deny")
+        for i in 0..<VaultPolicy.rateLimit {
+            let caller = VaultCaller(cardId: "card_r\(i)", sessionId: "s", pid: 42, ancestry: ["kv"])
+            #expect(await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"]), caller: caller).status == .granted)
         }
         let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["OPEN"]), caller: inside)
         #expect(r.status == .pending)
-        #expect(approvals.raised.first?.vault?.whys.joined().contains("20 times") == true)
+        #expect(approvals.raised.first?.vault?.whys.joined().contains("10 other callers") == true)
+    }
+
+    @Test func aLeaseCoversTheCardsSubagentTreeExceptAskSecrets() async throws {
+        let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
+        try await store.ensureIdentity()
+        try await store.upsert(VaultSecret(name: "JUDGED", value: "judged-value", tier: .judged, rules: "deploys only"))
+        try await store.upsert(VaultSecret(name: "ASK", value: "ask-value", tier: .ask))
+        let approvals = FakeApprovals(answer: "Deny")
+        let family: [String: [String]] = ["card_1": ["card_root", "card_2"], "card_2": ["card_root", "card_1"], "card_x": []]
+        let broker = VaultBroker(store: store, jev: FixedJev(verdict: JevVerdict(choice: .deny, confidence: 0.9)),
+                                 approvals: approvals, machine: "test", cardTitle: { $0 == "card_root" ? "Parent" : nil },
+                                 cardFamily: { family[$0] ?? [] })
+        await broker.configure(approvalTimeout: 2, pollInterval: 0.02)
+        let far = Date().addingTimeInterval(3600)
+        for name in ["JUDGED", "ASK"] {
+            try await store.grantLease(VaultLease(cardId: "card_root", secret: name, reason: "r", grantedAt: Date(), expiresAt: far,
+                                                  grantedBy: "human:mac"))
+        }
+        let child = await broker.release(VaultReleaseRequest(mode: "run", names: ["JUDGED"]), caller: inside)
+        #expect(child.status == .granted)
+        let log = await store.log(limit: 10, secret: "JUDGED")
+        #expect(log.first?.detail?.contains("Parent, of the same subagent tree, holds a lease") == true)
+        // An ask-tier secret stays with the card the human approved.
+        #expect(await broker.release(VaultReleaseRequest(mode: "run", names: ["ASK"]), caller: inside).status == .pending)
+        // A card outside the tree gets Jev's verdict.
+        let stranger = VaultCaller(cardId: "card_x", sessionId: "s", pid: 42, ancestry: ["kv"])
+        #expect(await broker.release(VaultReleaseRequest(mode: "run", names: ["JUDGED"]), caller: stranger).status == .denied)
     }
 
     @Test func leaseRequestNeedsACardAndTheHuman() async throws {

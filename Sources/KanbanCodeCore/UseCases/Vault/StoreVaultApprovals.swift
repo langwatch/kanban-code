@@ -42,4 +42,13 @@ extension BoardStore {
     @MainActor public func vaultCardLink(_ cardId: String) -> Link? {
         state.links[cardId]
     }
+
+    /// The other cards of `cardId`'s subagent tree: its root card and every
+    /// card under that root.
+    @MainActor public func vaultCardFamily(_ cardId: String) -> [String] {
+        let links = state.links
+        guard links[cardId] != nil else { return [] }
+        let root = SubagentHierarchy.rootId(of: cardId, in: links)
+        return ([root] + SubagentHierarchy.descendantIds(of: root, in: links)).filter { $0 != cardId }
+    }
 }

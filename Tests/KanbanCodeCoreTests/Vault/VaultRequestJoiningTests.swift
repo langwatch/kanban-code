@@ -167,10 +167,10 @@ struct VaultRequestJoiningTests {
 
     @Test func approvingPastTheRateLimitStartsTheCountAgain() async throws {
         let (broker, store, approvals) = try await makeBroker()
-        for _ in 0..<VaultPolicy.rateLimit { await store.recordRelease("OPEN") }
+        for i in 0..<VaultPolicy.rateLimit { await store.recordRelease("OPEN", caller: "card:other\(i)") }
         let limited = await broker.release(run(["OPEN"]), caller: card)
         #expect(limited.status == .pending)
-        #expect(approvals.raised.last?.vault?.whys.first?.contains("released 20 times") == true)
+        #expect(approvals.raised.last?.vault?.whys.first?.contains("10 other callers") == true)
         approvals.answer(try #require(limited.id), approveOnce)
         #expect(await waitResult(broker, try #require(limited.id)).status == .granted)
         #expect(await store.recentReleases("OPEN") == 1)
