@@ -175,15 +175,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             return
         }
 
+        // A caller whose PATH has no node (a program started outside a
+        // login shell, when node comes from a version manager) still runs
+        // the CLI: the launcher falls back to the node found now.
+        let nodeFallback = ShellCommand.findExecutable("node").map {
+            "command -v node >/dev/null 2>&1 || PATH=\"$PATH:\(($0 as NSString).deletingLastPathComponent)\"\n"
+        } ?? ""
         let script = """
         #!/bin/sh
         # Installed by Kanban Code — TypeScript CLI wrapper.
-        exec node "\(cliPath)" "$@"
+        \(nodeFallback)exec node "\(cliPath)" "$@"
         """
         let kvScript = """
         #!/bin/sh
         # Installed by Kanban Code: the vault CLI.
-        exec node "\(resourceURL.appendingPathComponent("cli/dist/kv.js").path)" "$@"
+        \(nodeFallback)exec node "\(resourceURL.appendingPathComponent("cli/dist/kv.js").path)" "$@"
         """
         do {
             try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
