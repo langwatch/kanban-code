@@ -47,6 +47,8 @@ struct VaultApprovalCopyTests {
         #expect(AttentionCopy.reasonProblem("change aws:lw-dev: rules") == .tooShort)
         #expect(AttentionCopy.reasonProblem("deploy") == .tooShort)
         #expect(AttentionCopy.reasonProblem("kubectl apply -f deploy.yaml") == .looksLikeCommand)
+        #expect(AttentionCopy.reasonProblem("make build the app") == .looksLikeCommand)
+        #expect(AttentionCopy.reasonProblem("Make the key ask on every use") == nil)
         #expect(AttentionCopy.reasonProblem("run the deploy with --force please") == .looksLikeCommand)
         #expect(AttentionCopy.reasonProblem("load env && run the migration now") == .looksLikeCommand)
         #expect(AttentionCopy.reasonProblem(String(repeating: "word ", count: 60)) == .tooLong)

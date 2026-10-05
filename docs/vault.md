@@ -48,7 +48,7 @@ Sealing starts when the owner keys hold the recovery key and at least one device
 A request that needs a sealed value carries the ciphertext on its attention request (`unseal`). Approving it on the Mac sheet or the phone runs the Secure Enclave key agreement (the Touch ID or Face ID prompt), opens the value on the device, and sends it with the answer (`POST /v1/attention/{id}/resolve`, `unsealed`). The master uses it for that request and forgets it.
 
 - "Approve once": the value is used for that one release.
-- "Approve for this card (2 days)": the master keeps the value in memory until the lease ends, so the card's next uses need no prompt. A restart of the master forgets it: the lease is still there, the next use asks again with "it opens only with your Touch ID or Face ID".
+- "Approve for this card (<lease time>)": the master keeps the value in memory until the lease ends, so the card's next uses need no prompt. A restart of the master forgets it: the lease is still there, the next use asks again with "it opens only with your Touch ID or Face ID".
 - An approval that arrives without what the key unlocked (an older app, a banner button on a build without the key) is refused with HTTP 409 and the request stays open.
 - A hook-wrapped command goes on without a sealed secret, as it does for anything that asks.
 
@@ -150,7 +150,7 @@ The variables an ssh login brought do not reach sessions started later on that m
 
 OpenClaw agents on a Linux master count like card sessions under the principal `openclaw:<agent>`: the master finds, in the caller's ancestry, a process whose cgroup is the gateway's systemd unit (`openclaw-gateway.service`, set by systemd, not by the process), then the topmost process below the gateway whose working directory is an agent workspace from `~/.openclaw/openclaw.json` (the agent runtime the gateway started; a child that changes directory does not change it). The gateway itself, resolving SecretRefs, is `openclaw:gateway`. Each principal holds its own leases. Commands an agent starts outside the unit (`systemd-run`, cron) are processes outside a card.
 
-Human approvals are attention requests of kind `vaultApproval` with the options "Approve for this card (2 days)", "Approve once", "Deny". A secret with "every use asks" never offers the lease. No answer in 12 hours denies (`VaultPolicy.approvalTimeout`); kv says so when it starts waiting, and waits as long with no timeout of its own. Nothing else ends the request earlier: the attention request, the Mac notification and the phone row stay until it is answered or the 12 hours pass, and the Pushover message has no expiry.
+Human approvals are attention requests of kind `vaultApproval` with the options "Approve for this card (<lease time>)", "Approve once", "Deny". The lease option names the secret's lease time: "Approve for this card (1 hour)", "(2 days)" for a secret without one of its own. A secret with "every use asks" never offers the lease. No answer in 12 hours denies (`VaultPolicy.approvalTimeout`); kv says so when it starts waiting, and waits as long with no timeout of its own. Nothing else ends the request earlier: the attention request, the Mac notification and the phone row stay until it is answered or the 12 hours pass, and the Pushover message has no expiry.
 
 ### One question per thing asked
 
@@ -212,7 +212,22 @@ When it reaches you: the Mac notification posts at once and the Dock icon shows 
 
 ### Reasons
 
-The reason is the only text the human reads before deciding, so it must be one short plain sentence saying what the agent wants to do and why, e.g. `--reason "Deploy the langwatch staging app to check the fix for the login bug"`. kv refuses (exit 2, before asking the master) a reason that is missing where required (`kv request`), shorter than four words, longer than one sentence (200 characters or a newline), or that reads like a command (starts with a command name, has flags or shell operators). `--reason` is optional for `kv run`, `env`, `get`, `aws`, `add`, `tier`, `rules`, `label`; `KV_REASON` in the environment stands in for it, under the same rules. `aws`, `kubectl`, `helm` and `terraform` reach `kv aws` through `credential_process` and cannot pass `--reason`, so agents set `KV_REASON` on those commands: `KV_REASON="Check the dev cluster pods after the nlpgo deploy" kubectl get pods`. When a request reaches the human without a usable reason, the pending message tells the agent how to write one next time.
+The reason is the only text the human reads before deciding, so it must be one short plain sentence saying what the agent wants to do and why, e.g. `--reason "Deploy the langwatch staging app to check the fix for the login bug"`. kv refuses (exit 2, before asking the master) a reason that is missing where required (`kv request`), shorter than four words, longer than one sentence (200 characters or a newline), or that reads like a command (starts with a command name as typed, in lowercase, or has flags or shell operators). A sentence that opens with the same word capitalised passes: "make build the app" is refused, "Make the key ask on every use" is not. `--reason` is optional for `kv run`, `env`, `get`, `aws`, `add`, `tier`, `rules`, `label`; `KV_REASON` in the environment stands in for it, under the same rules. `aws`, `kubectl`, `helm` and `terraform` reach `kv aws` through `credential_process` and cannot pass `--reason`, so agents set `KV_REASON` on those commands: `KV_REASON="Check the dev cluster pods after the nlpgo deploy" kubectl get pods`. When a request reaches the human without a usable reason, the pending message tells the agent how to write one next time.
+
+### Lease time
+
+Each secret has its own lease time (`leasePolicy.leaseSeconds`), from 1 minute to 2 days; 2 days is the default. It is how long "Approve for this card" and `kv request` let the card use the secret with no further question.
+
+- Set it with `kv set KEY --lease 1h`, `kv tier NAME <tier> --lease 30m` or `kv tiers <tier> NAME.. --lease 8h`. A length is a number and a unit (`s`, `m`, `h`, `d`), or several (`1h30m`). kv refuses anything else, under 1 minute or over 2 days, before it asks the master; the master refuses the same bounds. `--leases` puts it back to 2 days, `--every-use-asks` turns leases off. Changing it on a stored secret asks Rogerio, like any edit.
+- In Settings > Vault, the secret's "An approval for a card lasts" picker has: every use asks, 15 minutes, 1 hour, 8 hours, 2 days, plus the secret's own length when the CLI set another.
+- `kv ls` prints it for every secret of tier ask and for any other secret whose lease time is not 2 days (`lease 1h`), or `every use asks`; `kv ls --json` has it as `leasePolicy.leaseSeconds`. `kv leases` prints when each lease ends and how long it was granted for.
+- The approval names it: the lease option, the "Lease" row of the details, the title of a `kv request` ("... for 1 hour"), and the audit line of the approval ("approved by mac, card lease of 1 hour").
+- One approval for several secrets lasts the shortest of their lease times, for all of them: the card never keeps a secret for longer than the option said. A lease time shortened while a request waits is the one granted.
+- It is part of the secret, so it reaches the other masters with it (`VaultDocument.merged`).
+
+### Refusing needs no Touch ID
+
+"Deny" is sent as it is, on the Mac sheet, the Mac banner and the phone: no Touch ID, no Face ID, no password, no device key, also for a sealed secret or an AWS profile minted on the device. Only an approval unlocks with the device key or asks for a confirmation (`AttentionAnswerGate` in KanbanCodeRemoteKit). Closing the sheet answers nothing and asks nothing. A refusal goes over the same authenticated route as an approval (`POST /v1/attention/{id}/resolve`) and is written to the audit log as `denied`, decider `human`, "by mac" or "by phone", with the command and the reason of the request.
 
 ## kv
 
@@ -226,15 +241,15 @@ kv env [.env.vault] [--env E] [--project P] [--names] -- <cmd> [args..]
 kv get NAME [--reason "..."]
 kv request NAME[:scope] [NAME..] --reason "..."
 kv aws <profile> [--reason "..."]
-kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--reason "..."]   value on stdin (kv add is the same)
+kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--lease 1h|--every-use-asks] [--reason "..."]   value on stdin (kv add is the same)
 kv same KEY [--project P|.] [--env E]                             value on stdin; prints same, different or absent
 kv ls [--project P] | kv log | kv leases | kv status   (status also says who the master takes you for)
 kv owner                                     the keys of the owner-only secrets, and how many are sealed
 kv audit check                               broken chain, lines missing on a machine (exit 1 on a problem)
 kv mv OLD NEW [--reason "..."] | kv mv --plan renames.json [--dry-run] --reason "..."   asks Rogerio, one approval
 kv rm NAME [NAME..] --reason "..." | kv rm --plan names.txt [--dry-run] --reason "..."   asks Rogerio, one approval
-kv tier NAME <tier> [--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]   asks Rogerio
-kv tiers <tier> [NAME..] [--value-prefix P].. [--every-use-asks|--leases] --reason "..."   one approval for all
+kv tier NAME <tier> [--lease 1h|--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]   asks Rogerio
+kv tiers <tier> [NAME..] [--value-prefix P].. [--lease 1h|--every-use-asks|--leases] --reason "..."   one approval for all
 kv import [--apply]
 kv exec-provider                             OpenClaw exec SecretRef provider
 ```
@@ -282,6 +297,10 @@ The `Command` of a `kv aws` request is the tool that asked, not `kv aws <profile
 Credentials a card got are handed to it again while they are valid for more than 15 minutes: no new decision, no Jev call, no STS call, not counted toward the rate limit, one audit line with decider `reuse`. kubectl runs `aws eks get-token` on every call and terraform once per provider, each running `credential_process`; the card holds the first credentials for their whole session, so the same ones again release nothing new. A profile with "every use asks" is never reused, nor is a caller outside a card. Editing the profile, or a restart of the master, ends the reuse.
 
 ## Audit log
+
+Every release writes one line per secret, with the command that asked for it (`command`, cut to 2000 characters with "..." after it) and the reason. That holds for every use, not only the one the human approved: a use under a card lease (decider `lease`), a hook-wrapped command, AWS credentials handed out again (decider `reuse`). A refusal by the human or by the timeout keeps the command and the reason of the request too. So `kv log --card ID` or `kv log --secret NAME` reads back what an approved card ran with a secret: each line is followed by its command (`$ ...`, on one line, cut to 240 characters, printed once for the secrets one command used together; `kv log --json` has it whole on every line), and the card's Vault tab and Settings > Vault show the same.
+
+No value is written: before a line is stored, every value the vault can read (12 characters or more) found in its command, reason or detail is replaced by `{{vault:NAME}}`. Owner-only values are sealed, so the master cannot look for those.
 
 Every line of `audit.jsonl` carries `prev`, the SHA-256 of the line before it as written. A changed or removed line breaks the chain at the next line. Lines from before the chain have no `prev`; the first chained line names the last of them.
 

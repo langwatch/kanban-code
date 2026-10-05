@@ -44,6 +44,10 @@ struct VaultSettingsView: View {
                                         }
                                         if s.leasePolicy.everyUseAsks {
                                             Image(systemName: "hand.raised").foregroundStyle(.orange).help("Every use asks")
+                                        } else if s.leasePolicy.grantedSeconds < VaultLeasePolicy.maximumLease {
+                                            Text(AttentionCopy.duration(s.leasePolicy.grantedSeconds))
+                                                .font(.caption2).foregroundStyle(.secondary)
+                                                .help("A card approval lasts \(AttentionCopy.duration(s.leasePolicy.grantedSeconds))")
                                         }
                                         if s.aws != nil {
                                             Text("AWS").font(.caption2).foregroundStyle(.secondary)
@@ -137,8 +141,18 @@ private struct VaultSecretEditor: View {
     let onDelete: () -> Void
     @State private var tier: VaultTier
     @State private var rules: String
-    @State private var everyUse: Bool
+    /// How long a card approval lasts, in seconds; 0 is "every use asks".
+    @State private var lease: TimeInterval
     @State private var confirmDelete = false
+
+    private static func leaseChoice(_ policy: VaultLeasePolicy) -> TimeInterval {
+        policy.everyUseAsks ? 0 : policy.grantedSeconds
+    }
+
+    /// The preset lengths, plus the secret's own when the CLI set another.
+    private var leaseChoices: [TimeInterval] {
+        Array(Set(VaultLeasePolicy.presets + [Self.leaseChoice(secret.leasePolicy)].filter { $0 > 0 })).sorted()
+    }
 
     init(secret: VaultSecretInfo, onSave: @escaping (VaultEditRequest) -> Void, onDelete: @escaping () -> Void) {
         self.secret = secret
@@ -146,7 +160,7 @@ private struct VaultSecretEditor: View {
         self.onDelete = onDelete
         _tier = State(initialValue: secret.tier)
         _rules = State(initialValue: secret.rules)
-        _everyUse = State(initialValue: secret.leasePolicy.everyUseAsks)
+        _lease = State(initialValue: Self.leaseChoice(secret.leasePolicy))
     }
 
     var body: some View {
@@ -164,7 +178,10 @@ private struct VaultSecretEditor: View {
                 Picker("Tier", selection: $tier) {
                     ForEach(VaultTier.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                Toggle("Every use asks (no card leases)", isOn: $everyUse)
+                Picker("An approval for a card lasts", selection: $lease) {
+                    Text("Every use asks").tag(TimeInterval(0))
+                    ForEach(leaseChoices, id: \.self) { Text(AttentionCopy.duration($0)).tag($0) }
+                }
                 VStack(alignment: .leading) {
                     Text("Rules for Jev").font(.caption).foregroundStyle(.secondary)
                     TextEditor(text: $rules)
@@ -187,11 +204,13 @@ private struct VaultSecretEditor: View {
                     Button("Delete", role: .destructive) { confirmDelete = true }
                     Spacer()
                     Button("Save") {
-                        let policy = VaultLeasePolicy(leaseSeconds: secret.leasePolicy.leaseSeconds, everyUseAsks: everyUse)
+                        let policy = lease == 0
+                            ? VaultLeasePolicy(leaseSeconds: secret.leasePolicy.grantedSeconds, everyUseAsks: true)
+                            : VaultLeasePolicy(leaseSeconds: lease)
                         onSave(VaultEditRequest(tier: tier, rules: rules, leasePolicy: policy))
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(tier == secret.tier && rules == secret.rules && everyUse == secret.leasePolicy.everyUseAsks)
+                    .disabled(tier == secret.tier && rules == secret.rules && lease == Self.leaseChoice(secret.leasePolicy))
                 }
             }
         }

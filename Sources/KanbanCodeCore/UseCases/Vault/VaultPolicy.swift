@@ -148,10 +148,18 @@ public enum VaultPolicy {
 
     /// The options the human gets: no card lease for secrets that ask on
     /// every use, nor for callers outside a card.
-    public static func approvalOptions(everyUseAsks: Bool, insideCard: Bool) -> [String] {
-        let all = AttentionRequest.vaultApprovalOptions
+    public static func approvalOptions(everyUseAsks: Bool, insideCard: Bool,
+                                       leaseSeconds: TimeInterval = VaultLeasePolicy.maximumLease) -> [String] {
+        let all = AttentionRequest.vaultApprovalOptions(leaseSeconds: leaseSeconds)
         if everyUseAsks || !insideCard { return Array(all.dropFirst()) }
         return all
+    }
+
+    /// The length of the lease one approval gives on `policies`: the
+    /// shortest of them, so the card never keeps a secret for longer than
+    /// the option the human picked said.
+    public static func leaseSeconds(for policies: [VaultLeasePolicy]) -> TimeInterval {
+        policies.map(\.grantedSeconds).min() ?? VaultLeasePolicy.maximumLease
     }
 
     public enum Approval: Equatable, Sendable {
@@ -163,9 +171,8 @@ public enum VaultPolicy {
     /// Reads the human's resolution; anything unrecognised denies.
     public static func approval(from resolution: String?) -> Approval {
         guard let resolution else { return .deny }
-        let options = AttentionRequest.vaultApprovalOptions
-        if resolution == options[0] { return .lease }
-        if resolution == options[1] { return .once }
+        if AttentionRequest.isVaultLeaseOption(resolution) { return .lease }
+        if resolution == AttentionRequest.vaultApprovalOptions[1] { return .once }
         let lower = resolution.lowercased()
         if lower.hasPrefix("approve for") || lower == "lease" { return .lease }
         if lower.hasPrefix("approve") || lower == "once" || lower == "allow" { return .once }

@@ -232,3 +232,93 @@ Feature: Vault projects, environments and card identity
     When a vault request is approved on the Mac
     Then the Mac records it in its own chained file
     And an approval a log gives to the Mac with no record there is reported
+
+  Scenario Outline: A lease lasts the secret's own lease time
+    Given a secret of tier ask whose lease time is <length>
+    When a card asks for it
+    Then the lease option reads "Approve for this card (<words>)"
+    And approving for the card gives a lease that ends <words> later
+    And a use after that asks again
+
+    Examples:
+      | length  | words      |
+      | 15m     | 15 minutes |
+      | 1h      | 1 hour     |
+      | 8h      | 8 hours    |
+      | not set | 2 days     |
+
+  Scenario Outline: kv takes a lease time between 1 minute and 2 days
+    When an agent runs "kv tier NAME ask --lease <given>"
+    Then kv <outcome>
+
+    Examples:
+      | given | outcome                                   |
+      | 30m   | sends a lease time of 1800 seconds        |
+      | 1h    | sends a lease time of 3600 seconds        |
+      | 1h30m | sends a lease time of 5400 seconds        |
+      | 2d    | sends a lease time of 172800 seconds      |
+      | 3d    | refuses: a lease lasts at most 2 days     |
+      | 30s   | refuses: a lease lasts at least 1 minute  |
+      | soon  | refuses and shows the lengths it takes    |
+
+  Scenario: The master refuses a lease time out of bounds
+    When an edit carries a lease time of 3 days
+    Then it is refused and the human is not asked
+
+  Scenario: One approval for several secrets lasts the shortest lease time
+    Given a secret with a lease time of 1 hour and one with 2 days
+    When a card asks for both and the human approves for the card
+    Then both leases end 1 hour later
+
+  Scenario: The lease time is edited in Settings and listed by kv
+    When the lease time of a secret is set to 1 hour in Settings > Vault
+    Then "kv ls" shows "lease 1h" for it
+    And "kv ls --json" has 3600 as its leaseSeconds
+    And the other masters hold the same lease time after the next sync
+
+  Scenario: Every use under a lease is logged with its command
+    Given a card holds a lease on a secret
+    When the card runs three commands with it
+    Then the audit log has one line for each, with the command, the card and the decider "lease"
+    And "kv log" prints each command under its line
+    And the hash chain is intact
+
+  Scenario: A refusal keeps the command that asked
+    When the human denies a request
+    Then the audit line reads denied, decided by the human, on the device that answered
+    And it carries the command and the reason of the request
+
+  Scenario: A value in a command is not written to the audit log
+    Given a command that carries the value of a secret in plain
+    When the release is logged
+    Then the line has "{{vault:NAME}}" where the value was
+
+  Scenario Outline: Refusing needs no Touch ID
+    Given an open request for <what>
+    When the human picks "Deny" on <where>
+    Then the answer is sent with no Touch ID, Face ID, password or device key
+    And the request is denied and logged as the human's decision
+
+    Examples:
+      | what                                   | where            |
+      | a secret of tier ask                   | the Mac sheet    |
+      | a sealed secret                        | the Mac sheet    |
+      | an AWS profile minted on the device    | the Mac sheet    |
+      | a sealed secret                        | the Mac banner   |
+      | a sealed secret                        | the phone        |
+      | a change to a secret                   | the phone        |
+
+  Scenario: Approving still needs the device
+    Given an open request for a sealed secret
+    When the human picks "Approve once"
+    Then the device key opens the value after Touch ID or Face ID
+    And closing the sheet instead asks for no authentication and answers no request
+
+  Scenario Outline: A reason that opens with a command word
+    When an agent gives the reason "<reason>"
+    Then kv <outcome>
+
+    Examples:
+      | reason                         | outcome                              |
+      | make build the app             | refuses it as reading like a command |
+      | Make the key ask on every use  | takes it                             |

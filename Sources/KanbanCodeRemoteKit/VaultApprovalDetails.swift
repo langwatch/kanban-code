@@ -275,11 +275,11 @@ public enum AttentionCopy {
         }
     }
 
-    /// "2 days", "1 day", "12 hours", "30 minutes".
+    /// "2 days", "1 day", "12 hours", "90 minutes", "30 minutes".
     public static func duration(_ seconds: Double) -> String {
         let minutes = Int((seconds / 60).rounded())
-        if minutes < 60 { return minutes == 1 ? "1 minute" : "\(minutes) minutes" }
-        let hours = Int((seconds / 3600).rounded())
+        if minutes < 60 || minutes % 60 != 0 { return minutes == 1 ? "1 minute" : "\(minutes) minutes" }
+        let hours = minutes / 60
         if hours < 48 && hours % 24 != 0 { return hours == 1 ? "1 hour" : "\(hours) hours" }
         let days = Int((seconds / 86400).rounded())
         return days == 1 ? "1 day" : "\(days) days"
@@ -350,7 +350,8 @@ public enum AttentionCopy {
         if text.isEmpty { return .missing }
         if text.contains("\n") || text.count > 200 { return .tooLong }
         let words = text.split(whereSeparator: \.isWhitespace)
-        if let first = words.first, commandStarts.contains(first.lowercased()) { return .looksLikeCommand }
+        // A command is typed lowercase; a sentence opening with the same word has a capital.
+        if let first = words.first, commandStarts.contains(String(first)) { return .looksLikeCommand }
         if text.range(of: #"(^|\s)--?[A-Za-z]"#, options: .regularExpression) != nil { return .looksLikeCommand }
         if text.range(of: #"[|;&`$<>{}]"#, options: .regularExpression) != nil { return .looksLikeCommand }
         if words.count < 4 { return .tooShort }

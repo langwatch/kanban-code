@@ -279,7 +279,8 @@ export function reasonProblem(reason: string | undefined): ReasonProblem | undef
   if (!text) return "missing";
   if (text.includes("\n") || [...text].length > 200) return "tooLong";
   const words = text.split(/\s+/);
-  if (COMMAND_STARTS.has(words[0].toLowerCase())) return "looksLikeCommand";
+  // A command is typed lowercase; a sentence opening with the same word has a capital.
+  if (COMMAND_STARTS.has(words[0])) return "looksLikeCommand";
   if (/(^|\s)--?[A-Za-z]/.test(text) || /[|;&`$<>{}]/.test(text)) return "looksLikeCommand";
   if (words.length < 4) return "tooShort";
   return undefined;
@@ -649,13 +650,70 @@ function takeFlag(args: string[], name: string): boolean {
   return true;
 }
 
-/** `--every-use-asks` (no card lease, each use asks) or `--leases` (card leases up to 2 days again). */
+/** The longest and the shortest card lease, in seconds (`VaultLeasePolicy` on the master). */
+export const MAX_LEASE_SECONDS = 2 * 24 * 3600;
+export const MIN_LEASE_SECONDS = 60;
+
+const LEASE_UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+
+/** Seconds of a lease length such as `30m`, `1h`, `2d` or `1h30m`; throws on anything else or out of bounds. */
+export function parseLease(text: string): number {
+  const usage = `kv: --lease takes a length such as 30m, 1h, 8h or 2d (1m to 2d), got ${JSON.stringify(text)}`;
+  const compact = text.trim().toLowerCase();
+  if (!/^(\d+[smhd])+$/.test(compact)) throw new VaultCliError(usage);
+  let seconds = 0;
+  for (const [, amount, unit] of compact.matchAll(/(\d+)([smhd])/g)) seconds += Number(amount) * LEASE_UNITS[unit];
+  if (!Number.isSafeInteger(seconds) || seconds < MIN_LEASE_SECONDS) {
+    throw new VaultCliError(`kv: a lease lasts at least 1 minute, got ${JSON.stringify(text)}`);
+  }
+  if (seconds > MAX_LEASE_SECONDS) throw new VaultCliError(`kv: a lease lasts at most 2 days, got ${JSON.stringify(text)}`);
+  return seconds;
+}
+
+/** `90m`, `1h`, `2d`: a lease length in the largest unit that divides it. */
+export function leaseText(seconds: number): string {
+  for (const unit of ["d", "h", "m"]) {
+    if (seconds >= LEASE_UNITS[unit] && seconds % LEASE_UNITS[unit] === 0) return `${seconds / LEASE_UNITS[unit]}${unit}`;
+  }
+  return `${Math.round(seconds)}s`;
+}
+
+/**
+ * What `kv ls` says about a secret's leases: "every use asks", or its
+ * lease time for a secret that asks or whose time is not the default.
+ */
+export function leaseNote(s: { tier: string; leasePolicy: { leaseSeconds: number; everyUseAsks: boolean } }): string {
+  if (s.leasePolicy.everyUseAsks) return " every use asks";
+  if (s.tier !== "ask" && s.leasePolicy.leaseSeconds === MAX_LEASE_SECONDS) return "";
+  return ` lease ${leaseText(s.leasePolicy.leaseSeconds)}`;
+}
+
+/**
+ * `--lease <length>` (a card approval lasts that long), `--every-use-asks`
+ * (no card lease, each use asks) or `--leases` (card leases of 2 days again).
+ */
 export function leasePolicyFlags(args: string[]): { leaseSeconds: number; everyUseAsks: boolean } | undefined {
   const everyUse = takeFlag(args, "--every-use-asks");
   const leases = takeFlag(args, "--leases");
-  if (everyUse && leases) throw new VaultCliError("kv: --every-use-asks and --leases contradict each other");
-  if (!everyUse && !leases) return undefined;
-  return { leaseSeconds: 2 * 24 * 3600, everyUseAsks: everyUse };
+  const at = args.indexOf("--lease");
+  if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith("--"))) {
+    throw new VaultCliError("kv: --lease needs a length such as 30m, 1h or 2d");
+  }
+  const length = takeOption(args, "--lease");
+  if (everyUse && (leases || length !== undefined)) {
+    throw new VaultCliError(`kv: --every-use-asks and ${leases ? "--leases" : "--lease"} contradict each other`);
+  }
+  if (!everyUse && !leases && length === undefined) return undefined;
+  return { leaseSeconds: length === undefined ? MAX_LEASE_SECONDS : parseLease(length), everyUseAsks: everyUse };
+}
+
+/** Longest command a line of `kv log` shows; `--json` has it whole. */
+export const LOG_COMMAND_LIMIT = 240;
+
+/** A command on one line for `kv log`, cut to `LOG_COMMAND_LIMIT` characters. */
+export function logCommand(command: string): string {
+  const flat = command.split(/\s*\n\s*/).join(" ").trim();
+  return [...flat].length > LOG_COMMAND_LIMIT ? [...flat].slice(0, LOG_COMMAND_LIMIT).join("") + "..." : flat;
 }
 
 function takeAll(args: string[], name: string): string[] {
@@ -671,11 +729,11 @@ export const USAGE = `kv: secrets from the Kanban Code vault
                                                             run cmd with the project's secrets for the environment
                                                             plus the manifest's lines; --names lists them instead
   kv get NAME [--reason "..."]                              print one secret (never one that asks)
-  kv request NAME[:scope] [NAME..] --reason "..."           ask once for the card's whole task (2 days)
+  kv request NAME[:scope] [NAME..] --reason "..."           ask once for the card's task (the secret's lease time)
   kv aws <profile> [--reason "..."]                         AWS credential_process JSON (short-lived STS credentials,
                                                             minted on Rogerio's Mac or phone when he approves)
   kv set KEY [--project P|.] [--env E] [--tier open|judged|ask|never] [--rules "..."] [--label "..."] [--tag t]
-         [--reason "..."] [--every-use-asks]                value from stdin; with --project the secret is the
+         [--reason "..."] [--lease 1h|--every-use-asks]     value from stdin; with --project the secret is the
                                                             project's own (. is this folder's), else shared.
                                                             kv add is the same command
   kv same KEY [--project P|.] [--env E]                     value from stdin; prints same, different or absent for
@@ -687,9 +745,10 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv rm --plan <file> [--dry-run] --reason "..."            the names from a file: a JSON array or one per line
   kv log [--card ID] [--secret NAME] [--limit N] [--json]   the audit log, newest first
   kv leases [--card ID]                                     active card leases
-  kv tier NAME <tier> [--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]
-                                                            change a secret (asks Rogerio)
-  kv tiers <tier> [NAME..] [--value-prefix P].. [--every-use-asks|--leases] --reason "..."
+  kv tier NAME <tier> [--lease 1h|--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]
+                                                            change a secret (asks Rogerio); --lease is how long an
+                                                            approval for a card lasts (1m to 2d, e.g. 30m, 1h, 2d)
+  kv tiers <tier> [NAME..] [--value-prefix P].. [--lease 1h|--every-use-asks|--leases] --reason "..."
                                                             one change to many secrets, one approval
   kv status                                                 is the vault unlocked here
   kv owner [--json]                                         the keys that open the ask and never secrets
@@ -843,7 +902,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const leasePolicy = leasePolicyFlags(args);
       const reason = checkedReason(takeOption(args, "--reason"), io.env, false);
       const name = args[0];
-      if (!name) throw new VaultCliError("kv set KEY [--project P|.] [--env E] [--tier t] [--rules '...'] [--every-use-asks]  (value on stdin)");
+      if (!name) throw new VaultCliError("kv set KEY [--project P|.] [--env E] [--tier t] [--rules '...'] [--lease 1h|--every-use-asks]  (value on stdin)");
       const value = await readSecretFromStdin(name);
       if (!value) throw new VaultCliError("kv: empty value, nothing added");
       const { body } = await client.call<VaultResponse>("POST", `secrets${ctx.cardId ? `?card=${ctx.cardId}` : ""}`, {
@@ -889,7 +948,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const leasePolicy = leasePolicyFlags(args);
       const [tier, ...names] = args;
       if (!tier || (names.length === 0 && valuePrefixes.length === 0)) {
-        throw new VaultCliError('kv tiers <tier> [NAME..] [--value-prefix P].. [--every-use-asks|--leases] --reason "..."');
+        throw new VaultCliError('kv tiers <tier> [NAME..] [--value-prefix P].. [--lease 1h|--every-use-asks|--leases] --reason "..."');
       }
       const { body } = await client.call<VaultResponse>("PATCH", "secrets", {
         names,
@@ -973,7 +1032,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       }
       const width = Math.max(4, ...body.map((s) => s.name.length));
       for (const s of body) {
-        const lease = s.leasePolicy.everyUseAsks ? " every use asks" : "";
+        const lease = leaseNote(s);
         const label = s.project ? `  ${s.displayLabel ?? secretDisplay(s.name)}` : "";
         const sealed = s.sealed ? " sealed" : "";
         out(`${s.name.padEnd(width)}  ${s.tier.padEnd(6)}${sealed}${lease}${label}${s.rules ? `  ${s.rules.slice(0, 80)}` : ""}\n`);
@@ -994,22 +1053,30 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
         out(JSON.stringify(body, null, 2) + "\n");
         return 0;
       }
-      for (const e of body) {
+      for (const [i, e] of body.entries()) {
         out(
           `${e.at.slice(0, 19)}  ${e.outcome.padEnd(7)} ${e.decider.padEnd(7)} ${e.action.padEnd(6)} ${secretDisplay(e.secret)}` +
             `${e.cardId ? `  card ${e.cardId}` : ""}${e.detail ? `  (${e.detail})` : ""}\n`
         );
+        // One command that used several secrets is printed once, under the last of its lines.
+        const next = body[i + 1];
+        const sameCall = next && next.command === e.command && next.cardId === e.cardId && next.at.slice(0, 19) === e.at.slice(0, 19);
+        if (e.command && !sameCall) out(`    $ ${logCommand(e.command)}\n`);
       }
       return 0;
     }
 
     case "leases": {
       const card = takeOption(args, "--card");
-      const { body } = await client.call<Array<{ cardId: string; secret: string; expiresAt: string; reason?: string }>>(
+      const { body } = await client.call<Array<{ cardId: string; secret: string; grantedAt?: string; expiresAt: string; reason?: string }>>(
         "GET",
         `leases${card ? `?card=${card}` : ""}`
       );
-      for (const l of body) out(`${secretDisplay(l.secret)}  card ${l.cardId}  until ${l.expiresAt.slice(0, 16)}${l.reason ? `  ${l.reason}` : ""}\n`);
+      for (const l of body) {
+        const seconds = l.grantedAt ? Math.round((Date.parse(l.expiresAt) - Date.parse(l.grantedAt)) / 1000) : NaN;
+        const length = Number.isFinite(seconds) && seconds > 0 ? ` (${leaseText(seconds)} lease)` : "";
+        out(`${secretDisplay(l.secret)}  card ${l.cardId}  until ${l.expiresAt.slice(0, 16)}${length}${l.reason ? `  ${l.reason}` : ""}\n`);
+      }
       return 0;
     }
 

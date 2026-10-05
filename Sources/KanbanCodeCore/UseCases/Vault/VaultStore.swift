@@ -571,6 +571,9 @@ public actor VaultStore {
     /// before it, so a removed or changed line breaks the chain.
     public func append(_ entry: VaultAuditEntry) {
         var entry = entry
+        entry.command = withoutValues(entry.command)
+        entry.reason = withoutValues(entry.reason)
+        entry.detail = withoutValues(entry.detail)
         entry.prev = lastAuditLineHash()
         guard var line = try? JSONEncoder.vaultLine.encode(entry) else { return }
         let hash = AuditChain.hash(line)
@@ -578,6 +581,23 @@ public actor VaultStore {
         guard AuditChain.appendRaw(line, to: auditPath) else { return }
         lastAuditHash = hash
         onAudit?()
+    }
+
+    /// Shortest value the audit log looks for in a command: anything
+    /// shorter is too likely to be an ordinary word.
+    static let auditValueMinimum = 12
+
+    /// `text` with every value this vault can read replaced by a
+    /// `{{vault:NAME}}` reference, so the audit log never holds a secret
+    /// a command carried in plain. Owner-only values are not readable here.
+    func withoutValues(_ text: String?) -> String? {
+        guard var out = text, !out.isEmpty, let doc = document ?? (try? load()) else { return text }
+        let known = doc.live.filter { $0.value.count >= Self.auditValueMinimum }
+            .sorted { ($0.value.count, $1.name) > ($1.value.count, $0.name) }
+        for s in known where out.contains(s.value) {
+            out = out.replacingOccurrences(of: s.value, with: "{{vault:\(s.name)}}")
+        }
+        return out
     }
 
     private func lastAuditLineHash() -> String {

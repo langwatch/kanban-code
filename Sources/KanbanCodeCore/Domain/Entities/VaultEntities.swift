@@ -30,15 +30,37 @@ public enum VaultTier: String, Codable, Sendable, CaseIterable, Comparable {
 /// How long an approval for a card lasts, or that every use asks.
 public struct VaultLeasePolicy: Codable, Sendable, Equatable, Hashable {
     public static let maximumLease: TimeInterval = 2 * 24 * 3600
+    public static let minimumLease: TimeInterval = 60
+    /// The lengths the settings offer.
+    public static let presets: [TimeInterval] = [15 * 60, 3600, 8 * 3600, maximumLease]
 
-    /// Seconds a card lease lasts, capped at two days.
+    /// Seconds a card lease on this secret lasts, from one minute to two days.
     public var leaseSeconds: TimeInterval
     /// No leases: each release asks.
     public var everyUseAsks: Bool
 
     public init(leaseSeconds: TimeInterval = VaultLeasePolicy.maximumLease, everyUseAsks: Bool = false) {
-        self.leaseSeconds = min(max(leaseSeconds, 60), Self.maximumLease)
+        self.leaseSeconds = Self.clamped(leaseSeconds)
         self.everyUseAsks = everyUseAsks
+    }
+
+    public static func clamped(_ seconds: TimeInterval) -> TimeInterval {
+        guard seconds.isFinite else { return maximumLease }
+        return min(max(seconds, minimumLease), maximumLease)
+    }
+
+    /// The length a lease granted under this policy gets: a stored value
+    /// outside the bounds (an edited file, an older replica) is brought
+    /// back inside them.
+    public var grantedSeconds: TimeInterval { Self.clamped(leaseSeconds) }
+
+    /// Why a requested lease length is refused, nil when it is allowed.
+    public static func problem(leaseSeconds seconds: TimeInterval) -> String? {
+        guard seconds.isFinite, seconds >= minimumLease else { return "a lease lasts at least 1 minute" }
+        guard seconds <= maximumLease else {
+            return "a lease lasts at most \(AttentionCopy.duration(maximumLease))"
+        }
+        return nil
     }
 
     public static let standard = VaultLeasePolicy()

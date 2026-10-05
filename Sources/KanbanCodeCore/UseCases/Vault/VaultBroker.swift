@@ -239,7 +239,7 @@ public struct VaultEditRequest: Codable, Sendable, Equatable {
         if let tier { parts.append("tier \(tier.rawValue)") }
         if rules != nil { parts.append("rules") }
         if tags != nil { parts.append("tags") }
-        if let leasePolicy { parts.append(leasePolicy.everyUseAsks ? "every use asks" : "leases up to \(Int(leasePolicy.leaseSeconds / 3600))h") }
+        if let leasePolicy { parts.append(leasePolicy.everyUseAsks ? "every use asks" : "leases of \(AttentionCopy.duration(leasePolicy.leaseSeconds))") }
         if aws != nil { parts.append("AWS role") }
         if label != nil { parts.append("label") }
         return parts.joined(separator: ", ")
@@ -928,6 +928,7 @@ public actor VaultBroker {
         guard VaultSecret.isValidName(name) else {
             return .denied("secret names use letters, digits and _ - . / : only")
         }
+        if let problem = Self.leaseProblem(req.leasePolicy) { return .denied(problem) }
         let existing = (try? await store.secret(name)) ?? nil
         if let existing, req.onlyValue, await compare(req).outcome == .same {
             return VaultResponse(status: .granted, message: "\(existing.name) already holds this value")
@@ -992,11 +993,18 @@ public actor VaultBroker {
         return await apply(.rename(todo), caller: caller, now: now)
     }
 
+    /// Why a change to a secret's lease time is refused.
+    static func leaseProblem(_ policy: VaultLeasePolicy?) -> String? {
+        guard let policy, !policy.everyUseAsks else { return nil }
+        return VaultLeasePolicy.problem(leaseSeconds: policy.leaseSeconds)
+    }
+
     /// `unsealed` is what this machine's own key opened, for a trusted
     /// edit that lowers a sealed secret's tier.
     public func edit(_ name: String, _ req: VaultEditRequest, caller: VaultCaller, trusted: Bool, unsealed: VaultUnsealed? = nil,
                      now: Date = Date()) async -> VaultResponse {
         guard let s = (try? await store.secret(name)) ?? nil else { return .denied("no secret named \(name)") }
+        if let problem = Self.leaseProblem(req.leasePolicy) { return .denied(problem) }
         if !trusted {
             return await ask(action: .edit([name], req), secrets: [s], whys: ["changing a secret always asks"], caller: caller,
                              command: nil, reason: req.reason, now: now, leaseOnly: false, admin: true)
@@ -1051,6 +1059,7 @@ public actor VaultBroker {
     /// plus every secret whose value starts with one of `valuePrefixes`
     /// (matched here on the master; values never leave it).
     public func editMany(_ request: VaultBatchEditRequest, caller: VaultCaller, trusted: Bool, now: Date = Date()) async -> VaultResponse {
+        if let problem = Self.leaseProblem(request.edit.leasePolicy) { return .denied(problem) }
         var wanted = Set(request.names ?? [])
         let prefixes = (request.valuePrefixes ?? []).filter { !$0.isEmpty }
         var secrets: [VaultSecret] = []
@@ -1251,8 +1260,13 @@ public actor VaultBroker {
         }
 
         let id = KSUID.generate(prefix: "vault")
-        var options = VaultPolicy.approvalOptions(everyUseAsks: everyUse || admin, insideCard: caller.insideCard)
-        if leaseOnly { options = [AttentionRequest.vaultApprovalOptions[0], AttentionRequest.vaultApprovalOptions[2]] }
+        let leaseSeconds = VaultPolicy.leaseSeconds(for: secrets.map(\.leasePolicy))
+        var options = VaultPolicy.approvalOptions(everyUseAsks: everyUse || admin, insideCard: caller.insideCard,
+                                                  leaseSeconds: leaseSeconds)
+        if leaseOnly {
+            let all = AttentionRequest.vaultApprovalOptions(leaseSeconds: leaseSeconds)
+            options = [all[0], all[2]]
+        }
         let details = approvalDetails(action: action, secrets: secrets, whys: whys, caller: caller, title: title,
                                       command: command, reason: reason, options: options)
         let challenge = await challenge(for: action, secrets: secrets, caller: caller, now: now)
@@ -1274,7 +1288,7 @@ public actor VaultBroker {
         for (s, why) in zip(secrets, whys) {
             await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
                                                secret: s.name, tier: s.tier, outcome: .asked, decider: .rule,
-                                               action: actionName(action), command: command, reason: reason,
+                                               action: actionName(action), command: command.map(Self.auditCommand), reason: reason,
                                                detail: caller.auditNote.map { "\(why), \($0)" } ?? why, requestId: id))
         }
         await approvals.raise(request)
@@ -1385,7 +1399,7 @@ public actor VaultBroker {
         }
         let origin: VaultApprovalDetails.Origin =
             caller.openClawAgent != nil ? .openClaw : (caller.insideCard ? .card : .outside)
-        let offersLease = options.contains(AttentionRequest.vaultApprovalOptions[0])
+        let offersLease = options.contains(where: AttentionRequest.isVaultLeaseOption)
         return VaultApprovalDetails(
             action: kind,
             origin: origin,
@@ -1400,7 +1414,7 @@ public actor VaultBroker {
             command: command.map { String($0.prefix(2000)) },
             cwd: cwd,
             reason: reason,
-            leaseSeconds: offersLease ? secrets.map(\.leasePolicy.leaseSeconds).min() : nil,
+            leaseSeconds: offersLease ? VaultPolicy.leaseSeconds(for: secrets.map(\.leasePolicy)) : nil,
             claimedCardId: caller.insideCard ? nil : caller.claimedCardId,
             remoteDevice: caller.remoteDevice,
             ancestry: caller.ancestry,
@@ -1445,21 +1459,24 @@ public actor VaultBroker {
             for name in asked { await store.resetReleases(name) }
         }
         var leasedTo: String?
+        var leaseSeconds: TimeInterval?
         if approval == .lease, case .release(let req, let asked) = p.action,
            let card = p.caller.cardId, p.caller.insideCard, !p.everyUseAsks {
+            let seconds = await leaseLength(of: asked, shown: p.request.vault?.leaseSeconds)
             for name in asked {
-                let policy = ((try? await store.secret(name)) ?? nil)?.leasePolicy ?? .standard
                 try? await store.grantLease(VaultLease(cardId: card, secret: name, reason: req.reason, grantedAt: now,
-                                                       expiresAt: now.addingTimeInterval(policy.leaseSeconds), grantedBy: "human:\(by)"))
-                if let value = unsealed?.values[name] { held[name] = HeldValue(value: value, until: now.addingTimeInterval(policy.leaseSeconds)) }
+                                                       expiresAt: now.addingTimeInterval(seconds), grantedBy: "human:\(by)"))
+                if let value = unsealed?.values[name] { held[name] = HeldValue(value: value, until: now.addingTimeInterval(seconds)) }
             }
             leasedTo = card
+            leaseSeconds = seconds
         }
         if approval != .deny, case .lease(let wanted, _) = p.action {
+            let seconds = await leaseLength(of: wanted.map(\.name), shown: p.request.vault?.leaseSeconds)
+            leaseSeconds = seconds
             for want in wanted {
                 guard let value = unsealed?.values[want.name] else { continue }
-                let policy = ((try? await store.secret(want.name)) ?? nil)?.leasePolicy ?? .standard
-                held[want.name] = HeldValue(value: value, until: now.addingTimeInterval(policy.leaseSeconds))
+                held[want.name] = HeldValue(value: value, until: now.addingTimeInterval(seconds))
             }
             for (profile, credentials) in unsealed?.credentials ?? [:] {
                 guard let s = (try? await store.secret(profile)) ?? nil, let role = s.aws, !s.leasePolicy.everyUseAsks,
@@ -1472,26 +1489,42 @@ public actor VaultBroker {
         let joined = pending.filter { $0.value.joinedTo == id && $0.value.result == nil }.map(\.key).sorted()
         for member in [id] + joined {
             guard let m = pending[member], m.result == nil else { continue }
-            pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed)
+            pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed,
+                                                    leaseSeconds: leaseSeconds)
             expireResult(member, after: unclaimedResultLifetime)
         }
         await persist()
         if let leasedTo { await settleCovered(card: leasedTo, by: by, now: now) }
     }
 
+    /// How long the lease of one approval lasts: what the request showed
+    /// the human, or less when a secret's lease time was shortened since.
+    private func leaseLength(of names: [String], shown: Double?) async -> TimeInterval {
+        var policies: [VaultLeasePolicy] = []
+        for name in names {
+            if let s = (try? await store.secret(name)) ?? nil { policies.append(s.leasePolicy) }
+        }
+        let current = VaultPolicy.leaseSeconds(for: policies)
+        return shown.map { min(VaultLeasePolicy.clamped($0), current) } ?? current
+    }
+
     /// What one waiting request gets for the human's answer.
+    /// `leaseSeconds` is the length of the card lease the answer gave.
     private func outcome(of p: Pending, id: String, approval: VaultPolicy.Approval, by: String, now: Date,
-                         unsealed: VaultUnsealed? = nil) async -> VaultResponse {
+                         unsealed: VaultUnsealed? = nil, leaseSeconds: TimeInterval? = nil) async -> VaultResponse {
         switch (approval, p.action) {
         case (.deny, _):
             let timedOut = by == "timeout"
             let message = timedOut
                 ? "No answer in \(VaultPolicy.span(approvalTimeout)), so it was denied. Ask again with a reason: kv request NAME --reason \"...\""
                 : "Rogerio denied it."
+            var command: String?
+            if case .release(let req, _) = p.action { command = req.command }
             for name in names(of: p.action) {
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: p.caller.cardId, sessionId: p.caller.sessionId,
                                                    secret: name, tier: nil, outcome: .denied, decider: timedOut ? .timeout : .human,
-                                                   action: actionName(p.action), detail: "by \(by)", requestId: id))
+                                                   action: actionName(p.action), command: command.map(Self.auditCommand),
+                                                   reason: p.request.vault?.reason, detail: "by \(by)", requestId: id))
             }
             return VaultResponse(status: .denied, message: message, id: id, card: p.caller.cardId)
 
@@ -1505,6 +1538,9 @@ public actor VaultBroker {
                 let wasAsked = asked.contains(s.name)
                 let decider: VaultDecider = wasAsked ? (covered ? .lease : .human) : .tier
                 var why = wasAsked ? (covered ? "the card got a lease while this waited" : "approved by \(by)") : "allowed with the request"
+                if wasAsked, !covered, approval == .lease, let leaseSeconds {
+                    why += ", card lease of \(AttentionCopy.duration(leaseSeconds))"
+                }
                 if s.isSealed, unlocked[s.name] != nil, let device = unsealed?.device { why += ", unlocked by key \(device)" }
                 if s.isSealed, unlocked[s.name] == nil, let value = heldValue(s, now: now) { unlocked[s.name] = value }
                 allowed.append((s, decider, why))
@@ -1516,16 +1552,20 @@ public actor VaultBroker {
             guard let card = p.caller.cardId else { return .denied("no card to lease to") }
             for want in wanted {
                 let (name, scope) = (want.name, want.scope)
+                var detail = "by \(by)"
                 if by != Self.coveredByLease {
-                    let policy = ((try? await store.secret(name)) ?? nil)?.leasePolicy ?? .standard
+                    let seconds: TimeInterval
+                    if let leaseSeconds { seconds = leaseSeconds } else { seconds = await leaseLength(of: wanted.map(\.name), shown: nil) }
                     try? await store.grantLease(VaultLease(cardId: card, secret: name, scope: scope, reason: reason, grantedAt: now,
-                                                           expiresAt: now.addingTimeInterval(policy.leaseSeconds), grantedBy: "human:\(by)"))
+                                                           expiresAt: now.addingTimeInterval(seconds), grantedBy: "human:\(by)"))
+                    detail += ", card lease of \(AttentionCopy.duration(seconds))"
                 }
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: card, sessionId: p.caller.sessionId,
                                                    secret: name, tier: nil, outcome: .allowed, decider: by == Self.coveredByLease ? .lease : .human,
-                                                   action: "lease", reason: reason, detail: "by \(by)", requestId: id))
+                                                   action: "lease", reason: reason, detail: detail, requestId: id))
             }
-            return VaultResponse(status: .granted, message: "leased \(wanted.map(\.name).joined(separator: ", ")) to the card", id: id, card: card)
+            let span = leaseSeconds.map { " for \(AttentionCopy.duration($0))" } ?? ""
+            return VaultResponse(status: .granted, message: "leased \(wanted.map(\.name).joined(separator: ", ")) to the card\(span)", id: id, card: card)
 
         case (_, let action):
             return await apply(action, caller: p.caller, now: now, by: .human, requestId: id, unsealed: unsealed)
@@ -1554,7 +1594,8 @@ public actor VaultBroker {
             }
             guard covered, pending[otherId]?.result == nil else { continue }
             await settle(id: otherId, approval: .once, by: Self.coveredByLease)
-            await approvals?.close(id: otherId, resolution: AttentionRequest.vaultApprovalOptions[0], by: by)
+            let leaseOption = other.request.options.first(where: AttentionRequest.isVaultLeaseOption)
+            await approvals?.close(id: otherId, resolution: leaseOption ?? AttentionRequest.vaultApprovalOptions[0], by: by)
         }
     }
 
@@ -1671,12 +1712,21 @@ public actor VaultBroker {
 
     // MARK: - Audit
 
+    /// Longest command an audit line keeps.
+    public static let auditCommandLimit = 2000
+
+    /// A command as the audit log keeps it: cut to `auditCommandLimit`
+    /// characters, with a mark when it was longer.
+    static func auditCommand(_ command: String) -> String {
+        command.count > auditCommandLimit ? String(command.prefix(auditCommandLimit)) + "..." : command
+    }
+
     private func audit(_ s: VaultSecret, req: VaultReleaseRequest, caller: VaultCaller, outcome: VaultOutcome,
                        decider: VaultDecider, detail: String?, requestId: String? = nil) async {
         await store.append(VaultAuditEntry(
             at: Date(), machine: machine, cardId: caller.cardId ?? caller.claimedCardId.map { "unverified:\($0)" },
             sessionId: caller.sessionId ?? req.sessionId, secret: s.name, tier: s.tier, outcome: outcome, decider: decider,
-            action: req.mode, command: req.command.map { String($0.prefix(2000)) }, reason: req.reason,
+            action: req.mode, command: req.command.map(Self.auditCommand), reason: req.reason,
             detail: caller.auditNote.map { [detail, $0].compactMap { $0 }.joined(separator: ", ") } ?? detail,
             requestId: requestId
         ))
