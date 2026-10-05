@@ -22,13 +22,31 @@ public struct SecretProposal: Sendable, Equatable, Identifiable {
     public var value: String
     public var kind: String
     public var name: String
+    /// The free name the offer started with. A `name` that differs from it
+    /// is one the user typed.
+    public var offeredName: String
+    /// The stored name the user agreed to replace the value of. It counts
+    /// only while `name` is still that name.
+    public var replaces: String?
     public var id: String { value }
 
-    public init(value: String, kind: String, name: String) {
+    public init(value: String, kind: String, name: String, offeredName: String? = nil, replaces: String? = nil) {
         self.value = value
         self.kind = kind
         self.name = name
+        self.offeredName = offeredName ?? name
+        self.replaces = replaces
     }
+}
+
+/// How a pasted value compares with the secret stored under a name.
+public enum StoredSecretMatch: String, Sendable, Equatable {
+    /// No secret has that name.
+    case absent
+    /// The secret already holds this value.
+    case same
+    /// The secret holds another value, or one that cannot be read here.
+    case different
 }
 
 /// Secret detection for prompts typed or pasted into a composer. The rules are
@@ -40,6 +58,9 @@ public enum SecretDetector {
     public static let pastedTier = "judged"
     /// Rules a secret pasted into a prompt is saved with.
     public static let pastedRules = "Pasted into a chat prompt by Rogerio; use it only for the task that prompt asks for, never print or copy it."
+
+    /// The reason the owner reads when replacing a stored value needs an approval.
+    public static let replaceReason = "Replace the stored value with the one pasted into a chat prompt"
 
     /// Secrets in `text` worth offering to save, in text order.
     public static func find(in text: String) -> [DetectedSecret] {
@@ -113,7 +134,7 @@ public enum SecretDetector {
         for secret in find(in: text) where seen.insert(secret.value).inserted {
             let name = uniqueName(secret.suggestedName, existing: taken)
             taken.insert(name)
-            out.append(SecretProposal(value: secret.value, kind: secret.kind, name: name))
+            out.append(SecretProposal(value: secret.value, kind: secret.kind, name: name, offeredName: name))
         }
         return out
     }
@@ -124,28 +145,95 @@ public enum SecretDetector {
         public var text: String
         public var remaining: [SecretProposal]
         public var error: String?
+        /// The stored name the first of `remaining` was typed as: its value
+        /// is replaced only after the user says so.
+        public var replace: String?
+
+        public init(text: String, remaining: [SecretProposal], error: String?, replace: String? = nil) {
+            self.text = text
+            self.remaining = remaining
+            self.error = error
+            self.replace = replace
+        }
     }
 
-    /// Saves each offer through `add` (which returns an error message or nil)
-    /// under the typed name, or a free one when that is taken or invalid, so a
-    /// stored secret is never replaced. Stops at the first failure.
+    /// The question a composer asks before it replaces a stored value.
+    public static func replaceQuestion(_ name: String) -> String {
+        "\(name) is already in the vault. Replace its value?"
+    }
+
+    /// What a composer shows while the vault waits for the owner's approval.
+    public static func waitingForApproval(_ name: String) -> String {
+        "Waiting for your approval to replace \(name). Approve it on your phone or Mac."
+    }
+
+    /// Saves each offer through `add` (which returns an error message or
+    /// nil; `replacing` is true for a stored name the user agreed to
+    /// replace). The name offered is saved as a new secret, under the next
+    /// free one when it was taken meanwhile; an invalid name becomes
+    /// `SECRET`. A name the user typed is looked up with `compare`: one the
+    /// vault does not hold is added, one that already holds this value is
+    /// used as it is, and one that holds another value stops the save with
+    /// `replace` set until the offer carries the user's yes in `replaces`.
+    /// Stops at the first failure too.
     public static func save(_ proposals: [SecretProposal], in text: String, existingNames: Set<String>,
                             isolation: isolated (any Actor)? = #isolation,
-                            add: (SecretProposal) async -> String?) async -> SaveResult {
+                            compare: (SecretProposal) async -> StoredSecretMatch,
+                            add: (_ proposal: SecretProposal, _ replacing: Bool) async -> String?) async -> SaveResult {
         var taken = existingNames
+        var mine = Set<String>()
         var saved: [SecretProposal] = []
         for (i, offered) in proposals.enumerated() {
             var proposal = offered
             let typed = proposal.name.trimmingCharacters(in: .whitespaces)
-            proposal.name = uniqueName(isValidName(typed) ? typed : "SECRET", existing: taken)
-            if let error = await add(proposal) {
-                return SaveResult(text: apply(text, saved: saved), remaining: Array(proposals[i...]),
-                                  error: "Could not save \(proposal.name): \(error)")
+            var replacing = false
+            if !isValidName(typed) {
+                proposal.name = uniqueName("SECRET", existing: taken)
+            } else if mine.contains(typed) || typed == proposal.offeredName {
+                proposal.name = uniqueName(typed, existing: taken)
+            } else {
+                proposal.name = typed
+                if proposal.replaces == typed {
+                    replacing = true
+                } else {
+                    switch await compare(proposal) {
+                    case .absent:
+                        break
+                    case .same:
+                        mine.insert(typed)
+                        taken.insert(typed)
+                        saved.append(proposal)
+                        continue
+                    case .different:
+                        return SaveResult(text: apply(text, saved: saved), remaining: [proposal] + proposals[(i + 1)...],
+                                          error: nil, replace: typed)
+                    }
+                }
             }
+            if let error = await add(proposal, replacing) {
+                return SaveResult(text: apply(text, saved: saved), remaining: Array(proposals[i...]),
+                                  error: "Could not \(replacing ? "replace" : "save") \(proposal.name): \(error)")
+            }
+            mine.insert(proposal.name)
             taken.insert(proposal.name)
             saved.append(proposal)
         }
         return SaveResult(text: apply(text, saved: saved), remaining: [], error: nil)
+    }
+
+    /// `proposals` with the user's answer to `replaceQuestion` for the first
+    /// one: yes marks its name as the one to replace, no puts the free name
+    /// it was offered back.
+    public static func answeringReplace(_ proposals: [SecretProposal], replace: Bool) -> [SecretProposal] {
+        guard var first = proposals.first else { return proposals }
+        if replace {
+            first.name = first.name.trimmingCharacters(in: .whitespaces)
+            first.replaces = first.name
+        } else {
+            first.name = first.offeredName
+            first.replaces = nil
+        }
+        return [first] + proposals.dropFirst()
     }
 
     /// `text` with each saved proposal swapped for its vault reference.

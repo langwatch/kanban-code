@@ -104,6 +104,10 @@ export interface VaultIO {
   fetch: typeof fetch;
   stderr: (text: string) => void;
   sleep: (ms: number) => Promise<void>;
+  /** The value piped in, when it is not the process's own stdin. */
+  stdin?: () => Promise<string>;
+  /** Where results go, when it is not the process's own stdout. */
+  stdout?: (text: string) => void;
 }
 
 export function defaultIO(): VaultIO {
@@ -674,6 +678,8 @@ export const USAGE = `kv: secrets from the Kanban Code vault
          [--reason "..."] [--every-use-asks]                value from stdin; with --project the secret is the
                                                             project's own (. is this folder's), else shared.
                                                             kv add is the same command
+  kv same KEY [--project P|.] [--env E]                     value from stdin; prints same, different or absent for
+                                                            the secret stored under that name, and changes no secret
   kv ls [--project P] [--json]                              names, tiers and rules
   kv mv OLD NEW [--reason "..."]                            rename; the old name keeps resolving (asks Rogerio)
   kv mv --plan <file.json> [--dry-run] --reason "..."       many renames ([{"from","to"}]), one approval
@@ -719,7 +725,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
   const args = [...rest];
   const client = new VaultClient(vaultBaseUrl(io.env), io);
   const ctx = callerContext(io.env);
-  const out = (text: string) => process.stdout.write(text);
+  const out = io.stdout ?? ((text: string) => process.stdout.write(text));
 
   switch (cmd) {
     case undefined:
@@ -856,6 +862,24 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const r = body.status === "pending" ? await waitPending(client, body) : body;
       if (r.status !== "granted") throw deniedError(r);
       io.stderr(`kv: ${r.message}\n`);
+      return 0;
+    }
+
+    case "same": {
+      const project = takeOption(args, "--project");
+      const environment = takeOption(args, "--env");
+      const name = args[0];
+      if (!name) throw new VaultCliError("kv same KEY [--project P|.] [--env E]  (value on stdin)");
+      const value = io.stdin ? (await io.stdin()).replace(/\r?\n$/, "") : await readSecretFromStdin(name);
+      if (!value) throw new VaultCliError("kv: empty value, nothing to compare");
+      const { body } = await client.call<{ name: string; outcome: string }>("POST", "compare", {
+        name,
+        value,
+        project,
+        environment,
+        dir: ctx.cwd,
+      });
+      out(`${body.outcome}\n`);
       return 0;
     }
 

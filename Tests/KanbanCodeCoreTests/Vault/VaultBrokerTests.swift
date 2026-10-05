@@ -352,6 +352,29 @@ struct VaultBrokerTests {
         #expect(try await store.secret("OPEN")?.value == "open-value")
     }
 
+    /// The Mac composer's replace: the user's own yes, so no approval, and
+    /// only the value changes.
+    @Test func aTrustedReplaceWithOnlyAValueKeepsTheTierAndRules() async throws {
+        let (broker, store, approvals) = try await makeBroker()
+        #expect(await broker.compare(VaultAddRequest(name: "JUDGED", value: "rotated")).outcome == .different)
+        #expect(await broker.compare(VaultAddRequest(name: "JUDGED", value: "judged-value")).outcome == .same)
+        #expect(await broker.compare(VaultAddRequest(name: "MISSING", value: "rotated")).outcome == .absent)
+        #expect(try await store.secret("JUDGED")?.value == "judged-value")
+
+        // The value it already holds: no approval and no write, also for an agent.
+        let before = try #require(try await store.secret("JUDGED"))
+        let unchanged = await broker.add(VaultAddRequest(name: "JUDGED", value: "judged-value"), caller: inside, trusted: false)
+        #expect(unchanged.status == .granted && unchanged.message == "JUDGED already holds this value")
+        #expect(try await store.secret("JUDGED") == before)
+        #expect(approvals.raised.isEmpty)
+
+        let replaced = await broker.add(VaultAddRequest(name: "JUDGED", value: "rotated"), caller: inside, trusted: true)
+        #expect(replaced.status == .granted && replaced.message == "replaced JUDGED")
+        let saved = try #require(try await store.secret("JUDGED"))
+        #expect(saved.value == "rotated" && saved.tier == .judged && saved.rules == "deploys only")
+        #expect(approvals.raised.isEmpty)
+    }
+
     @Test func awsProfilesGoThroughSts() async throws {
         let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
         try await store.upsert(VaultSecret(name: "AWS_ROOT", value: #"{"accessKeyId":"AKIAX","secretAccessKey":"s"}"#, tier: .never))

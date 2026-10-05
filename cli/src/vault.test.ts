@@ -491,6 +491,21 @@ test("kv set stores a project's secret, kv ls filters by project, kv mv renames"
   assert.deepEqual(m.calls[1].body.renames, [{ from: "A__SHOP", to: "shop/dev/A" }]);
 });
 
+test("kv same says how a value compares with the stored one and writes no secret", async () => {
+  const m = await fakeMaster((_method, _path, body) => ({
+    status: 200,
+    body: { name: body.name, outcome: body.value === "stored" ? "same" : "different" },
+  }));
+  const printed: string[] = [];
+  const kvIo = (value: string) => ({ ...io(m.url, []), stdin: async () => value, stdout: (t: string) => printed.push(t) });
+  assert.equal(await runKv(["same", "METABASE_API_KEY"], kvIo("stored\n")), 0);
+  assert.equal(await runKv(["same", "METABASE_API_KEY"], kvIo("rotated")), 0);
+  m.close();
+  assert.deepEqual(printed, ["same\n", "different\n"]);
+  assert.deepEqual(m.calls.map((c) => `${c.method} ${c.path}`), ["POST /v1/vault/compare", "POST /v1/vault/compare"]);
+  assert.equal(m.calls[0].body.value, "stored");
+});
+
 test("import names a second value after its project and environment", () => {
   const plans = planSecrets(
     [

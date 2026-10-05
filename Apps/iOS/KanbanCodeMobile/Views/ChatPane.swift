@@ -296,7 +296,8 @@ struct ChatPane: View {
             }
             if secretOffer != nil {
                 VaultSecretOfferCard(offer: Binding(get: { secretOffer! }, set: { secretOffer = $0 }),
-                                     onSave: saveOfferedSecrets, onSendAsIs: sendOfferAsIs)
+                                     onSave: saveOfferedSecrets, onSendAsIs: sendOfferAsIs,
+                                     onReplace: answerReplace)
             }
             if card.isLive, card.sessionStatus?.kind != .machine {
                 composer
@@ -694,21 +695,35 @@ struct ChatPane: View {
     }
 
     private func saveOfferedSecrets() {
-        guard var offer = secretOffer, !offer.isSaving, let client = board.client else { return }
+        guard var offer = secretOffer, !offer.isSaving, offer.replaceName == nil, let client = board.client else { return }
         offer.isSaving = true
         offer.error = nil
         secretOffer = offer
         Task {
-            let result = await PhoneVault.save(offer, client: client)
-            if let error = result.error {
-                // What was saved stays referenced; the rest stays offered.
-                secretOffer = PendingSecretOffer(text: result.text, mode: offer.mode, proposals: result.remaining, error: error)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            let result = await PhoneVault.save(offer, client: client) { waiting in
+                secretOffer?.waiting = waiting
+            }
+            if result.error != nil || result.replace != nil {
+                // What was saved stays referenced; the rest stays offered,
+                // the first with its replace question when it has one.
+                secretOffer = PendingSecretOffer(text: result.text, mode: offer.mode, proposals: result.remaining,
+                                                 error: result.error, replaceName: result.replace)
+                if result.error != nil { UINotificationFeedbackGenerator().notificationOccurred(.error) }
                 return
             }
             secretOffer = nil
             deliver(result.text, offer.mode)
         }
+    }
+
+    /// Replace saves again with the stored name confirmed; the other answer
+    /// puts the free name back for another edit.
+    private func answerReplace(_ replace: Bool) {
+        guard var offer = secretOffer, offer.replaceName != nil, !offer.isSaving else { return }
+        offer.replaceName = nil
+        offer.proposals = SecretDetector.answeringReplace(offer.proposals, replace: replace)
+        secretOffer = offer
+        if replace { saveOfferedSecrets() }
     }
 
     /// Sends what the human wrote: the draft with its images, or with

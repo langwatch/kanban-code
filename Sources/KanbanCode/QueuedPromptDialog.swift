@@ -48,7 +48,7 @@ struct QueuedPromptDialog: View {
                 placeholder: "Type the next prompt for \(assistant.displayName)...",
                 maxHeight: 300,
                 onSubmit: submit,
-                onEscape: { if secretOffer.isActive { secretOffer.decline() } else { isPresented = false } }
+                onEscape: { if secretOffer.isActive { secretOffer.escape() } else { isPresented = false } }
             )
 
             if secretOffer.isActive && !secretOffer.proposals.isEmpty {
@@ -60,7 +60,7 @@ struct QueuedPromptDialog: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { if secretOffer.isActive { secretOffer.decline() } else { isPresented = false } }
+                Button("Cancel") { if secretOffer.isActive { secretOffer.escape() } else { isPresented = false } }
                     .keyboardShortcut(.cancelAction)
                 Button(existingPrompt != nil ? "Save" : "Add", action: submit)
                     .keyboardShortcut(.defaultAction)

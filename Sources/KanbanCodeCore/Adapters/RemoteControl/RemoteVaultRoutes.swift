@@ -10,6 +10,7 @@ import KanbanCodeRemoteKit
 ///   POST   /v1/vault/aws               short-lived AWS credentials for a profile
 ///   GET    /v1/vault/secrets           names, tiers and rules, never values (?project=X for one project)
 ///   POST   /v1/vault/secrets           add a secret (replacing one asks the human)
+///   POST   /v1/vault/compare           whether the secret under a name holds a value: absent, same or different
 ///   PATCH  /v1/vault/secrets           one change to several secrets, in one approval
 ///   PATCH  /v1/vault/secrets/{name}    tier, rules, tags (asks the human)
 ///   DELETE /v1/vault/secrets/{name}    (asks the human)
@@ -138,6 +139,12 @@ enum RemoteVaultRoutes {
             let r = await vault.broker.add(req, caller: who, trusted: false)
             await vault.replica?.poke()
             return respond(r)
+
+        case ("POST", "compare", 1):
+            guard let req = decode(VaultAddRequest.self) else {
+                return .error(400, "body must be {\"name\", \"value\", \"project\", \"environment\"}")
+            }
+            return .json(await vault.broker.compare(req))
 
         case ("PATCH", "secrets", 1):
             guard let req = decode(VaultBatchEditRequest.self) else {

@@ -1329,9 +1329,9 @@ struct ChatInputBar: View {
         }
     }
 
-    /// Escape answers No while a secret offer is open.
+    /// Escape answers No while a secret offer is open, or goes back from its replace question.
     private func escapeOrDecline(_ fallback: (() -> Void)?) {
-        if secretOffer.isActive { secretOffer.decline() } else { fallback?() }
+        if secretOffer.isActive { secretOffer.escape() } else { fallback?() }
     }
 
     @ViewBuilder

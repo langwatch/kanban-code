@@ -499,28 +499,102 @@ struct PastedSecretTests {
         #expect(SecretDetector.proposals(in: "nothing to see", existingNames: []).isEmpty)
     }
 
-    @Test("Saving never reuses a stored name, fixes an invalid typed name, and stops at the first failure")
+    @Test("Saving keeps the offered names free, fixes an invalid typed name, and stops at the first failure")
     func save() async {
         let other = "sk-proj-" + "Lb3Nw7Hc1Yp4Fd6Gs0JeZr8Kq2Vm5Tx9" + "_AuQiWo"
         let text = "a \(Self.openai) b \(other) c \(Self.github)"
         var offers = SecretDetector.proposals(in: text, existingNames: [])
         offers[0].name = "MY KEY"
-        offers[1].name = "TAKEN"
         var added: [String] = []
-        let ok = await SecretDetector.save(offers, in: text, existingNames: ["TAKEN"]) { p in
-            added.append(p.name); return nil
+        var compared: [String] = []
+        // OPENAI_API_KEY_2 was offered free and is taken by the time of the save.
+        let ok = await SecretDetector.save(offers, in: text, existingNames: ["OPENAI_API_KEY_2"]) { p in
+            compared.append(p.name); return .different
+        } add: { p, replacing in
+            added.append(p.name + (replacing ? " (replace)" : "")); return nil
         }
-        #expect(added == ["SECRET", "TAKEN_2", "GITHUB_TOKEN"])
-        #expect(ok.error == nil && ok.remaining.isEmpty)
-        #expect(ok.text.hasPrefix("a {{vault:SECRET}} b {{vault:TAKEN_2}} c {{vault:GITHUB_TOKEN}}\n\n("))
+        #expect(added == ["SECRET", "OPENAI_API_KEY_2_2", "GITHUB_TOKEN"])
+        #expect(compared.isEmpty)
+        #expect(ok.error == nil && ok.remaining.isEmpty && ok.replace == nil)
+        #expect(ok.text.hasPrefix("a {{vault:SECRET}} b {{vault:OPENAI_API_KEY_2_2}} c {{vault:GITHUB_TOKEN}}\n\n("))
 
         var calls = 0
-        let failed = await SecretDetector.save(offers, in: text, existingNames: []) { _ in
+        let failed = await SecretDetector.save(offers, in: text, existingNames: []) { _ in .absent } add: { _, _ in
             calls += 1; return calls == 2 ? "vault locked" : nil
         }
-        #expect(failed.error == "Could not save TAKEN: vault locked")
+        #expect(failed.error == "Could not save OPENAI_API_KEY_2: vault locked")
         #expect(failed.remaining.map(\.value) == [other, Self.github])
         #expect(failed.text.contains("{{vault:SECRET}}") && failed.text.contains(other) && failed.text.contains(Self.github))
     }
-}
 
+    @Test("A typed name the vault holds asks before its value is replaced")
+    func typedStoredNameAsksToReplace() async {
+        let text = "rotate \(Self.openai) now, and use \(Self.github)"
+        var offers = SecretDetector.proposals(in: text, existingNames: ["OPENAI_API_KEY"])
+        #expect(offers.map(\.name) == ["OPENAI_API_KEY_2", "GITHUB_TOKEN"])
+        offers[0].name = "OPENAI_API_KEY"
+        var added: [String] = []
+        let add: (SecretProposal, Bool) async -> String? = { p, replacing in
+            added.append(p.name + (replacing ? " (replace)" : "")); return nil
+        }
+
+        let asked = await SecretDetector.save(offers, in: text, existingNames: ["OPENAI_API_KEY"], compare: { _ in .different }, add: add)
+        #expect(asked.replace == "OPENAI_API_KEY" && asked.error == nil)
+        #expect(asked.remaining.map(\.name) == ["OPENAI_API_KEY", "GITHUB_TOKEN"])
+        #expect(asked.text == text)
+        #expect(added.isEmpty)
+        #expect(SecretDetector.replaceQuestion("OPENAI_API_KEY") == "OPENAI_API_KEY is already in the vault. Replace its value?")
+
+        // Replace: the stored name gets the value, the prompt its reference.
+        let yes = SecretDetector.answeringReplace(asked.remaining, replace: true)
+        let replaced = await SecretDetector.save(yes, in: asked.text, existingNames: ["OPENAI_API_KEY"], compare: { _ in .different }, add: add)
+        #expect(added == ["OPENAI_API_KEY (replace)", "GITHUB_TOKEN"])
+        #expect(replaced.replace == nil && replaced.error == nil && replaced.remaining.isEmpty)
+        #expect(replaced.text.hasPrefix("rotate {{vault:OPENAI_API_KEY}} now, and use {{vault:GITHUB_TOKEN}}\n\n("))
+
+        // Pick another name: the free name is back, and saves with no question.
+        added = []
+        let no = SecretDetector.answeringReplace(asked.remaining, replace: false)
+        #expect(no.map(\.name) == ["OPENAI_API_KEY_2", "GITHUB_TOKEN"])
+        let kept = await SecretDetector.save(no, in: asked.text, existingNames: ["OPENAI_API_KEY"], compare: { _ in .different }, add: add)
+        #expect(added == ["OPENAI_API_KEY_2", "GITHUB_TOKEN"] && kept.replace == nil)
+
+        // A yes for one name does not cover another typed after it.
+        added = []
+        var renamed = yes
+        renamed[0].name = "GITHUB_TOKEN_OLD"
+        let other = await SecretDetector.save(renamed, in: asked.text, existingNames: ["OPENAI_API_KEY", "GITHUB_TOKEN_OLD"],
+                                              compare: { _ in .different }, add: add)
+        #expect(other.replace == "GITHUB_TOKEN_OLD" && added.isEmpty)
+    }
+
+    @Test("A typed name that already holds the pasted value is used with no question and no save")
+    func typedStoredNameWithTheSameValue() async {
+        let text = "use \(Self.openai)"
+        var offers = SecretDetector.proposals(in: text, existingNames: ["OPENAI_API_KEY"])
+        offers[0].name = "OPENAI_API_KEY"
+        var added = 0
+        let same = await SecretDetector.save(offers, in: text, existingNames: ["OPENAI_API_KEY"]) { _ in .same } add: { _, _ in
+            added += 1; return nil
+        }
+        #expect(added == 0 && same.replace == nil && same.error == nil && same.remaining.isEmpty)
+        #expect(same.text.hasPrefix("use {{vault:OPENAI_API_KEY}}\n\n("))
+    }
+
+    @Test("A typed name the vault does not hold is added, and the offered free name saves with no lookup")
+    func newNamesSaveWithNoQuestion() async {
+        let text = "use \(Self.openai) and \(Self.github)"
+        var offers = SecretDetector.proposals(in: text, existingNames: ["OPENAI_API_KEY"])
+        offers[1].name = "GH_DEPLOY_TOKEN"
+        var compared: [String] = []
+        var added: [String] = []
+        let r = await SecretDetector.save(offers, in: text, existingNames: ["OPENAI_API_KEY"]) { p in
+            compared.append(p.name); return .absent
+        } add: { p, replacing in
+            added.append(p.name + (replacing ? " (replace)" : "")); return nil
+        }
+        #expect(compared == ["GH_DEPLOY_TOKEN"])
+        #expect(added == ["OPENAI_API_KEY_2", "GH_DEPLOY_TOKEN"])
+        #expect(r.replace == nil && r.error == nil)
+    }
+}

@@ -227,6 +227,7 @@ kv get NAME [--reason "..."]
 kv request NAME[:scope] [NAME..] --reason "..."
 kv aws <profile> [--reason "..."]
 kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--reason "..."]   value on stdin (kv add is the same)
+kv same KEY [--project P|.] [--env E]                             value on stdin; prints same, different or absent
 kv ls [--project P] | kv log | kv leases | kv status   (status also says who the master takes you for)
 kv owner                                     the keys of the owner-only secrets, and how many are sealed
 kv audit check                               broken chain, lines missing on a machine (exit 1 on a problem)
@@ -342,7 +343,15 @@ Plaintext that stays, and why:
 
 The card chat composer, the queued prompt editor, channel composers and the iPhone composer check a prompt before sending it (`SecretDetector` in KanbanCodeRemoteKit, a port of LangWatch's redaction rules). When it holds a credential they offer to save it: one editable name per secret, taken from `NAME=value` / `NAME: value` / `"NAME": "value"` or the vendor (`OPENAI_API_KEY`, `GITHUB_TOKEN`...), with `_2`, `_3` when the vault already has that name. Yes adds each as a judged secret and sends the prompt with `{{vault:NAME}}` in its place plus a line telling the agent to use `kv run NAME -- <cmd>`; No sends it unchanged. On the Mac, Return or y is Yes, Esc or n is No. Placeholders (`sk-xxxx...`, `<your-key>`, AWS's `...EXAMPLE`) never ask.
 
-rush's own message boxes (a Session's box and the Prompt) get the same check from the `kanban-vault` rush plugin in `plugins/rush/kanban-vault`, a Go port of the same rules. It answers rush's `ui.intercept` with an ask, saves with `kv add NAME --tier judged` through the manifest's `exec`, and rewrites the message in place so paste chips stay chips. `make rush-plugins` (`Scripts/rush-plugins-install.sh`) builds it into rush's plugin folder and runs `rush plugin approve` at a terminal. rush runs installed plugins only on macOS, where it sandboxes them, so the script installs nothing on a Linux machine.
+The name offered is always free, so saving it as offered asks no further question. A name you type is looked up first (`POST /v1/vault/compare`, which answers `absent`, `same` or `different` and writes no secret; a sealed value always reads as `different`):
+
+- The vault does not hold it: it is added as a judged secret.
+- It holds the pasted value already: the name is used as it is, with no question and no save.
+- It holds another value: the composer asks "NAME is already in the vault. Replace its value?". Replace sends only the new value, so the secret keeps its tier, rules, label and tags. The other answer puts the free name back for another edit. On the Mac, r replaces and Esc or n goes back.
+
+Replacing from the Mac app's composer is done at once, like an edit in Settings > Vault. From the iPhone and from rush it is a `POST /v1/vault/secrets` for a stored name, which asks the owner: the composer shows "Waiting for your approval to replace NAME" and sends the prompt once it is approved. A denial leaves the stored value and the prompt unsent, with the reason shown.
+
+rush's own message boxes (a Session's box and the Prompt) get the same check from the `kanban-vault` rush plugin in `plugins/rush/kanban-vault`, a Go port of the same rules. It answers rush's `ui.intercept` with an ask, saves with `kv add NAME --tier judged` through the manifest's `exec`, and rewrites the message in place so paste chips stay chips. A typed name the vault holds is looked up with `kv same NAME` and replaced with `kv set NAME` (the value alone). rush stops a program a plugin runs after a minute, so when the approval takes longer the plugin asks "Waiting for your approval to replace NAME" with "check again" and "back to the box"; the request stays open in the vault and the next `kv set` takes its answer. `make rush-plugins` (`Scripts/rush-plugins-install.sh`) builds it into rush's plugin folder and runs `rush plugin approve` at a terminal. rush runs installed plugins only on macOS, where it sandboxes them, so the script installs nothing on a Linux machine.
 
 ## Scrubber
 
@@ -405,4 +414,4 @@ In place, and every line keeps its byte length: the file keeps its size, its ino
 
 ## Remote API
 
-See the routes list in `Sources/KanbanCodeCore/Adapters/RemoteControl/RemoteVaultRoutes.swift`. Listings never carry values. Adding a new secret is allowed to any local caller; replacing a value, changing a tier or rules, or deleting asks Rogerio, except from Settings > Vault in the app. A peer master's token reaches only the replica, the card token check and the audit log mirror. The scrubber routes are in `RemoteScrubRoutes.swift`.
+See the routes list in `Sources/KanbanCodeCore/Adapters/RemoteControl/RemoteVaultRoutes.swift`. Listings never carry values. Adding a new secret is allowed to any local caller; replacing a value, changing a tier or rules, or deleting asks Rogerio, except from Settings > Vault in the app and from the Mac composer's "Replace its value?" answer. Setting a secret to the value it already holds, with no tier, rules, label or tags, changes no secret and asks no approval. A peer master's token reaches only the replica, the card token check and the audit log mirror. The scrubber routes are in `RemoteScrubRoutes.swift`.

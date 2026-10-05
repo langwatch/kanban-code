@@ -178,6 +178,30 @@ public struct VaultAddRequest: Codable, Sendable, Equatable {
     }
 }
 
+/// Answer of `POST /v1/vault/compare`: whether the secret stored under a
+/// name holds a given value.
+public struct VaultValueCheck: Codable, Sendable, Equatable {
+    public enum Outcome: String, Codable, Sendable {
+        case absent, same, different
+    }
+
+    /// The name the secret is stored under.
+    public var name: String
+    public var outcome: Outcome
+
+    public init(name: String, outcome: Outcome) {
+        self.name = name
+        self.outcome = outcome
+    }
+}
+
+extension VaultAddRequest {
+    /// Whether it names a value and leaves the rest of a stored secret as it is.
+    var onlyValue: Bool {
+        tier == nil && rules == nil && tags == nil && aws == nil && leasePolicy == nil && sources == nil && label == nil
+    }
+}
+
 /// Body of `PATCH /v1/vault/secrets/{name}`.
 public struct VaultEditRequest: Codable, Sendable, Equatable {
     public var tier: VaultTier?
@@ -894,7 +918,9 @@ public actor VaultBroker {
     // MARK: - Admin
 
     /// Adds a secret. A new name is added at once; replacing a value
-    /// someone else stored needs the human unless `trusted`.
+    /// someone else stored needs the human unless `trusted`. A request
+    /// that carries only the value the secret already holds changes
+    /// nothing and asks nothing.
     public func add(_ req: VaultAddRequest, caller: VaultCaller, trusted: Bool, now: Date = Date()) async -> VaultResponse {
         guard let name = storedName(for: req) else {
             return .denied("no project for this folder: give --project <name>, or leave the project out for a shared secret")
@@ -903,11 +929,26 @@ public actor VaultBroker {
             return .denied("secret names use letters, digits and _ - . / : only")
         }
         let existing = (try? await store.secret(name)) ?? nil
+        if let existing, req.onlyValue, await compare(req).outcome == .same {
+            return VaultResponse(status: .granted, message: "\(existing.name) already holds this value")
+        }
         if existing != nil && !trusted {
             return await ask(action: .add(req), secrets: [existing!], whys: ["replacing a stored value always asks"], caller: caller,
                              command: nil, reason: req.reason, now: now, leaseOnly: false, admin: true)
         }
         return await apply(.add(req), caller: caller, now: now)
+    }
+
+    /// How the value of `req` compares with the secret stored under its
+    /// name, without writing anything: a composer asks this before it
+    /// offers to replace a secret. A sealed value cannot be read here, so
+    /// it always answers `different`.
+    public func compare(_ req: VaultAddRequest) async -> VaultValueCheck {
+        guard let name = storedName(for: req), let existing = (try? await store.secret(name)) ?? nil else {
+            return VaultValueCheck(name: storedName(for: req) ?? req.name, outcome: .absent)
+        }
+        let same = existing.sealed == nil && !existing.value.isEmpty && existing.value == req.value
+        return VaultValueCheck(name: existing.name, outcome: same ? .same : .different)
     }
 
     /// The name an add stores under: `project/environment/KEY` when it
