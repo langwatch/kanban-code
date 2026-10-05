@@ -1,7 +1,8 @@
 // kanban-vault is a rush plugin that keeps secrets out of what you send:
 // before a message holding one goes, it asks whether to save it to Kanban
 // Code's vault, then under what name, saves it with kv, and the message
-// goes with {{vault:NAME}} in its place. Detection is package secrets
+// goes with {{vault:NAME}} in its place. A name typed that the vault
+// already holds asks whether to replace its value. Detection is package secrets
 // (LangWatch's redaction rules); the questions are rush's intercept asks,
 // the answers ui.intercept.answer. A rush that can't show a line to type
 // gets one question, with the name in it.
@@ -30,6 +31,14 @@ import (
 // prompt.
 const rules = "Pasted into a chat prompt by the user; use it only for the task that prompt asks for, never print or copy it."
 
+// replaceReason is what the owner reads when the vault asks to approve a
+// replaced value.
+const replaceReason = "Replace the stored value with the one pasted into a rush message"
+
+// noticeAfter is how long a replace runs before a notice says it waits for
+// an approval.
+var noticeAfter = 2 * time.Second
+
 // namesFor is how long the vault's names, as last listed, are good for
 // naming a secret in a question. A save lists them again first.
 const namesFor = time.Minute
@@ -38,7 +47,17 @@ const namesFor = time.Minute
 type vault interface {
 	Names(ctx context.Context) ([]string, error)
 	Add(ctx context.Context, name, value string) error
+	// Same is whether the secret stored under name holds value.
+	Same(ctx context.Context, name, value string) (bool, error)
+	// Replace gives the secret stored under name a new value, keeping
+	// its tier, rules, label and tags. The vault asks for an approval
+	// first: errWaiting when that one isn't answered yet.
+	Replace(ctx context.Context, name, value string) error
 }
+
+// errWaiting is a replace still waiting for its approval: asked again, it
+// takes the answer.
+var errWaiting = errors.New("waiting for your approval")
 
 type app struct {
 	conn  *conn
@@ -55,11 +74,14 @@ type app struct {
 
 // asked is a question out about one secret: whether to save it, naming
 // under what name to (typed, with why not, when the last one wasn't
-// taken), or, failed, whether to send it as it is. Without input, the one
-// question is to save it under name.
+// taken), replacing whether to replace the value the vault holds under
+// name, waiting whether to look again for that replace's approval, or,
+// failed, whether to send it as it is. Without input, the one question is
+// to save it under name.
 type asked struct {
 	box, value, kind, suggested, name string
 	failed, naming                    bool
+	replacing, waiting                bool
 	typed, why                        string
 }
 
@@ -243,6 +265,64 @@ func (a *app) naming(q asked) interceptResult {
 		Choices:  []askChoice{{Key: "b", Label: "back", Esc: true}}}
 }
 
+// replacing asks whether to replace the value the vault holds under
+// q.name: the other answer goes back to the name.
+func (a *app) replacing(q asked) interceptResult {
+	q.replacing, q.waiting = true, false
+	return interceptResult{Action: "ask", ID: a.remember(q),
+		Question: q.name + " is already in the vault. Replace its value?",
+		Detail:   "it keeps its tier, rules and label, only the value changes · the vault asks you to approve it · the message goes with " + secrets.Ref(q.name),
+		Choices:  []askChoice{{Key: "r", Label: "replace"}, {Key: "n", Label: "another name", Esc: true}}}
+}
+
+// waiting says the replace of q.name still waits for its approval, and
+// asks to look again or go back to the box.
+func (a *app) waiting(q asked) interceptResult {
+	q.replacing, q.waiting = false, true
+	return interceptResult{Action: "ask", ID: a.remember(q),
+		Question: "Waiting for your approval to replace " + q.name,
+		Detail:   "approve it on your phone or Mac, then check again · the message isn't sent until then",
+		Choices:  []askChoice{{Key: "y", Label: "check again", Enter: true}, {Key: "n", Label: "back to the box", Esc: true}}}
+}
+
+// replace gives q.name the secret's value and puts its reference in the
+// message. While the vault waits for the approval a notice says so; one
+// that doesn't come in time leaves the waiting question.
+func (a *app) replace(ctx context.Context, in intercept, q asked) interceptResult {
+	// An approval given since the last look already replaced it.
+	if same, err := a.vault.Same(ctx, q.name, q.value); err == nil && same {
+		return a.kept(in, q, "")
+	}
+	notice := time.AfterFunc(noticeAfter, func() {
+		a.notify("waiting for your approval to replace " + q.name + ": approve it on your phone or Mac")
+	})
+	err := a.vault.Replace(ctx, q.name, q.value)
+	notice.Stop()
+	switch {
+	case errors.Is(err, errWaiting):
+		return a.waiting(q)
+	case err != nil:
+		return a.failed(q, err, interceptResult{})
+	}
+	return a.kept(in, q, "replaced the value of "+q.name+" in the vault")
+}
+
+// kept is the message with q.name's reference in the secret's place, now
+// that the vault holds the secret under that name, with a notice of what
+// was done if there's one.
+func (a *app) kept(in intercept, q asked, notice string) interceptResult {
+	a.mu.Lock()
+	if !slices.Contains(a.names, q.name) {
+		a.names = append(slices.Clone(a.names), q.name)
+	}
+	a.saved[q.name] = sha256.Sum256([]byte(q.value))
+	a.mu.Unlock()
+	if notice != "" {
+		a.notify(notice)
+	}
+	return a.then(in, swap(in.Text, q.value, q.name))
+}
+
 // failed says why the secret couldn't be saved, and asks to send the
 // message as it is or go back to it.
 func (a *app) failed(q asked, err error, changes interceptResult) interceptResult {
@@ -268,8 +348,10 @@ func (a *app) remember(q asked) string {
 // asks for the name (or, with no line to type, saves under the name
 // offered) and n lets the secret go as it is. To the name: enter saves
 // under what was typed and puts its reference in the secret's place, esc
-// goes back. Then the next secret in the message is asked about, if
-// there's one.
+// goes back. A name typed that the vault holds is used as it is when it
+// holds this very value, and else asks whether to replace it: r replaces,
+// anything else goes back to the name. Then the next secret in the message
+// is asked about, if there's one.
 func (a *app) answer(ctx context.Context, in intercept, id, key, value string) interceptResult {
 	a.mu.Lock()
 	q, ok := a.asked[id]
@@ -288,11 +370,18 @@ func (a *app) answer(ctx context.Context, in intercept, id, key, value string) i
 	}
 	d := secrets.Detected{Value: q.value, Kind: q.kind, SuggestedName: q.suggested}
 	switch {
-	case q.failed && key == "y", !q.failed && !q.naming && key == "n":
+	case q.failed && key == "y", !q.failed && !q.naming && !q.replacing && !q.waiting && key == "n":
 		letGo()
 		return a.then(in, interceptResult{})
 	case q.failed:
 		return interceptResult{Action: "block", Reason: "not sent; it's still in the box"}
+	case q.waiting && key != "y":
+		return interceptResult{Action: "block", Reason: "not sent; it's still in the box, and " + q.name + " is replaced once you approve"}
+	case q.waiting, q.replacing && key == "r":
+		return a.replace(ctx, in, q)
+	case q.replacing:
+		q.replacing, q.typed, q.why = false, a.free(q), ""
+		return a.naming(q)
 	case q.naming && key != keyEnter:
 		return a.offer(in, d, interceptResult{})
 	case q.naming:
@@ -322,8 +411,11 @@ func (a *app) answer(ctx context.Context, in intercept, id, key, value string) i
 			// Saved under this name already, by this run: the same secret again.
 			return a.then(in, swap(in.Text, q.value, q.name))
 		case q.naming:
-			q.why = q.name + " is already in the vault: give this one another name"
-			return a.naming(q)
+			// A name typed, not the free one offered: yours to replace.
+			if same, err := a.vault.Same(ctx, q.name, q.value); err == nil && same {
+				return a.kept(in, q, "")
+			}
+			return a.replacing(q)
 		default:
 			// Taken since it was offered: offer the next free one.
 			return a.offer(in, d, interceptResult{})
@@ -332,12 +424,7 @@ func (a *app) answer(ctx context.Context, in intercept, id, key, value string) i
 	if err := a.vault.Add(ctx, q.name, q.value); err != nil {
 		return a.failed(q, err, interceptResult{})
 	}
-	a.mu.Lock()
-	a.names = append(slices.Clone(a.names), q.name)
-	a.saved[q.name] = sum
-	a.mu.Unlock()
-	a.notify("saved " + q.name + " to the vault")
-	return a.then(in, swap(in.Text, q.value, q.name))
+	return a.kept(in, q, "saved "+q.name+" to the vault")
 }
 
 // badName is why name can't be a secret's, or "" when it can.
@@ -441,5 +528,24 @@ func (k kvExec) Names(ctx context.Context) ([]string, error) {
 
 func (k kvExec) Add(ctx context.Context, name, value string) error {
 	_, err := k.run(ctx, value, "add", name, "--tier", "judged", "--rules", rules)
+	return err
+}
+
+// Same asks kv same, which a kv from before it doesn't have: that one's
+// error reads as not the same, and the replace question is asked.
+func (k kvExec) Same(ctx context.Context, name, value string) (bool, error) {
+	out, err := k.run(ctx, value, "same", name)
+	return strings.TrimSpace(out) == "same", err
+}
+
+// Replace is kv set with the value alone, so the vault keeps the rest of
+// the secret. kv waits for the approval as long as rush lets a program
+// run: stopped there, the request stays open and the next kv set takes
+// its answer.
+func (k kvExec) Replace(ctx context.Context, name, value string) error {
+	_, err := k.run(ctx, value, "set", name, "--reason", replaceReason)
+	if err != nil && (errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "and was stopped")) {
+		return errWaiting
+	}
 	return err
 }

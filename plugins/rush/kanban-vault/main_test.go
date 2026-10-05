@@ -20,6 +20,38 @@ type fakeVault struct {
 	added  map[string]string
 	lsErr  error
 	addErr error
+	// What the vault holds under names the plugin didn't add, the
+	// errors the next replaces answer with, and the replaces done.
+	held       map[string]string
+	replaceErr []error
+	replaced   []string
+}
+
+func (v *fakeVault) Same(_ context.Context, name, value string) (bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if got, ok := v.added[name]; ok {
+		return got == value, nil
+	}
+	return v.held[name] == value, nil
+}
+
+func (v *fakeVault) Replace(_ context.Context, name, value string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.replaceErr) > 0 {
+		err := v.replaceErr[0]
+		v.replaceErr = v.replaceErr[1:]
+		if err != nil {
+			return err
+		}
+	}
+	if v.held == nil {
+		v.held = map[string]string{}
+	}
+	v.held[name] = value
+	v.replaced = append(v.replaced, name)
+	return nil
 }
 
 func (v *fakeVault) Names(context.Context) ([]string, error) {
@@ -128,7 +160,6 @@ func TestBadNameAsksAgain(t *testing.T) {
 		{"1KEY", "doesn't start with a digit"},
 		{"a/b", "letters, digits and _"},
 		{strings.Repeat("A", 129), "at most 128"},
-		{"TAKEN", "TAKEN is already in the vault"},
 	} {
 		q = a.answer(context.Background(), in, q.ID, keyEnter, c.typed)
 		if q.Action != "ask" || q.Input == nil || q.Input.Value != c.typed || !strings.Contains(q.Input.Error, c.why) || len(v.added) != 0 {
@@ -195,6 +226,117 @@ func TestSecretsAreNamedInOrder(t *testing.T) {
 	if done.Action != "rewrite" || v.added["FIRST"] != key || v.added["SECOND"] != gh ||
 		!strings.HasPrefix(sent, "{{vault:FIRST}} and {{vault:SECOND}}") {
 		t.Fatalf("done %+v, sent %q, added %v", done, sent, v.added)
+	}
+}
+
+// stored is a vault that holds name with value, and the plugin on it with
+// the vault's names listed, as they are once a secret was typed.
+func stored(name, value string, replaceErr ...error) (*fakeVault, *app) {
+	v := &fakeVault{names: []string{name}, held: map[string]string{name: value}, replaceErr: replaceErr}
+	a := newApp(v)
+	a.names, a.namesAt = []string{name}, time.Now()
+	return v, a
+}
+
+// A name typed that the vault already holds asks whether to replace its
+// value: r replaces it, keeping the name, and the message goes with its
+// reference. Nothing is added under another name.
+func TestTypedStoredNameAsksToReplace(t *testing.T) {
+	v, a := stored("METABASE_API_KEY", "the-old-value")
+	in := input("s1", "METABASE_API_KEY="+key)
+	name := a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	if name.Input == nil || name.Input.Value != "METABASE_API_KEY_2" {
+		t.Fatalf("name %+v, input %+v", name, name.Input)
+	}
+	ask := a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	if ask.Action != "ask" || ask.Input != nil || ask.Question != "METABASE_API_KEY is already in the vault. Replace its value?" ||
+		!strings.Contains(ask.Detail, "keeps its tier") || len(v.replaced) != 0 || len(v.added) != 0 {
+		t.Fatalf("ask %+v, replaced %v, added %v", ask, v.replaced, v.added)
+	}
+	if len(ask.Choices) != 2 || ask.Choices[0].Key != "r" || ask.Choices[0].Enter || !ask.Choices[1].Esc {
+		t.Fatalf("choices %+v", ask.Choices)
+	}
+	done := a.answer(context.Background(), in, ask.ID, "r", "")
+	if done.Action != "rewrite" || !slices.Equal(v.replaced, []string{"METABASE_API_KEY"}) || v.held["METABASE_API_KEY"] != key || len(v.added) != 0 {
+		t.Fatalf("done %+v, replaced %v, held %v, added %v", done, v.replaced, v.held, v.added)
+	}
+	if got := done.apply(in.Text); got != secrets.Replace(in.Text, key, "METABASE_API_KEY") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+// Saying no to the replace goes back to the name, which starts as the
+// free one again; the stored secret is left alone.
+func TestAnotherNameInsteadOfReplacing(t *testing.T) {
+	v, a := stored("METABASE_API_KEY", "the-old-value")
+	in := input("s1", "METABASE_API_KEY="+key)
+	name := a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	ask := a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	back := a.answer(context.Background(), in, ask.ID, "n", "")
+	if back.Action != "ask" || back.Input == nil || back.Input.Value != "METABASE_API_KEY_2" || back.Input.Error != "" {
+		t.Fatalf("back %+v, input %+v", back, back.Input)
+	}
+	done := a.answer(context.Background(), in, back.ID, keyEnter, "METABASE_API_KEY_2")
+	if done.Action != "rewrite" || v.added["METABASE_API_KEY_2"] != key || len(v.replaced) != 0 || v.held["METABASE_API_KEY"] != "the-old-value" {
+		t.Fatalf("done %+v, added %v, replaced %v", done, v.added, v.replaced)
+	}
+}
+
+// A name typed that already holds this very value is used as it is: no
+// question, nothing saved or replaced.
+func TestTypedStoredNameWithTheSameValue(t *testing.T) {
+	v, a := stored("METABASE_API_KEY", key)
+	in := input("s1", "METABASE_API_KEY="+key)
+	name := a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	done := a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	if done.Action != "rewrite" || len(v.added) != 0 || len(v.replaced) != 0 {
+		t.Fatalf("done %+v, added %v, replaced %v", done, v.added, v.replaced)
+	}
+	if got := done.apply(in.Text); got != secrets.Replace(in.Text, key, "METABASE_API_KEY") {
+		t.Fatalf("sent %q", got)
+	}
+}
+
+// A replace the vault hasn't had approved yet leaves a question to look
+// again, with nothing sent; looking again takes the approval, and backing
+// out keeps the message in the box.
+func TestReplaceWaitsForTheApproval(t *testing.T) {
+	v, a := stored("METABASE_API_KEY", "the-old-value", errWaiting, errWaiting, nil)
+	in := input("s1", "METABASE_API_KEY="+key)
+	name := a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	ask := a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	wait := a.answer(context.Background(), in, ask.ID, "r", "")
+	if wait.Action != "ask" || wait.Question != "Waiting for your approval to replace METABASE_API_KEY" || len(v.replaced) != 0 ||
+		len(wait.Choices) != 2 || !wait.Choices[0].Enter || !wait.Choices[1].Esc {
+		t.Fatalf("wait %+v", wait)
+	}
+	wait = a.answer(context.Background(), in, wait.ID, "y", "")
+	if wait.Action != "ask" || wait.Question != "Waiting for your approval to replace METABASE_API_KEY" {
+		t.Fatalf("still waiting %+v", wait)
+	}
+	done := a.answer(context.Background(), in, wait.ID, "y", "")
+	if done.Action != "rewrite" || v.held["METABASE_API_KEY"] != key || !strings.Contains(done.apply(in.Text), "{{vault:METABASE_API_KEY}}") {
+		t.Fatalf("done %+v, held %v", done, v.held)
+	}
+
+	_, a = stored("METABASE_API_KEY", "the-old-value", errWaiting)
+	name = a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	ask = a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	wait = a.answer(context.Background(), in, ask.ID, "r", "")
+	if back := a.answer(context.Background(), in, wait.ID, "n", ""); back.Action != "block" || !strings.Contains(back.Reason, "still in the box") {
+		t.Fatalf("back %+v", back)
+	}
+}
+
+// A replace the vault denies says why, and never sends the secret on its own.
+func TestDeniedReplace(t *testing.T) {
+	_, a := stored("METABASE_API_KEY", "the-old-value", errors.New("denied by Rogerio"))
+	in := input("s1", "METABASE_API_KEY="+key)
+	name := a.answer(context.Background(), in, a.intercept(in).ID, "y", "")
+	ask := a.answer(context.Background(), in, name.ID, keyEnter, "METABASE_API_KEY")
+	r := a.answer(context.Background(), in, ask.ID, "r", "")
+	if r.Action != "ask" || r.Question != "Couldn't save the secret to the vault" || !strings.Contains(r.Detail, "denied by Rogerio") {
+		t.Fatalf("got %+v", r)
 	}
 }
 
