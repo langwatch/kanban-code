@@ -13,7 +13,9 @@ struct VaultSettingsView: View {
     @State private var approvals: [VaultAuditEntry] = []
     @State private var cardTitles: [String: String] = [:]
     @State private var approvalHours = 24
-    @State private var showAllReleases = false
+    /// What the right side lists when no secret is open.
+    @State private var history: VaultHistory = .approved
+    @State private var asks: [VaultAskSummary] = []
     @State private var status = ""
     @State private var selected: String?
     @State private var showAdd = false
@@ -99,16 +101,20 @@ struct VaultSettingsView: View {
                         .id(s.name + s.updatedAt.description)
                     } else {
                         VStack(spacing: 6) {
-                            Picker("", selection: $showAllReleases) {
-                                Text("Recently approved").tag(false)
-                                Text("All releases").tag(true)
+                            Picker("", selection: $history) {
+                                Text("Recently approved").tag(VaultHistory.approved)
+                                Text("Most asked").tag(VaultHistory.asked)
+                                Text("All releases").tag(VaultHistory.all)
                             }
                             .pickerStyle(.segmented)
                             .labelsHidden()
                             .padding(.horizontal, 8)
-                            if showAllReleases {
+                            switch history {
+                            case .all:
                                 VaultLogList(entries: log)
-                            } else {
+                            case .asked:
+                                VaultAsksList(asks: asks) { selected = $0 }
+                            case .approved:
                                 VaultApprovalsList(entries: approvals, cardTitles: cardTitles, hours: approvalHours) {
                                     approvalHours += 24
                                     Task { await reloadApprovals() }
@@ -149,6 +155,7 @@ struct VaultSettingsView: View {
         }
         log = await vault.store.log(limit: 200)
         await reloadApprovals()
+        asks = await vault.store.askSummary(since: Date().addingTimeInterval(-VaultAsksList.days * 86400))
         let leases = await vault.store.activeLeases().count
         status = unlocked
             ? "\(secrets.count) secrets, \(leases) active card leases. Values never show here; agents get them with kv."
@@ -161,6 +168,56 @@ struct VaultSettingsView: View {
         for card in Set(approvals.compactMap(\.cardId)) where cardTitles[card] == nil {
             if let title = await vault.broker.cardTitle(card) { cardTitles[card] = title }
         }
+    }
+}
+
+enum VaultHistory: Hashable {
+    case approved, asked, all
+}
+
+/// The secrets that asked you most in the last 30 days, with why the vault
+/// asked and what callers said they wanted, so the noisiest can be
+/// re-tiered or dropped from a manifest. Clicking one opens it.
+struct VaultAsksList: View {
+    static let days: Double = 30
+    let asks: [VaultAskSummary]
+    let open: (String) -> Void
+
+    var body: some View {
+        List {
+            if asks.isEmpty {
+                Text("You were not asked about any secret in the last \(Int(Self.days)) days.").foregroundStyle(.secondary)
+            }
+            ForEach(asks, id: \.secret) { a in
+                Button { open(a.secret) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("\(a.asks)").font(.system(.body, design: .rounded).weight(.semibold)).monospacedDigit()
+                                .frame(minWidth: 28, alignment: .trailing)
+                            Text(a.secret).font(.system(.body, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text(a.lastAt.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text(summary(a)).font(.caption).foregroundStyle(.secondary)
+                        ForEach(a.why, id: \.text) { w in
+                            Text("\(w.text) (\(w.count))").font(.caption).lineLimit(1)
+                        }
+                        ForEach(a.reasons, id: \.text) { r in
+                            Text("\u{201C}\(r.text)\u{201D} (\(r.count))").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func summary(_ a: VaultAskSummary) -> String {
+        var parts = ["\(a.approved) approved", "\(a.denied) denied"]
+        if a.outsideCard > 0 { parts.append("\(a.outsideCard) from outside a card") }
+        return parts.joined(separator: " · ")
     }
 }
 

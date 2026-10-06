@@ -414,3 +414,46 @@ public struct VaultCaller: Codable, Sendable, Equatable {
         principal.hasPrefix(openClawPrefix) ? String(principal.dropFirst(openClawPrefix.count)) : nil
     }
 }
+
+/// How often one secret reached a human in a period, and why: the input
+/// for deciding which secrets to re-tier, scope or drop from a manifest.
+public struct VaultAskSummary: Codable, Sendable, Equatable {
+    public struct Count: Codable, Sendable, Equatable {
+        public var text: String
+        public var count: Int
+
+        public init(text: String, count: Int) {
+            self.text = text
+            self.count = count
+        }
+    }
+
+    public var secret: String
+    /// Requests for it that a human had to answer.
+    public var asks: Int
+    public var approved: Int
+    /// Denied by the human or left to time out.
+    public var denied: Int
+    /// Asks whose caller was not a verified card session.
+    public var outsideCard: Int
+    public var lastAt: Date
+    /// The reasons the callers gave, most common first.
+    public var reasons: [Count]
+    /// Why the vault asked (the tier, Jev's answer, the rate limit), most common first.
+    public var why: [Count]
+    /// The commands that asked, most common first.
+    public var commands: [Count]
+
+    public init(secret: String, asks: Int, approved: Int, denied: Int, outsideCard: Int, lastAt: Date,
+                reasons: [Count], why: [Count], commands: [Count]) {
+        self.secret = secret
+        self.asks = asks
+        self.approved = approved
+        self.denied = denied
+        self.outsideCard = outsideCard
+        self.lastAt = lastAt
+        self.reasons = reasons
+        self.why = why
+        self.commands = commands
+    }
+}

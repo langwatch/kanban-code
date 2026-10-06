@@ -245,7 +245,7 @@ kv request NAME[:scope] [NAME..] --reason "..."
 kv aws <profile> [--reason "..."]
 kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--lease 1h|--every-use-asks] [--reason "..."]   value on stdin (kv add is the same)
 kv same KEY [--project P|.] [--env E]                             value on stdin; prints same, different or absent; audited, 10 checks per caller (30 in all) per 5 minutes
-kv ls [--project P] | kv log | kv leases | kv status   (status also says who the master takes you for)
+kv ls [--project P] | kv log | kv asks | kv leases | kv status   (status also says who the master takes you for)
 kv owner                                     the keys of the owner-only secrets, and how many are sealed
 kv audit check                               broken chain, lines missing on a machine (exit 1 on a problem)
 kv mv OLD NEW [--reason "..."] | kv mv --plan renames.json [--dry-run] --reason "..."   asks Rogerio, one approval
@@ -301,6 +301,8 @@ Credentials a card got are handed to it again while they are valid for more than
 ## Audit log
 
 Every release writes one line per secret, with the command that asked for it (`command`, cut to 2000 characters with "..." after it) and the reason. That holds for every use, not only the one the human approved: a use under a card lease (decider `lease`), a hook-wrapped command, AWS credentials handed out again (decider `reuse`). A refusal by the human or by the timeout keeps the command and the reason of the request too. So `kv log --card ID` or `kv log --secret NAME` reads back what an approved card ran with a secret: each line is followed by its command (`$ ...`, on one line, cut to 240 characters, printed once for the secrets one command used together; `kv log --json` has it whole on every line), and the card's Vault tab and Settings > Vault show the same.
+
+`kv asks [--days 30]` and Settings > Vault > Most asked count, per secret, the requests that reached you in the period: approved, denied or timed out, how many came from outside a card, why the vault asked (the tier, Jev's answer, the rate limit) and the reasons and commands callers gave. Owner actions (add, edit, rm, rename, tier) are left out, since they always ask. It is the list to revisit when approvals pile up: a secret that asks every day for the same dev command belongs in a lower tier or out of that project's `.env.vault`.
 
 No value is written: before a line is stored, every value the vault can read (12 characters or more) found in its command, reason or detail is replaced by `{{vault:NAME}}`. Owner-only values are sealed, so the master cannot look for those.
 

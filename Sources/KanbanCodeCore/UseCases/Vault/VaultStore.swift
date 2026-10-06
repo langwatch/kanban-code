@@ -674,6 +674,53 @@ public actor VaultStore {
             .sorted { $0.at > $1.at }
     }
 
+    /// Uses of a secret that only the owner managing the vault makes;
+    /// they ask by design and are left out of `askSummary`.
+    static let ownerActions: Set<String> = ["add", "edit", "rm", "rename", "tier", "owner"]
+
+    /// Per secret, the requests since `since` that reached a human, on this
+    /// machine and the peers mirrored here, most asked first.
+    public func askSummary(since: Date, limit: Int = 3) -> [VaultAskSummary] {
+        let lines = auditLines() + mirroredMachines().flatMap { mirrorLines(machine: $0) }
+        let asked = Data("\"outcome\":\"asked\"".utf8), human = Data("\"decider\":\"human\"".utf8),
+            timeout = Data("\"decider\":\"timeout\"".utf8)
+        let entries = lines
+            .filter { $0.range(of: asked) != nil || $0.range(of: human) != nil || $0.range(of: timeout) != nil }
+            .compactMap { try? JSONDecoder.vault.decode(VaultAuditEntry.self, from: $0) }
+            .filter { $0.at >= since && !Self.ownerActions.contains($0.action) }
+        // One request is one ask per secret, whatever lines it left.
+        var requests: [String: [VaultAuditEntry]] = [:]
+        for e in entries {
+            let key = e.secret + "|" + (e.requestId ?? "\(e.at.timeIntervalSince1970)|\(e.cardId ?? "")")
+            requests[key, default: []].append(e)
+        }
+        func top(_ texts: [String]) -> [VaultAskSummary.Count] {
+            Dictionary(grouping: texts.filter { !$0.isEmpty }, by: { $0 })
+                .map { VaultAskSummary.Count(text: $0.key, count: $0.value.count) }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0.text < $1.text }
+                .prefix(limit).map { $0 }
+        }
+        return Dictionary(grouping: requests.values, by: { $0[0].secret }).map { secret, asks in
+            let firsts = asks.map { group in group.first { $0.outcome == .asked } ?? group[0] }
+            return VaultAskSummary(
+                secret: secret,
+                asks: asks.count,
+                approved: asks.filter { $0.contains { $0.decider == .human && $0.outcome == .allowed } }.count,
+                denied: asks.filter { $0.contains { ($0.decider == .human && $0.outcome == .denied) || $0.decider == .timeout } }.count,
+                outsideCard: asks.filter { $0.contains { $0.cardId == nil || $0.cardId?.hasPrefix("unverified:") == true } }.count,
+                lastAt: asks.flatMap { $0 }.map(\.at).max() ?? since,
+                reasons: top(firsts.compactMap(\.reason)),
+                why: top(firsts.compactMap { $0.detail.map(Self.askCause) }),
+                commands: top(firsts.compactMap(\.command))
+            )
+        }.sorted { $0.asks != $1.asks ? $0.asks > $1.asks : $0.secret < $1.secret }
+    }
+
+    /// An ask's detail without the calling process chain.
+    static func askCause(_ detail: String) -> String {
+        detail.components(separatedBy: ", called by:").first ?? detail
+    }
+
     /// Newest first.
     public func log(limit: Int = 200, cardId: String? = nil, secret: String? = nil) -> [VaultAuditEntry] {
         guard let data = FileManager.default.contents(atPath: auditPath) else { return [] }

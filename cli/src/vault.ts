@@ -79,6 +79,18 @@ export function secretDisplay(name: string): string {
   return project ? `${key} · ${project} · ${environment}` : name;
 }
 
+export interface VaultAskSummary {
+  secret: string;
+  asks: number;
+  approved: number;
+  denied: number;
+  outsideCard: number;
+  lastAt: string;
+  reasons: Array<{ text: string; count: number }>;
+  why: Array<{ text: string; count: number }>;
+  commands: Array<{ text: string; count: number }>;
+}
+
 export interface VaultAuditEntry {
   at: string;
   machine: string;
@@ -744,6 +756,7 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv rm NAME [NAME..] --reason "..."                         delete secrets (asks Rogerio, one approval)
   kv rm --plan <file> [--dry-run] --reason "..."            the names from a file: a JSON array or one per line
   kv log [--card ID] [--secret NAME] [--limit N] [--json]   the audit log, newest first
+  kv asks [--days 30] [--json]                              per secret, how often you were asked, why, and the reasons given
   kv leases [--card ID]                                     active card leases
   kv tier NAME <tier> [--lease 1h|--every-use-asks|--leases] | kv rules NAME "..." | kv label NAME "..."  [--reason "..."]
                                                             change a secret (asks Rogerio); --lease is how long an
@@ -1062,6 +1075,28 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
         const next = body[i + 1];
         const sameCall = next && next.command === e.command && next.cardId === e.cardId && next.at.slice(0, 19) === e.at.slice(0, 19);
         if (e.command && !sameCall) out(`    $ ${logCommand(e.command)}\n`);
+      }
+      return 0;
+    }
+
+    case "asks": {
+      const json = takeFlag(args, "--json");
+      const days = takeOption(args, "--days") ?? "30";
+      const { body } = await client.call<VaultAskSummary[]>("GET", `asks?days=${encodeURIComponent(days)}`);
+      if (json) {
+        out(JSON.stringify(body, null, 2) + "\n");
+        return 0;
+      }
+      if (body.length === 0) {
+        out(`No asks in the last ${days} days.\n`);
+        return 0;
+      }
+      for (const a of body) {
+        const outside = a.outsideCard ? `, ${a.outsideCard} outside a card` : "";
+        out(`${String(a.asks).padStart(4)}  ${secretDisplay(a.secret)}  (${a.approved} approved, ${a.denied} denied${outside}; last ${a.lastAt.slice(0, 10)})\n`);
+        for (const w of a.why) out(`        why: ${w.text} x${w.count}\n`);
+        for (const r of a.reasons) out(`        reason: ${r.text} x${r.count}\n`);
+        for (const c of a.commands) out(`        $ ${logCommand(c.text)} x${c.count}\n`);
       }
       return 0;
     }

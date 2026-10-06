@@ -303,3 +303,48 @@ struct VaultRecentApprovalsTests {
         #expect(Set(wider) == ["RECENT", "ON_BOX", "OLD_LEASED", "OLD_ONCE", "OLD_LEASE_ENDED"])
     }
 }
+
+@Suite("Vault: ask summary")
+struct VaultAskSummaryTests {
+    @Test func countsEachRequestOnceWithItsCausesAndReasons() async throws {
+        let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
+        try await store.ensureIdentity()
+        let now = Date()
+        func entry(_ secret: String, _ request: String, outcome: VaultOutcome, decider: VaultDecider, card: String?,
+                   action: String = "env", reason: String = "Run the dev stack", detail: String? = nil,
+                   hoursAgo: Double = 1) -> VaultAuditEntry {
+            VaultAuditEntry(at: now.addingTimeInterval(-hoursAgo * 3600), machine: "box", cardId: card, secret: secret,
+                            tier: .judged, outcome: outcome, decider: decider, action: action, command: "pnpm dev",
+                            reason: reason, detail: detail, requestId: request)
+        }
+        // Two asks for SENDGRID: one approved from outside a card, one denied by timeout.
+        await store.append(entry("SENDGRID", "r1", outcome: .asked, decider: .rule, card: nil,
+                                 detail: "Jev asked for a human (61%), called by: node kv.js env"))
+        await store.append(entry("SENDGRID", "r1", outcome: .allowed, decider: .human, card: "unverified:card_1"))
+        await store.append(entry("SENDGRID", "r2", outcome: .asked, decider: .rule, card: "card_2",
+                                 detail: "Jev asked for a human (55%)"))
+        await store.append(entry("SENDGRID", "r2", outcome: .denied, decider: .timeout, card: "card_2"))
+        // One ask on the box's mirror.
+        _ = await store.appendMirror(machine: "mac", lines: [
+            String(decoding: try JSONEncoder.vaultLine.encode(
+                entry("LICENSE", "r3", outcome: .allowed, decider: .human, card: "card_3", reason: "Take screenshots")), as: UTF8.self),
+        ])
+        // Not counted: owner actions, Jev's own allows, asks before the window.
+        await store.append(entry("LICENSE", "r4", outcome: .asked, decider: .rule, card: "card_3", action: "edit"))
+        await store.append(entry("LICENSE", "r5", outcome: .allowed, decider: .jev, card: "card_3"))
+        await store.append(entry("LICENSE", "r6", outcome: .asked, decider: .rule, card: "card_3", hoursAgo: 48))
+
+        let summary = await store.askSummary(since: now.addingTimeInterval(-24 * 3600))
+        #expect(summary.map(\.secret) == ["SENDGRID", "LICENSE"])
+        let sendgrid = try #require(summary.first)
+        #expect(sendgrid.asks == 2)
+        #expect(sendgrid.approved == 1)
+        #expect(sendgrid.denied == 1)
+        #expect(sendgrid.outsideCard == 1)
+        #expect(sendgrid.reasons == [.init(text: "Run the dev stack", count: 2)])
+        #expect(Set(sendgrid.why.map(\.text)) == ["Jev asked for a human (61%)", "Jev asked for a human (55%)"])
+        #expect(sendgrid.commands == [.init(text: "pnpm dev", count: 2)])
+        #expect(summary[1].asks == 1)
+        #expect(summary[1].reasons == [.init(text: "Take screenshots", count: 1)])
+    }
+}
