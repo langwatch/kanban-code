@@ -606,7 +606,7 @@ test("kv same says how a value compares with the stored one and writes no secret
   assert.equal(await runKv(["same", "METABASE_API_KEY"], kvIo("rotated")), 0);
   m.close();
   assert.deepEqual(printed, ["same\n", "different\n"]);
-  assert.deepEqual(m.calls.map((c) => `${c.method} ${c.path}`), ["POST /v1/vault/compare", "POST /v1/vault/compare"]);
+  assert.deepEqual(m.calls.map((c) => `${c.method} ${c.path}`), ["POST /v1/vault/compare?card=card_x", "POST /v1/vault/compare?card=card_x"]);
   assert.equal(m.calls[0].body.value, "stored");
 });
 

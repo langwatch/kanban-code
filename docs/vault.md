@@ -244,7 +244,7 @@ kv get NAME [--reason "..."]
 kv request NAME[:scope] [NAME..] --reason "..."
 kv aws <profile> [--reason "..."]
 kv set KEY [--project P|.] [--env E] [--tier t] [--rules "..."] [--label "..."] [--lease 1h|--every-use-asks] [--reason "..."]   value on stdin (kv add is the same)
-kv same KEY [--project P|.] [--env E]                             value on stdin; prints same, different or absent
+kv same KEY [--project P|.] [--env E]                             value on stdin; prints same, different or absent; audited, 10 checks per caller (30 in all) per 5 minutes
 kv ls [--project P] | kv log | kv leases | kv status   (status also says who the master takes you for)
 kv owner                                     the keys of the owner-only secrets, and how many are sealed
 kv audit check                               broken chain, lines missing on a machine (exit 1 on a problem)

@@ -414,6 +414,8 @@ public actor VaultBroker {
     static let mintWhy = "its long-lived AWS key opens only with your Touch ID or Face ID"
 
     private var pending: [String: Pending] = [:]
+    /// Recent value checks, for `compare(_:caller:now:)`'s limit.
+    private var compareLog: [(caller: String, at: Date)] = []
     private var held: [String: HeldValue] = [:]
     /// What a device unlocked for a request, until the request settles.
     private var delivered: [String: VaultUnsealed] = [:]
@@ -978,6 +980,34 @@ public actor VaultBroker {
         }
         let same = existing.sealed == nil && !existing.value.isEmpty && existing.value == req.value
         return VaultValueCheck(name: existing.name, outcome: same ? .same : .different)
+    }
+
+    /// `compare` for an agent: each check is audited, and past
+    /// `VaultPolicy.compareLimit` checks per caller (or `compareLimitAll` in
+    /// all) in `VaultPolicy.rateWindow` it answers nil until the window moves.
+    public func compare(_ req: VaultAddRequest, caller: VaultCaller, now: Date = Date()) async -> VaultValueCheck? {
+        let who = Self.principalKey(caller)
+        compareLog = compareLog.filter { now.timeIntervalSince($0.at) < VaultPolicy.rateWindow }
+        let mine = compareLog.filter { $0.caller == who }.count
+        let name = storedName(for: req) ?? req.name
+        let tier = ((try? await store.secret(name)) ?? nil)?.tier
+        func record(_ outcome: VaultOutcome, _ detail: String) async {
+            await store.append(VaultAuditEntry(
+                at: now, machine: machine, cardId: caller.cardId ?? caller.claimedCardId.map { "unverified:\($0)" },
+                sessionId: caller.sessionId, secret: name, tier: tier, outcome: outcome, decider: .rule, action: "compare",
+                detail: caller.auditNote.map { "\(detail), \($0)" } ?? detail
+            ))
+        }
+        let limit = mine >= VaultPolicy.compareLimit ? VaultPolicy.compareLimit
+            : compareLog.count >= VaultPolicy.compareLimitAll ? VaultPolicy.compareLimitAll : nil
+        if let limit {
+            await record(.denied, "over \(limit) value checks in \(Int(VaultPolicy.rateWindow / 60)) minutes")
+            return nil
+        }
+        compareLog.append((who, now))
+        let check = await compare(req)
+        await record(.allowed, "value check: \(check.outcome.rawValue)")
+        return check
     }
 
     /// The name an add stores under: `project/environment/KEY` when it

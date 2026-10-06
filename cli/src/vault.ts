@@ -931,7 +931,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       if (!name) throw new VaultCliError("kv same KEY [--project P|.] [--env E]  (value on stdin)");
       const value = io.stdin ? (await io.stdin()).replace(/\r?\n$/, "") : await readSecretFromStdin(name);
       if (!value) throw new VaultCliError("kv: empty value, nothing to compare");
-      const { body } = await client.call<{ name: string; outcome: string }>("POST", "compare", {
+      const { body } = await client.call<{ name: string; outcome: string }>("POST", `compare${ctx.cardId ? `?card=${ctx.cardId}` : ""}`, {
         name,
         value,
         project,

@@ -144,7 +144,11 @@ enum RemoteVaultRoutes {
             guard let req = decode(VaultAddRequest.self) else {
                 return .error(400, "body must be {\"name\", \"value\", \"project\", \"environment\"}")
             }
-            return .json(await vault.broker.compare(req))
+            let who = await caller(claimedCard: query["card"], sessionId: nil)
+            guard let check = await vault.broker.compare(req, caller: who) else {
+                return .error(429, "too many value checks, wait \(Int(VaultPolicy.rateWindow / 60)) minutes")
+            }
+            return .json(check)
 
         case ("PATCH", "secrets", 1):
             guard let req = decode(VaultBatchEditRequest.self) else {

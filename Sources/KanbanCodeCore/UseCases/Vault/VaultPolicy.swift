@@ -90,6 +90,10 @@ public enum VaultPolicy {
 
     public static let rateLimit = 10
     public static let rateWindow: TimeInterval = 5 * 60
+    /// Value checks (`kv same`) one caller may make in `rateWindow`, and all
+    /// callers together, so a short value cannot be found by guessing.
+    public static let compareLimit = 10
+    public static let compareLimitAll = 30
     /// Jev must be at least this sure to allow on its own.
     public static let jevAllowConfidence = 0.6
     /// How long the human has to answer before the request is denied.

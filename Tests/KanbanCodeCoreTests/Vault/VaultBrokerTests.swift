@@ -388,6 +388,24 @@ struct VaultBrokerTests {
         #expect(try await store.secret("OPEN")?.value == "open-value")
     }
 
+    /// An agent's value checks are audited and stop past the limit, so a
+    /// short value cannot be found by guessing.
+    @Test func valueChecksAreAuditedAndRateLimited() async throws {
+        let (broker, store, _) = try await makeBroker()
+        let t0 = Date()
+        for i in 0..<VaultPolicy.compareLimit {
+            #expect(await broker.compare(VaultAddRequest(name: "JUDGED", value: "guess\(i)"), caller: inside, now: t0)?.outcome == .different)
+        }
+        #expect(await broker.compare(VaultAddRequest(name: "JUDGED", value: "judged-value"), caller: inside, now: t0) == nil)
+        let later = t0.addingTimeInterval(VaultPolicy.rateWindow + 1)
+        #expect(await broker.compare(VaultAddRequest(name: "JUDGED", value: "judged-value"), caller: inside, now: later)?.outcome == .same)
+
+        let checks = await store.log(limit: 100).filter { $0.action == "compare" }
+        #expect(checks.count == VaultPolicy.compareLimit + 2)
+        #expect(checks.filter { $0.outcome == .denied }.count == 1)
+        #expect(checks.allSatisfy { $0.secret == "JUDGED" })
+    }
+
     /// The Mac composer's replace: the user's own yes, so no approval, and
     /// only the value changes.
     @Test func aTrustedReplaceWithOnlyAValueKeepsTheTierAndRules() async throws {
