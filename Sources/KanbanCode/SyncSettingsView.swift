@@ -178,7 +178,11 @@ struct SyncSettingsView: View {
         if let status {
             parts.append(status.message)
             if let count = status.count {
-                let noun = entry.mode == .optmem ? "memor" + (count == 1 ? "y" : "ies") : "file" + (count == 1 ? "" : "s")
+                let noun = switch entry.mode {
+                case .optmem: "memor" + (count == 1 ? "y" : "ies")
+                case .json: "key" + (count == 1 ? "" : "s")
+                default: "file" + (count == 1 ? "" : "s")
+                }
                 parts.append("\(count) \(noun)")
             }
             if let last = status.lastSync {

@@ -592,28 +592,42 @@ struct SyncJSONKeysTests {
         #expect(SyncJSONKeys.merge(into: Data(#"{"view": "bo"#.utf8), keys: ["view"], from: projection) == nil)
     }
 
-    @Test func aChangeToAnotherKeyIsNoNewVersionAndAHalfWrittenFileKeepsTheLast() {
+    @Test func eachKeyIsAVersionOfItsOwnAndAHalfWrittenFileKeepsTheLast() {
         let home = tempDir()
         let path = home + "/config.json"
         write(path, #"{"view": "list", "logins": {"a": 1}}"#, mtime: 1000)
-        let scanner = SyncScanner(home: home, machineId: "A", jsonKeys: ["view"])
+        let scanner = SyncScanner(home: home, machineId: "A", jsonKeys: ["view", "hideMinimap"])
         let first = scanner.scan(root: path, excludes: SyncExcludes([]), previous: [:])
-        #expect(first[""]?.mtime == 1000)
+        #expect(first["view"]?.mtime == 1000)
+        #expect(first["hideMinimap"] == nil)
+        #expect(scanner.content(root: path, rel: "view") == Data(#""list""#.utf8))
 
         write(path, #"{"view": "list", "logins": {"a": 1, "b": 2}}"#, mtime: 2000)
         let second = scanner.scan(root: path, excludes: SyncExcludes([]), previous: first)
-        #expect(second[""]?.hash == first[""]?.hash)
-        #expect(second[""]?.mtime == 1000)
+        #expect(second["view"]?.hash == first["view"]?.hash)
+        #expect(second["view"]?.mtime == 1000)
 
         write(path, #"{"view": "li"#, mtime: 3000)
         let third = scanner.scan(root: path, excludes: SyncExcludes([]), previous: second)
-        #expect(third[""]?.hash == first[""]?.hash)
-        #expect(third[""]?.deleted == false)
+        #expect(third["view"]?.hash == first["view"]?.hash)
+        #expect(third["view"]?.deleted == false)
 
-        write(path, #"{"view": "board", "logins": {}}"#, mtime: 4000)
+        write(path, #"{"view": "list", "hideMinimap": true}"#, mtime: 4000)
         let fourth = scanner.scan(root: path, excludes: SyncExcludes([]), previous: third)
-        #expect(fourth[""]?.hash != first[""]?.hash)
-        #expect(fourth[""]?.mtime == 4000)
+        #expect(fourth["view"]?.mtime == 1000)
+        #expect(fourth["hideMinimap"]?.mtime == 4000)
+
+        // A key dropped from the file is a deletion of the value it had.
+        write(path, #"{"view": "list"}"#, mtime: 5000)
+        let fifth = scanner.scan(root: path, excludes: SyncExcludes([]), previous: fourth)
+        #expect(fifth["hideMinimap"]?.deleted == true)
+        #expect(fifth["hideMinimap"]?.previousHash == fourth["hideMinimap"]?.hash)
+        #expect(fifth["hideMinimap"]?.mtime == 5000)
+        #expect(fifth["view"] == fourth["view"])
+
+        // A manifest from before keys had versions of their own is dropped.
+        let legacy = ["": SyncItem(hash: "x", mtime: 1, origin: "A")]
+        #expect(scanner.scan(root: path, excludes: SyncExcludes([]), previous: legacy)[""] == nil)
     }
 }
 
@@ -648,7 +662,9 @@ extension AgentSyncEngineTests {
         #expect(!FileManager.default.fileExists(atPath: box + "/.config/app"))
         await a.round()
         #expect(read(mac + "/.config/app/config.json")?.contains("\"mac\": \"other\"") == true)
-        #expect(await a.file(entryId: entries[0].id, path: "") == Data(#"{"hideMinimap":true,"view":"list"}"#.utf8))
+        #expect(await a.file(entryId: entries[0].id, path: "view") == Data(#""list""#.utf8))
+        #expect(await a.file(entryId: entries[0].id, path: "hideMinimap") == Data("true".utf8))
+        #expect(await a.file(entryId: entries[0].id, path: "logins") == nil)
 
         // A key changed on the box reaches the Mac; a login added there does not.
         write(boxConfig, "{\n  \"logins\": {\"box\": \"secret\", \"new\": \"x\"},\n  \"view\": \"list\",\n  \"hideMinimap\": false\n}\n",
@@ -664,6 +680,40 @@ extension AgentSyncEngineTests {
         await a.round()
         await b.round()
         #expect(FileManager.default.fileExists(atPath: boxConfig))
+    }
+
+    @Test func aNewerChangeToOneKeyDoesNotUndoAnotherKeySetElsewhere() async throws {
+        let mac = tempDir(), box = tempDir()
+        let macId = MachineIdentity(id: "machine_mac", name: "mac")
+        let boxId = MachineIdentity(id: "machine_box", name: "box", alwaysOn: true)
+        let transport = LoopbackTransport()
+        let entries = [SyncEntry(mode: .json, path: "~/.config/app/config.json", keys: ["hideMinimap", "view"])]
+        let a = try engine(home: mac, identity: macId, peer: boxId, transport: transport, entries: entries)
+        let b = try engine(home: box, identity: boxId, peer: macId, transport: transport, entries: entries)
+        transport.engines = [macId.id: a, boxId.id: b]
+        let macConfig = mac + "/.config/app/config.json", boxConfig = box + "/.config/app/config.json"
+        let now = Date().timeIntervalSince1970
+        write(macConfig, #"{"view": "split"}"#, mtime: now - 100)
+        write(boxConfig, #"{"view": "split"}"#, mtime: now - 100)
+        await a.round()
+        await b.round()
+
+        // The minimap is hidden on the Mac, then the box changes the view
+        // without ever having seen it hidden.
+        write(macConfig, #"{"view": "split", "hideMinimap": true}"#, mtime: now - 50)
+        await a.round()
+        write(boxConfig, #"{"view": "list"}"#, mtime: now - 10)
+        await b.round()
+        await a.round()
+        await b.round()
+        #expect(read(macConfig) == #"{"view":"list","hideMinimap":true}"#)
+        #expect(read(boxConfig) == #"{"view":"list","hideMinimap":true}"#)
+
+        // Showing it again on the box removes the key on the Mac too.
+        write(boxConfig, #"{"view": "list"}"#, mtime: now + 10)
+        await b.round()
+        await a.round()
+        #expect(read(macConfig) == #"{"view":"list"}"#)
     }
 
     @Test func aMachineWithoutTheFileIsLeftWithoutIt() async throws {

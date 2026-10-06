@@ -402,7 +402,11 @@ public actor AgentSyncEngine {
         var changedLocally = false
         for entry in config.entries where entry.enabled && entry.copiesFiles {
             guard var theirs = remote.manifests[entry.id] else { continue }
-            theirs = theirs.filter { !isLoginFile(entry, path: $0.key) }
+            if entry.mode == .json {
+                theirs = theirs.filter { entry.keys.contains($0.key) }
+            } else {
+                theirs = theirs.filter { !isLoginFile(entry, path: $0.key) }
+            }
             let (applied, failed) = await apply(
                 entry: entry, actions: SyncPlanner.plan(local: manifests[entry.id] ?? [:], remote: theirs),
                 peer: peer, rewriteHome: true)
@@ -440,9 +444,19 @@ public actor AgentSyncEngine {
             case .adopt(let path, _):
                 manifests[entry.id]?[path]?.synced = true
             case .delete(let path, let remote):
-                // A settings file removed on a peer is never removed here.
-                if entry.mode == .json { continue }
                 guard manifests[entry.id]?[path] == planned[path] else { continue }
+                if entry.mode == .json {
+                    // A key removed on a peer; the file itself stays.
+                    do {
+                        manifests[entry.id, default: [:]][path] = try applier.deleteKey(path: rootPath, key: path, remote: remote)
+                        applied += 1
+                    } catch SyncApplyError.missing {
+                        continue
+                    } catch {
+                        failure = failure ?? error.localizedDescription
+                    }
+                    continue
+                }
                 manifests[entry.id, default: [:]][path] = applier.delete(root: rootPath, rel: path, remote: remote)
                 applied += 1
             case .fetch(let path, let remote, let keepPrevious):

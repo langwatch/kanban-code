@@ -3,10 +3,9 @@ import Foundation
 /// Named top-level keys of a JSON object file, read and written as text:
 /// the bytes of every other key stay exactly as their program wrote them.
 ///
-/// What travels between machines is the projection: an object with only
-/// the named keys the file has, sorted, each value with its whitespace
-/// removed. Two files with the same values for those keys give the same
-/// bytes on every platform, whatever else they hold.
+/// What travels between machines is each named key's value with its
+/// whitespace removed, so the same value gives the same bytes on every
+/// platform, whatever else the file holds.
 public enum SyncJSONKeys {
     struct Member {
         var key: String
@@ -33,6 +32,18 @@ public enum SyncJSONKeys {
         }
         out.append(UInt8(ascii: "}"))
         return Data(out)
+    }
+
+    /// The value of each named key `data` holds, without whitespace; nil
+    /// when `data` is not a JSON object.
+    public static func values(of data: Data, keys: [String]) -> [String: Data]? {
+        guard let members = members(of: data) else { return nil }
+        let named = Set(keys)
+        var out: [String: Data] = [:]
+        for member in members where named.contains(member.key) {
+            out[member.key] = Data(minified(member.value))
+        }
+        return out
     }
 
     /// `data` with the named keys as `projection` has them: a key it holds
