@@ -53,14 +53,16 @@ public struct RushTokenKeeper: Sendable {
     }
 
     /// The hosts to restart with a fresh token now, out of `hosts` (this
-    /// master's card hosts, as rush lists them). Each is counted as
-    /// restarted; it stays clear until its assistant is read again.
-    public mutating func due(_ hosts: [RushSessionInfo], now: Date = Date()) -> [(host: RushSessionInfo, refresh: Refresh)] {
+    /// master's card hosts, as rush lists them), at most `limit`; the others
+    /// wait for a later pass. Each is counted as restarted; it stays clear
+    /// until its assistant is read again.
+    public mutating func due(_ hosts: [RushSessionInfo], now: Date = Date(),
+                             limit: Int = .max) -> [(host: RushSessionInfo, refresh: Refresh)] {
         let listed = Set(hosts.map(\.id))
         missing.formIntersection(listed)
         refreshes = refreshes.filter { listed.contains($0.key) }
         var out: [(host: RushSessionInfo, refresh: Refresh)] = []
-        for host in hosts where missing.contains(host.id) {
+        for host in hosts where missing.contains(host.id) && out.count < limit {
             guard let refresh = Self.refresh(of: host) else { continue }
             let last = refreshes[host.id]
             if let last, last.count >= Self.maxRefreshes || now.timeIntervalSince(last.at) < Self.retryAfter { continue }

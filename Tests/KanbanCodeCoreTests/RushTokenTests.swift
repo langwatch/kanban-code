@@ -30,9 +30,10 @@ struct RushTokenTests {
             try setHost(alive: true, sleeping: false, claudePid: 4242)
         }
 
-        func setHost(alive: Bool, sleeping: Bool, claudePid: Int?, state: String = "idle", queue: [String] = []) throws {
+        func setHost(alive: Bool, sleeping: Bool, claudePid: Int?, state: String = "idle", queue: [String] = [],
+                     cwd: String? = nil) throws {
             var host: [String: Any] = [
-                "id": "7e57ab1e", "sessionId": "7e57ab1e-0000-4000-8000-000000000001", "cwd": "/repo",
+                "id": "7e57ab1e", "sessionId": "7e57ab1e-0000-4000-8000-000000000001", "cwd": cwd ?? dir,
                 "state": state, "alive": alive, "sleeping": sleeping, "queue": queue,
                 "meta": ["kanban_session": "rush-7e57ab1e"],
             ]
@@ -143,6 +144,17 @@ struct RushTokenTests {
         }
         #expect(restarts == RushTokenKeeper.maxRefreshes)
 
+        // A pass starts at most `limit`; the rest wait, still due.
+        var many = RushTokenKeeper()
+        let resting = ["a1", "a2", "a3"].map { id -> RushSessionInfo in
+            var info = RushSessionInfo(id: id, sessionId: id, cwd: "/repo", state: "idle", alive: false)
+            info.sleeping = true
+            many.observe(hostId: id, cardId: "card_\(id)", tokenCard: nil)
+            return info
+        }
+        #expect(many.due(resting, now: start, limit: 2).map(\.host.id) == ["a1", "a2"])
+        #expect(many.due(resting, now: start, limit: 2).map(\.host.id) == ["a3"])
+
         // A host rush no longer lists is forgotten.
         keeper.observe(hostId: "7e57ab1e", cardId: "card_a", tokenCard: nil)
         #expect(keeper.due([], now: now).isEmpty)
@@ -226,6 +238,16 @@ struct RushTokenTests {
         // Now the card has one on file: a resting host is left alone.
         await engine.checkRushTokens(readToken: { _ in .unreadable })
         #expect(rush.starts().count == 1)
+    }
+
+    @Test("a host whose folder is gone is not started again")
+    func monitorSkipsHostWithoutFolder() async throws {
+        let rush = try FakeRush()
+        defer { rush.cleanup() }
+        let (engine, _, _) = try await makeEngine(rush: rush)
+        try rush.setHost(alive: false, sleeping: true, claudePid: nil, cwd: rush.dir + "/removed-worktree")
+        await engine.checkRushTokens(readToken: { _ in .absent })
+        #expect(rush.starts().isEmpty)
     }
 
     @Test("a host with the card's token, or whose environment cannot be read, is left alone")

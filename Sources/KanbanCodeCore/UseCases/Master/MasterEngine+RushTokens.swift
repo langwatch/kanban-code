@@ -15,6 +15,9 @@ extension MasterEngine {
         }
     }
 
+    /// How many hosts one pass starts again at most.
+    nonisolated static let rushTokenRefreshesPerPass = 3
+
     /// One pass of `runRushTokenMonitor`.
     func checkRushTokens(readToken: (Int) async -> ProcessEnvironment.Reading = {
         await ProcessEnvironment.read(VaultCardTokens.environmentName, pid: $0)
@@ -49,7 +52,11 @@ extension MasterEngine {
             rushTokens.observe(hostId: host.id, cardId: cardId, tokenCard: tokenCard)
         }
         let cardByHost = Dictionary(ours.map { ($0.host.id, $0.cardId) }, uniquingKeysWith: { first, _ in first })
-        for (host, refresh) in rushTokens.due(ours.map(\.host)) {
+        // A host whose folder is gone cannot start again here; the rest go a
+        // few per pass, so a master that finds many does not start them all
+        // at once.
+        let startable = ours.map(\.host).filter { FileManager.default.fileExists(atPath: $0.cwd) }
+        for (host, refresh) in rushTokens.due(startable, limit: Self.rushTokenRefreshesPerPass) {
             guard let cardId = cardByHost[host.id], !resumingCards.contains(cardId) else { continue }
             await refreshRushToken(cardId: cardId, host: host, refresh: refresh)
         }
