@@ -661,6 +661,19 @@ public actor VaultStore {
         return mirrorTail(machine: machine)
     }
 
+    /// The releases a human approved, on this machine and on the peers
+    /// mirrored here: those since `since`, and older ones whose card lease
+    /// still runs at `now`. Newest first.
+    public func approvals(since: Date, now: Date = Date()) -> [VaultAuditEntry] {
+        let lines = auditLines() + mirroredMachines().flatMap { mirrorLines(machine: $0) }
+        // The logs hold tens of thousands of ambient releases: decode only the human ones.
+        let human = Data("\"decider\":\"human\"".utf8)
+        return lines.filter { $0.range(of: human) != nil }
+            .compactMap { try? JSONDecoder.vault.decode(VaultAuditEntry.self, from: $0) }
+            .filter { $0.outcome == .allowed && $0.decider == .human && ($0.at >= since || ($0.leaseUntil ?? .distantPast) > now) }
+            .sorted { $0.at > $1.at }
+    }
+
     /// Newest first.
     public func log(limit: Int = 200, cardId: String? = nil, secret: String? = nil) -> [VaultAuditEntry] {
         guard let data = FileManager.default.contents(atPath: auditPath) else { return [] }

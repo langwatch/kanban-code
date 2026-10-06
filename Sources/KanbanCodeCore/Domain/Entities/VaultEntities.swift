@@ -298,12 +298,15 @@ public struct VaultAuditEntry: Codable, Sendable, Equatable {
     /// Why it was decided so (Jev's choice, the rule that fired).
     public var detail: String?
     public var requestId: String?
+    /// When the card lease a human approval gave ends.
+    public var leaseUntil: Date?
     /// SHA-256 of the line before this one in the log.
     public var prev: String?
 
     public init(at: Date = Date(), machine: String, cardId: String?, sessionId: String? = nil, secret: String,
                 tier: VaultTier?, outcome: VaultOutcome, decider: VaultDecider, action: String,
-                command: String? = nil, reason: String? = nil, detail: String? = nil, requestId: String? = nil) {
+                command: String? = nil, reason: String? = nil, detail: String? = nil, requestId: String? = nil,
+                leaseUntil: Date? = nil) {
         self.at = at
         self.machine = machine
         self.cardId = cardId
@@ -317,6 +320,7 @@ public struct VaultAuditEntry: Codable, Sendable, Equatable {
         self.reason = reason
         self.detail = detail
         self.requestId = requestId
+        self.leaseUntil = leaseUntil
     }
 }
 

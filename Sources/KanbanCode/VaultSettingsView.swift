@@ -5,11 +5,15 @@ import SwiftUI
 /// The caller the Mac app acts as when Rogerio edits the vault in Settings.
 private let settingsCaller = VaultCaller(ancestry: ["Kanban Code settings"])
 
-/// Settings > Vault: the secrets (names only), their tiers and rules, and
-/// the recent releases of this Mac.
+/// Settings > Vault: the secrets (names only), their tiers and rules, the
+/// approvals you gave recently and the releases of this Mac.
 struct VaultSettingsView: View {
     @State private var secrets: [VaultSecretInfo] = []
     @State private var log: [VaultAuditEntry] = []
+    @State private var approvals: [VaultAuditEntry] = []
+    @State private var cardTitles: [String: String] = [:]
+    @State private var approvalHours = 24
+    @State private var showAllReleases = false
     @State private var status = ""
     @State private var selected: String?
     @State private var showAdd = false
@@ -94,7 +98,23 @@ struct VaultSettingsView: View {
                         }
                         .id(s.name + s.updatedAt.description)
                     } else {
-                        VaultLogList(entries: log)
+                        VStack(spacing: 6) {
+                            Picker("", selection: $showAllReleases) {
+                                Text("Recently approved").tag(false)
+                                Text("All releases").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .padding(.horizontal, 8)
+                            if showAllReleases {
+                                VaultLogList(entries: log)
+                            } else {
+                                VaultApprovalsList(entries: approvals, cardTitles: cardTitles, hours: approvalHours) {
+                                    approvalHours += 24
+                                    Task { await reloadApprovals() }
+                                }
+                            }
+                        }
                     }
                 }
                 .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
@@ -128,10 +148,96 @@ struct VaultSettingsView: View {
             self.error = "\(error)"
         }
         log = await vault.store.log(limit: 200)
+        await reloadApprovals()
         let leases = await vault.store.activeLeases().count
         status = unlocked
             ? "\(secrets.count) secrets, \(leases) active card leases. Values never show here; agents get them with kv."
             : "Locked: this Mac has no vault key yet. The box is the vault's home; its key is imported once."
+    }
+
+    private func reloadApprovals() async {
+        let since = Date().addingTimeInterval(-Double(approvalHours) * 3600)
+        approvals = await vault.store.approvals(since: since)
+        for card in Set(approvals.compactMap(\.cardId)) where cardTitles[card] == nil {
+            if let title = await vault.broker.cardTitle(card) { cardTitles[card] = title }
+        }
+    }
+}
+
+/// The approvals you gave, one row per request: what, for which card, why,
+/// and how long its card lease runs.
+struct VaultApprovalsList: View {
+    let entries: [VaultAuditEntry]
+    let cardTitles: [String: String]
+    let hours: Int
+    let showMore: () -> Void
+
+    private struct Approval: Identifiable {
+        var id: String
+        var entries: [VaultAuditEntry]
+        var first: VaultAuditEntry { entries[0] }
+    }
+
+    private var grouped: [Approval] {
+        var order: [String] = []
+        var byId: [String: [VaultAuditEntry]] = [:]
+        for e in entries {
+            let key = e.requestId ?? "\(e.machine)|\(e.at.timeIntervalSince1970)|\(e.secret)"
+            if byId[key] == nil { order.append(key) }
+            byId[key, default: []].append(e)
+        }
+        return order.map { Approval(id: $0, entries: byId[$0]!) }
+    }
+
+    var body: some View {
+        List {
+            if entries.isEmpty {
+                Text("No approvals in the last \(span).").foregroundStyle(.secondary)
+            }
+            ForEach(grouped) { a in
+                let e = a.first
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                        Text(Set(a.entries.map { VaultSecretName($0.secret).key }).sorted().joined(separator: ", "))
+                            .font(.system(.body, design: .monospaced))
+                        Spacer()
+                        Text(e.at.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
+                            .help(e.at.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    Text([card(e), lease(e)].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let reason = e.reason, !reason.isEmpty {
+                        Text(reason).font(.caption).lineLimit(2)
+                    }
+                    if let command = e.command, !command.isEmpty {
+                        Text(command).font(.system(.caption, design: .monospaced)).lineLimit(2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            HStack {
+                Spacer()
+                Button("Show 24 more hours") { showMore() }
+                    .buttonStyle(.link)
+                Spacer()
+            }
+        }
+    }
+
+    private var span: String { hours == 24 ? "24 hours" : "\(hours) hours" }
+
+    private func card(_ e: VaultAuditEntry) -> String? {
+        guard let id = e.cardId else { return "outside any card" }
+        return cardTitles[id] ?? id
+    }
+
+    private func lease(_ e: VaultAuditEntry) -> String {
+        guard let until = e.leaseUntil else {
+            return e.action == "lease" || e.detail?.contains("card lease") == true ? "card lease" : "approved once"
+        }
+        if until <= Date() { return "card lease ended \(until.formatted(date: .omitted, time: .shortened))" }
+        return "card lease until \(until.formatted(date: until.timeIntervalSinceNow > 20 * 3600 ? .abbreviated : .omitted, time: .shortened))"
     }
 }
 

@@ -275,3 +275,31 @@ struct VaultAuditCommandTests {
         #expect(kept.count == VaultBroker.auditCommandLimit + 3 && kept.hasSuffix("..."))
     }
 }
+
+@Suite("Vault: recently approved")
+struct VaultRecentApprovalsTests {
+    @Test func approvalsAreHumanAllowsInTheWindowOrStillLeased() async throws {
+        let store = VaultStore(directory: tempVaultDir(), keys: MemoryVaultKeyProvider())
+        try await store.ensureIdentity()
+        let now = Date()
+        func entry(_ secret: String, hoursAgo: Double, decider: VaultDecider = .human, outcome: VaultOutcome = .allowed,
+                   leaseHours: Double? = nil) -> VaultAuditEntry {
+            let at = now.addingTimeInterval(-hoursAgo * 3600)
+            return VaultAuditEntry(at: at, machine: "mac", cardId: "card_1", secret: secret, tier: .ask, outcome: outcome,
+                                   decider: decider, action: "run", leaseUntil: leaseHours.map { at.addingTimeInterval($0 * 3600) })
+        }
+        await store.append(entry("OLD_ONCE", hoursAgo: 30))
+        await store.append(entry("OLD_LEASED", hoursAgo: 30, leaseHours: 48))
+        await store.append(entry("OLD_LEASE_ENDED", hoursAgo: 30, leaseHours: 1))
+        await store.append(entry("RECENT", hoursAgo: 2, leaseHours: 1))
+        await store.append(entry("BY_TIER", hoursAgo: 1, decider: .tier))
+        await store.append(entry("DENIED", hoursAgo: 1, outcome: .denied))
+        _ = await store.appendMirror(machine: "box", lines: [
+            String(decoding: try JSONEncoder.vaultLine.encode(entry("ON_BOX", hoursAgo: 3)), as: UTF8.self),
+        ])
+        let names = await store.approvals(since: now.addingTimeInterval(-24 * 3600), now: now).map(\.secret)
+        #expect(names == ["RECENT", "ON_BOX", "OLD_LEASED"])
+        let wider = await store.approvals(since: now.addingTimeInterval(-48 * 3600), now: now).map(\.secret)
+        #expect(Set(wider) == ["RECENT", "ON_BOX", "OLD_LEASED", "OLD_ONCE", "OLD_LEASE_ENDED"])
+    }
+}

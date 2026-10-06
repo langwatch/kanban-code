@@ -839,7 +839,7 @@ public actor VaultBroker {
 
     private func grant(_ allowed: [(VaultSecret, VaultDecider, String)], wanted: [Wanted], req: VaultReleaseRequest,
                        caller: VaultCaller, now: Date, requestId: String? = nil, unlocked: [String: String] = [:],
-                       minted: [String: AwsProcessCredentials] = [:]) async -> VaultResponse {
+                       minted: [String: AwsProcessCredentials] = [:], leaseUntil: Date? = nil) async -> VaultResponse {
         if req.mode == "aws" {
             guard let s = allowed.first?.0, let role = s.aws else { return .denied("not an AWS profile") }
             let credentials: AwsProcessCredentials
@@ -870,7 +870,8 @@ public actor VaultBroker {
             for (s, by, why) in allowed {
                 await store.recordRelease(s.name, caller: Self.principalKey(caller), now: now)
                 await audit(s, req: req, caller: caller, outcome: .allowed, decider: by,
-                            detail: [why, note].compactMap { $0 }.joined(separator: ", "), requestId: requestId)
+                            detail: [why, note].compactMap { $0 }.joined(separator: ", "), requestId: requestId,
+                            leaseUntil: by == .human ? leaseUntil : nil)
             }
             if caller.insideCard, let card = caller.cardId, let expires = credentials.expiresAt {
                 awsIssued["\(card)|\(s.name)"] = IssuedAws(credentials: credentials, expiresAt: expires, issuedAt: now,
@@ -884,7 +885,8 @@ public actor VaultBroker {
         }
         for (s, by, why) in allowed {
             await store.recordRelease(s.name, caller: Self.principalKey(caller), now: now)
-            await audit(s, req: req, caller: caller, outcome: .allowed, decider: by, detail: why, requestId: requestId)
+            await audit(s, req: req, caller: caller, outcome: .allowed, decider: by, detail: why, requestId: requestId,
+                        leaseUntil: by == .human ? leaseUntil : nil)
         }
         let given = answer(wanted, allowed: Set(allowed.map(\.0.name)), unlocked: unlocked)
         return VaultResponse(status: .granted, message: "released", id: requestId, values: given.values, card: caller.cardId,
@@ -1571,24 +1573,28 @@ public actor VaultBroker {
                 if s.isSealed, unlocked[s.name] == nil, let value = heldValue(s, now: now) { unlocked[s.name] = value }
                 allowed.append((s, decider, why))
             }
+            let leaseUntil = approval == .lease && !covered ? leaseSeconds.map { now.addingTimeInterval($0) } : nil
             return await grant(allowed, wanted: wanted, req: req, caller: p.caller, now: now, requestId: id,
-                               unlocked: unlocked, minted: unsealed?.credentials ?? [:])
+                               unlocked: unlocked, minted: unsealed?.credentials ?? [:], leaseUntil: leaseUntil)
 
         case (_, .lease(let wanted, let reason)):
             guard let card = p.caller.cardId else { return .denied("no card to lease to") }
             for want in wanted {
                 let (name, scope) = (want.name, want.scope)
                 var detail = "by \(by)"
+                var leaseUntil: Date?
                 if by != Self.coveredByLease {
                     let seconds: TimeInterval
                     if let leaseSeconds { seconds = leaseSeconds } else { seconds = await leaseLength(of: wanted.map(\.name), shown: nil) }
                     try? await store.grantLease(VaultLease(cardId: card, secret: name, scope: scope, reason: reason, grantedAt: now,
                                                            expiresAt: now.addingTimeInterval(seconds), grantedBy: "human:\(by)"))
                     detail += ", card lease of \(AttentionCopy.duration(seconds))"
+                    leaseUntil = now.addingTimeInterval(seconds)
                 }
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: card, sessionId: p.caller.sessionId,
                                                    secret: name, tier: nil, outcome: .allowed, decider: by == Self.coveredByLease ? .lease : .human,
-                                                   action: "lease", reason: reason, detail: detail, requestId: id))
+                                                   action: "lease", reason: reason, detail: detail, requestId: id,
+                                                   leaseUntil: leaseUntil))
             }
             let span = leaseSeconds.map { " for \(AttentionCopy.duration($0))" } ?? ""
             return VaultResponse(status: .granted, message: "leased \(wanted.map(\.name).joined(separator: ", ")) to the card\(span)", id: id, card: card)
@@ -1748,13 +1754,13 @@ public actor VaultBroker {
     }
 
     private func audit(_ s: VaultSecret, req: VaultReleaseRequest, caller: VaultCaller, outcome: VaultOutcome,
-                       decider: VaultDecider, detail: String?, requestId: String? = nil) async {
+                       decider: VaultDecider, detail: String?, requestId: String? = nil, leaseUntil: Date? = nil) async {
         await store.append(VaultAuditEntry(
             at: Date(), machine: machine, cardId: caller.cardId ?? caller.claimedCardId.map { "unverified:\($0)" },
             sessionId: caller.sessionId ?? req.sessionId, secret: s.name, tier: s.tier, outcome: outcome, decider: decider,
             action: req.mode, command: req.command.map(Self.auditCommand), reason: req.reason,
             detail: caller.auditNote.map { [detail, $0].compactMap { $0 }.joined(separator: ", ") } ?? detail,
-            requestId: requestId
+            requestId: requestId, leaseUntil: leaseUntil
         ))
     }
 }
