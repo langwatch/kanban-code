@@ -12,14 +12,19 @@ import Foundation
 /// tell which card it belongs to.
 ///
 /// Only the SHA-256 of each token is kept, in `vault/card-tokens.json`,
-/// so tokens survive a restart of the master. A card has one token: a new
-/// session replaces it. A token whose card has no live session is refused
-/// and, after a grace period, removed.
+/// so tokens survive a restart of the master. A card keeps its last
+/// `perCard` tokens: a host that is already running ignores the
+/// environment of a later start, and rush restarts a host from the
+/// environment it was first given, so an earlier token can still be the
+/// one its processes carry. A token whose card has no live session is
+/// refused and, after a grace period, removed.
 public actor VaultCardTokens {
     public static let environmentName = "KANBAN_CARD_TOKEN"
     /// How long a token stays on file while its card shows no session,
     /// which covers the time a launch takes to record its session.
     public static let grace: TimeInterval = 15 * 60
+    /// How many tokens of one card stay valid, the newest.
+    public static let perCard = 8
 
     struct Entry: Codable, Sendable, Equatable {
         var hash: String
@@ -52,12 +57,15 @@ public actor VaultCardTokens {
         try? VaultFiles.writeAtomically(data, to: path, mode: 0o600)
     }
 
-    /// A fresh token for a card's new session; the card's earlier one stops working.
+    /// A fresh token for a card's new session. The card's earlier ones
+    /// keep working up to `perCard`, the oldest dropped first.
     public func issue(cardId: String, now: Date = Date()) -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         for i in bytes.indices { bytes[i] = UInt8.random(in: 0...255) }
         let token = "kct_" + bytes.map { String(format: "%02x", $0) }.joined()
-        save(load().filter { $0.cardId != cardId } + [Entry(hash: Self.hash(token), cardId: cardId, issuedAt: now)])
+        let list = load()
+        let kept = list.filter { $0.cardId == cardId }.suffix(Self.perCard - 1)
+        save(list.filter { $0.cardId != cardId } + kept + [Entry(hash: Self.hash(token), cardId: cardId, issuedAt: now)])
         return token
     }
 

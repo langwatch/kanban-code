@@ -379,16 +379,22 @@ struct VaultProjectsTests {
         #expect(await reopened.verify(token, liveCards: ["card_1"]) == "card_1")
     }
 
-    @Test func aNewSessionReplacesTheCardsTokenAndAnEndedOneIsDropped() async throws {
+    /// A running rush host keeps the token it started with when Kanban
+    /// resumes the card again, so earlier tokens stay valid up to `perCard`.
+    @Test func aCardKeepsItsRecentTokensAndAnEndedOneIsDropped() async throws {
         let tokens = VaultCardTokens(directory: tempDir("vault"))
         let start = Date(timeIntervalSince1970: 1000)
         let first = await tokens.issue(cardId: "card_1", now: start)
         let second = await tokens.issue(cardId: "card_1", now: start)
-        #expect(await tokens.verify(first, liveCards: ["card_1"], now: start) == nil)
+        #expect(await tokens.verify(first, liveCards: ["card_1"], now: start) == "card_1")
         #expect(await tokens.verify(second, liveCards: ["card_1"], now: start) == "card_1")
+        for _ in 0..<(VaultCardTokens.perCard - 1) { _ = await tokens.issue(cardId: "card_1", now: start) }
+        #expect(await tokens.verify(first, liveCards: ["card_1"], now: start) == nil)
+        #expect(await tokens.count == VaultCardTokens.perCard)
+        for _ in 0..<VaultCardTokens.perCard { _ = await tokens.issue(cardId: "card_1", now: start) }
         // No session yet, within the grace period: refused but kept.
         #expect(await tokens.verify(second, liveCards: [], now: start.addingTimeInterval(60)) == nil)
-        #expect(await tokens.count == 1)
+        #expect(await tokens.count == VaultCardTokens.perCard)
         // The session ended: dropped, and a session with the card's id later does not revive it.
         #expect(await tokens.verify(second, liveCards: [], now: start.addingTimeInterval(VaultCardTokens.grace + 1)) == nil)
         #expect(await tokens.count == 0)
