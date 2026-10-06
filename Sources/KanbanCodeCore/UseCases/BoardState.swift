@@ -71,6 +71,21 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
         }
     }
 
+    /// Whether the card offers its Start button: a backlog card with no
+    /// session running. A live session (a rush host whose agent stopped
+    /// after idling counts) needs no start.
+    public var showsStartButton: Bool {
+        column == .backlog && !showSpinner && !hasRunningSession
+    }
+
+    /// Whether the card's session runs: its tmux session is alive.
+    public var hasRunningSession: Bool {
+        switch sessionStatus {
+        case .live, .machine: true
+        default: false
+        }
+    }
+
     /// Best display title: link name → session display title → link fallback chain.
     public var displayTitle: String {
         if let name = link.name, !name.isEmpty { return name }

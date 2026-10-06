@@ -13,6 +13,35 @@ struct AssignColumnTests {
         #expect(col == .inProgress)
     }
 
+    @Test("A backlog placement holds against trailing activity, and yields to a turn in the card's own live session")
+    func backlogPlacementYieldsToLiveTurn() {
+        var link = Link(column: .backlog, sessionLink: SessionLink(sessionId: "s1"))
+        link.manualOverrides.column = true
+        #expect(AssignColumn.assign(link: link, activityState: .activelyWorking) == .backlog)
+        #expect(AssignColumn.assign(link: link, activityState: .idleWaiting, hasLiveSession: true) == .backlog)
+        #expect(AssignColumn.assign(link: link, activityState: .activelyWorking, hasLiveSession: true) == .inProgress)
+    }
+
+    @Test("A backlog card offers Start only while no session of it runs")
+    func startButtonOnlyWithoutRunningSession() {
+        var parked = Link(column: .backlog, sessionLink: SessionLink(sessionId: "s1"))
+        parked.manualOverrides.column = true
+        #expect(KanbanCodeCard(link: parked).showsStartButton)
+
+        // A rush host that stopped its idle agent keeps its tmux session alive.
+        var live = parked
+        live.tmuxLink = TmuxLink(sessionName: "rush-s1")
+        #expect(KanbanCodeCard(link: live).sessionStatus == .live)
+        #expect(!KanbanCodeCard(link: live).showsStartButton)
+
+        var dead = live
+        dead.tmuxLink?.isPrimaryDead = true
+        #expect(KanbanCodeCard(link: dead).showsStartButton)
+
+        let waiting = Link(column: .waiting, sessionLink: SessionLink(sessionId: "s1"))
+        #expect(!KanbanCodeCard(link: waiting).showsStartButton)
+    }
+
     @Test("Manual column override respected when not actively working")
     func manualOverrideWhenIdle() {
         var link = Link(column: .done, sessionLink: SessionLink(sessionId: "s1"))

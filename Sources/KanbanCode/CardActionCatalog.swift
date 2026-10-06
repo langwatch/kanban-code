@@ -218,7 +218,7 @@ struct CardActionCatalog {
 
     private var primaryItems: [CardActionItem] {
         var items: [CardActionItem] = []
-        if card.column == .backlog {
+        if card.column == .backlog && !card.hasRunningSession {
             items.append(CardActionItem(
                 id: "start", title: "Start", icon: "play.fill", paletteTitle: "Start Card",
                 kind: .perform(actions.onStart)
