@@ -207,6 +207,7 @@ final class AppComposition {
             deviceApprovals: (MacVaultDevice.approvals, MacVaultDevice.deviceName)
         )
         engine.cardSessionEnvironment = { [vault] cardId in await vault.sessionEnvironment(cardId: cardId) }
+        engine.cardTokenOwner = { [vault] token in await vault.cardTokens.issuedCard(of: token) }
         engine.vaultUnsealed = { [vault] id, unsealed in await vault.broker.deliver(id: id, unsealed: unsealed) }
         Task { await vault.start() }
 

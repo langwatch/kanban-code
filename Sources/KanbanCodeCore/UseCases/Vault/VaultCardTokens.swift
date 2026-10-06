@@ -14,9 +14,8 @@ import Foundation
 /// Only the SHA-256 of each token is kept, in `vault/card-tokens.json`,
 /// so tokens survive a restart of the master. A card keeps its last
 /// `perCard` tokens: a host that is already running ignores the
-/// environment of a later start, and rush restarts a host from the
-/// environment it was first given, so an earlier token can still be the
-/// one its processes carry. A token whose card has no live session is
+/// environment of a later start, and processes started before a restart
+/// still carry the earlier token. A token whose card has no live session is
 /// refused and, after a grace period, removed.
 public actor VaultCardTokens {
     public static let environmentName = "KANBAN_CARD_TOKEN"
@@ -87,6 +86,14 @@ public actor VaultCardTokens {
     public func verify(hash: String, liveCards: Set<String>) -> String? {
         guard let entry = load().first(where: { $0.hash == hash }), liveCards.contains(entry.cardId) else { return nil }
         return entry.cardId
+    }
+
+    /// The card a token on file was issued for, whether or not that card
+    /// still has a session. Nothing is removed: a check of the token a
+    /// session carries, not a caller asking to be placed.
+    public func issuedCard(of token: String) -> String? {
+        let hash = Self.hash(token)
+        return load().first { $0.hash == hash }?.cardId
     }
 
     public func drop(cardId: String) {
