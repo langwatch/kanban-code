@@ -80,6 +80,7 @@ struct RushTokenTests {
             ["KANBAN_CARD_ID": cardId, VaultCardTokens.environmentName: await tokens.issue(cardId: cardId)]
         }
         engine.cardTokenOwner = { token in await tokens.issuedCard(of: token) }
+        engine.cardHasToken = { cardId in await tokens.hasToken(cardId: cardId) }
         store.dispatch(.createManualTask(Link(
             id: Self.cardId, name: "Rush card", projectPath: rush.dir, column: .inProgress,
             sessionLink: SessionLink(sessionId: Self.sessionId), tmuxLink: TmuxLink(sessionName: "rush-7e57ab1e")
@@ -208,6 +209,22 @@ struct RushTokenTests {
         await engine.checkRushTokens(readToken: { _ in .value(token) })
         try rush.setHost(alive: false, sleeping: true, claudePid: nil)
         await engine.checkRushTokens(readToken: { _ in .value(token) })
+        #expect(rush.starts().count == 1)
+    }
+
+    @Test("a resting host of a card with no token on file is started with one without waiting for a turn")
+    func monitorRestartsHostOfCardWithoutTokens() async throws {
+        let rush = try FakeRush()
+        defer { rush.cleanup() }
+        let (engine, tokens, _) = try await makeEngine(rush: rush)
+        try rush.setHost(alive: false, sleeping: true, claudePid: nil)
+        await engine.checkRushTokens(readToken: { _ in .unreadable })
+        let start = try #require(rush.starts().first)
+        let token = try #require(Self.token(in: start))
+        #expect(await tokens.issuedCard(of: token) == Self.cardId)
+
+        // Now the card has one on file: a resting host is left alone.
+        await engine.checkRushTokens(readToken: { _ in .unreadable })
         #expect(rush.starts().count == 1)
     }
 

@@ -134,6 +134,7 @@ final class ServerMaster {
         )
         engine.cardSessionEnvironment = { [vault] cardId in await vault.sessionEnvironment(cardId: cardId) }
         engine.cardTokenOwner = { [vault] token in await vault.cardTokens.issuedCard(of: token) }
+        engine.cardHasToken = { [vault] cardId in await vault.cardTokens.hasToken(cardId: cardId) }
         engine.vaultUnsealed = { [vault] id, unsealed in await vault.broker.deliver(id: id, unsealed: unsealed) }
     }
 

@@ -96,6 +96,12 @@ public actor VaultCardTokens {
         return load().first { $0.hash == hash }?.cardId
     }
 
+    /// Whether any token of `cardId` is on file: a session of a card with
+    /// none cannot carry a valid one.
+    public func hasToken(cardId: String) -> Bool {
+        load().contains { $0.cardId == cardId }
+    }
+
     public func drop(cardId: String) {
         let list = load()
         let kept = list.filter { $0.cardId != cardId }

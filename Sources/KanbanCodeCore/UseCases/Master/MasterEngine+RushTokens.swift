@@ -6,7 +6,8 @@ extension MasterEngine {
     /// Runs until cancelled: every `interval`, reads the session token of
     /// the running assistant of each rush host this master runs for a card,
     /// and starts again, once it rests, a host whose token is missing or
-    /// not the card's (`RushTokenKeeper`).
+    /// not the card's, or a host of a card with no token on file at all
+    /// (`RushTokenKeeper`).
     public func runRushTokenMonitor(interval: Duration = .seconds(15)) async {
         while !Task.isCancelled {
             await checkRushTokens()
@@ -31,7 +32,14 @@ extension MasterEngine {
             cardBySession[RushSessionName.name(for: host)].map { (host, $0) }
         }
         for (host, cardId) in ours {
-            guard host.alive, let pid = host.claudePid else { continue }
+            guard host.alive, let pid = host.claudePid else {
+                // A resting host of a card with no token on file wakes
+                // without a valid one: no need to wait for a turn to see it.
+                if let cardHasToken, await !cardHasToken(cardId) {
+                    rushTokens.observe(hostId: host.id, cardId: cardId, tokenCard: nil)
+                }
+                continue
+            }
             let tokenCard: String?
             switch await readToken(pid) {
             case .unreadable: continue

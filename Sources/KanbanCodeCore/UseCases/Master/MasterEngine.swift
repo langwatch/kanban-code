@@ -51,6 +51,8 @@ public final class MasterEngine {
     /// The card a session token was issued for, nil for a token the vault
     /// does not know; nil without a vault.
     public var cardTokenOwner: (@Sendable (String) async -> String?)?
+    /// Whether the vault has any token of a card on file; nil without a vault.
+    public var cardHasToken: (@Sendable (String) async -> Bool)?
     /// Which rush hosts of this master's cards still need a valid token.
     var rushTokens = RushTokenKeeper()
     /// Hands the vault what a device unlocked for an approval, before the
