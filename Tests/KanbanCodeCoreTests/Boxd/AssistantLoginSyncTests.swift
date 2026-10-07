@@ -305,19 +305,54 @@ struct AssistantLoginSyncTests {
         #expect(runner.files.isEmpty)
     }
 
-    @Test("A machine on another account gets the Mac's, however fresh its own")
+    @Test("A machine that never agreed with the Mac gets the Mac's account, however fresh its own")
     func otherAccountOnMachineGetsTheMacs() async {
         let local = claudeLogin(access: "mac", expiresAt: 2_000)
         let remote = claudeLogin(access: "machine", expiresAt: 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1"])
+        let memory = InMemoryLoginAccountMemory()
 
-        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, accounts: memory).run()
 
         #expect(changes == [AssistantLoginSync.Change(kind: .claude, decision: .push, accountChanged: true)])
         #expect(runner.files["/home/boxd/.claude/.credentials.json"] == local)
         #expect(store.writes.isEmpty)
+        #expect(await memory.agreed(.claude, machine: "machine") == "u1")
+    }
+
+    @Test("A machine that switched account since it last agreed with the Mac keeps it")
+    func machineSwitchIsKept() async {
+        let local = claudeLogin(access: "mac", expiresAt: 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
+        let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1"])
+        let memory = InMemoryLoginAccountMemory(["machine|claude": "u1"])
+
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, accounts: memory).run()
+
+        #expect(changes.isEmpty)
+        #expect(runner.files.isEmpty)
+        #expect(store.writes.isEmpty)
+        #expect(await memory.agreed(.claude, machine: "machine") == "u1")
+    }
+
+    @Test("A Mac that switched account since it last agreed sends it to the machine")
+    func macSwitchIsSent() async {
+        let local = claudeLogin(access: "mac", expiresAt: 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
+        let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u3"])
+        let memory = InMemoryLoginAccountMemory(["machine|claude": "u2"])
+
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, accounts: memory).run()
+
+        #expect(changes == [AssistantLoginSync.Change(kind: .claude, decision: .push, accountChanged: true)])
+        #expect(runner.files["/home/boxd/.claude/.credentials.json"] == local)
+        #expect(await memory.agreed(.claude, machine: "machine") == "u3")
     }
 
     @Test("A fresher login of the same account comes back to the Mac")

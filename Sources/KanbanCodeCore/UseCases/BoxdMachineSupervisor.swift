@@ -106,6 +106,7 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
     private let localHome: String
     private let localKanbanHome: String
     private let loginStore: any LocalLoginStore
+    private let loginAccounts: any LoginAccountMemory
     /// Current links of the board, read when a sweep decides what a machine is for.
     public typealias LinksProvider = @Sendable () async -> [Link]
 
@@ -134,6 +135,7 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         localHome: String = NSHomeDirectory(),
         localKanbanHome: String? = nil,
         loginStore: any LocalLoginStore = MacLoginStore(),
+        loginAccounts: any LoginAccountMemory = FileLoginAccountMemory.inKanbanHome(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.boxd = boxd
@@ -144,6 +146,7 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         self.localHome = localHome
         self.localKanbanHome = localKanbanHome ?? "\(localHome)/.kanban-code"
         self.loginStore = loginStore
+        self.loginAccounts = loginAccounts
         self.now = now
     }
 
@@ -1230,7 +1233,7 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         if lastClaudeAccountId == nil {
             lastClaudeAccountId = await loginStore.claudeAccount()?["accountUuid"] as? String
         }
-        _ = await AssistantLoginSync(runner: bridge, store: loginStore, remoteHome: runtime.remoteHome, machineName: machineName).run()
+        _ = await AssistantLoginSync(runner: bridge, store: loginStore, remoteHome: runtime.remoteHome, machineName: machineName, accounts: loginAccounts).run()
 
         let transport = BridgeTmuxTransport(runner: bridge, remoteHome: runtime.remoteHome)
         registry.setMachine(machineName, state: .connected, tmux: TmuxAdapter(transport: transport))
@@ -1693,7 +1696,7 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         var accountMoves: [LoginMove] = []
         for (name, runtime) in machines.sorted(by: { $0.key < $1.key }) {
             guard let bridge = runtime.bridge else { continue }
-            let sync = AssistantLoginSync(runner: bridge, store: loginStore, remoteHome: runtime.remoteHome, machineName: name)
+            let sync = AssistantLoginSync(runner: bridge, store: loginStore, remoteHome: runtime.remoteHome, machineName: name, accounts: loginAccounts)
             for change in await sync.run() {
                 if change.decision == .push, change.kind == .claude { pushedClaudeTo.append(name) }
                 if change.accountChanged {

@@ -284,6 +284,69 @@ public actor AnthropicTokenOwner: ClaudeTokenOwnerResolver {
     }
 }
 
+/// The account each machine and the Mac last agreed on, per login kind,
+/// so a sync can tell which side switched when the two differ.
+public protocol LoginAccountMemory: Sendable {
+    func agreed(_ kind: AssistantLoginKind, machine: String) async -> String?
+    func record(_ kind: AssistantLoginKind, machine: String, account: String) async
+}
+
+/// `LoginAccountMemory` kept in a JSON file (`login-accounts.json` in the
+/// Kanban home): `{"<machine>": {"claude": "<account>", ...}}`.
+public actor FileLoginAccountMemory: LoginAccountMemory {
+    public let path: String
+    private var cache: [String: [String: String]]?
+
+    public init(path: String) {
+        self.path = path
+    }
+
+    public static func inKanbanHome(_ kanbanHome: String = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")) -> FileLoginAccountMemory {
+        FileLoginAccountMemory(path: (kanbanHome as NSString).appendingPathComponent("login-accounts.json"))
+    }
+
+    private func load() -> [String: [String: String]] {
+        if let cache { return cache }
+        let loaded = FileManager.default.contents(atPath: path)
+            .flatMap { try? JSONDecoder().decode([String: [String: String]].self, from: $0) } ?? [:]
+        cache = loaded
+        return loaded
+    }
+
+    public func agreed(_ kind: AssistantLoginKind, machine: String) -> String? {
+        load()[machine]?[kind.rawValue]
+    }
+
+    public func record(_ kind: AssistantLoginKind, machine: String, account: String) {
+        var all = load()
+        guard all[machine]?[kind.rawValue] != account else { return }
+        all[machine, default: [:]][kind.rawValue] = account
+        cache = all
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(all) {
+            try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+    }
+}
+
+/// `LoginAccountMemory` for one process.
+public actor InMemoryLoginAccountMemory: LoginAccountMemory {
+    private var accounts: [String: String] = [:]
+
+    public init(_ seed: [String: String] = [:]) {
+        accounts = seed
+    }
+
+    public func agreed(_ kind: AssistantLoginKind, machine: String) -> String? {
+        accounts["\(machine)|\(kind.rawValue)"]
+    }
+
+    public func record(_ kind: AssistantLoginKind, machine: String, account: String) {
+        accounts["\(machine)|\(kind.rawValue)"] = account
+    }
+}
+
 /// Brings the logins of one machine and the Mac to the same copy.
 public struct AssistantLoginSync: Sendable {
     public struct Change: Equatable, Sendable {
@@ -305,19 +368,34 @@ public struct AssistantLoginSync: Sendable {
     private let remoteHome: String
     private let machineName: String
     private let owners: any ClaudeTokenOwnerResolver
+    private let accounts: any LoginAccountMemory
 
     public init(
         runner: any RemoteCommandRunner,
         store: any LocalLoginStore,
         remoteHome: String,
         machineName: String = "machine",
-        owners: any ClaudeTokenOwnerResolver = AnthropicTokenOwner.shared
+        owners: any ClaudeTokenOwnerResolver = AnthropicTokenOwner.shared,
+        accounts: any LoginAccountMemory = InMemoryLoginAccountMemory()
     ) {
         self.runner = runner
         self.store = store
         self.remoteHome = remoteHome
         self.machineName = machineName
         self.owners = owners
+        self.accounts = accounts
+    }
+
+    /// When the Mac and the machine are signed in as different accounts:
+    /// the side that switched since they last agreed keeps its account.
+    /// The Mac's goes to the machine when the Mac switched, or when they
+    /// never agreed (a machine started from a snapshot). A machine that
+    /// switched keeps its own, and its tokens are left alone until the two
+    /// agree again.
+    static func differentAccounts(local: String, remote: String, agreed: String?) -> AssistantLogin.Decision {
+        guard let agreed else { return .push }
+        if local != agreed { return .push }
+        return remote == agreed ? .push : .none
     }
 
     /// Runs node wherever the machine has it: boxd machines keep it in
@@ -388,10 +466,26 @@ public struct AssistantLoginSync: Sendable {
                 localAccount = local.login?.accountId
                 remoteAccount = remote?.accountId
             }
-            let decision = AssistantLogin.decide(
+            var decision = AssistantLogin.decide(
                 local: local, remote: remote, localAccount: localAccount, remoteAccount: remoteAccount)
-            guard decision != .none else { continue }
             let accountChanged = localAccount != nil && remoteAccount != nil && localAccount != remoteAccount
+            if accountChanged, let localAccount, let remoteAccount {
+                let agreed = await accounts.agreed(kind, machine: machineName)
+                if decision == .push {
+                    decision = Self.differentAccounts(local: localAccount, remote: remoteAccount, agreed: agreed)
+                }
+                if decision == .none, agreed == nil {
+                    await accounts.record(kind, machine: machineName, account: localAccount)
+                }
+            } else if let localAccount, localAccount == remoteAccount {
+                await accounts.record(kind, machine: machineName, account: localAccount)
+            }
+            guard decision != .none else { continue }
+            if decision == .push, let localAccount {
+                await accounts.record(kind, machine: machineName, account: localAccount)
+            } else if decision == .pull, let remoteAccount {
+                await accounts.record(kind, machine: machineName, account: remoteAccount)
+            }
             let remotePath = "\(remoteHome)/\(kind.remoteRelativePath)"
             do {
                 switch decision {
