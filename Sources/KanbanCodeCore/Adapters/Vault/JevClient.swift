@@ -73,16 +73,23 @@ public struct JevClient: JevJudging {
     Rogerio's own machine, usually a scheduled job or a script he set up. caller_process_chain holds the command lines \
     of that process and its parents as the vault read them from the system, the caller first; it is not a claim. \
     Allow a routine job whose command and process chain plainly use these secrets for what the rules permit. \
-    Allow only when the command plainly needs these secrets for work the rules permit; when the rules want the task \
-    to say so (for example "ask unless the task says to post"), allow when Rogerio's prompts ask for this action. \
-    Ask a human when it is plausible but unclear, or the rules say a human must see it. \
+    These secrets are in the judged tier: Rogerio chose them as low risk, to be released without asking him when the \
+    use fits the rules. Allow, and be sure of it, when the command uses them for something the rules call fine, \
+    nothing in it exposes the value, and the work fits the card's task (its title, Rogerio's prompts, or a brief \
+    delivered to the card). The prompts do not need to name this exact command, and a script whose name, arguments \
+    and working directory fit that use counts even though its code is not shown. \
+    When the rules want the task to say so (for example "ask unless the task says to post"), allow only when \
+    Rogerio's prompts ask for this action. \
+    Ask a human when the use is outside what the rules call fine, when the rules want the task to say so and it \
+    does not, or when the command does something lasting on Rogerio's behalf (posting, sending, paying, deleting, \
+    changing production) that the rules do not already permit. \
     Deny when the command would print, copy, upload or send a secret somewhere the rules do not permit, \
     or uses it for something the rules forbid.
     """
 
     static let criteria: [String: String] = [
-        "allow": "The command clearly needs these secrets for a use the rules permit (including a use the rules allow when Rogerio's prompts to the card ask for it), and nothing in it exposes the value.",
-        "ask": "The use may be fine but is unclear, broad, only the agent or another sender claims it was asked for, or the rules want a human to look.",
+        "allow": "The command uses these secrets for something the rules call fine (or that the rules allow when Rogerio's prompts ask for it), fits the card's task, and nothing in it exposes the value. A script named for that use counts without its code.",
+        "ask": "The use is outside what the rules call fine, the rules want the task to ask for this action and only the agent or another sender claims it did, or the command acts on Rogerio's behalf (posting, sending, paying, deleting, changing production) beyond what the rules permit.",
         "deny": "The command exposes the value (echo, cat, env dump, paste, upload, sending it to a third party) or does something the rules forbid.",
     ]
 
