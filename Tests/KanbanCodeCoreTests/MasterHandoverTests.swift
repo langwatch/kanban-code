@@ -565,7 +565,7 @@ struct MasterHandoverTests {
         #expect(box.tmux.created.first?.command?.contains("--resume \(sessionId)") == true)
     }
 
-    @Test("a first launch on a peer releases the card and the peer starts it")
+    @Test("a first launch on a peer releases the card, opens it here, and the peer starts it")
     func launchOnPeer() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-launch-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -594,6 +594,7 @@ struct MasterHandoverTests {
         #expect(mac.store.state.links["card_new"]?.ownerMachine == box.identity.id)
         #expect(mac.store.state.links["card_new"]?.isLaunching != true)
         #expect(mac.tmux.created.isEmpty)
+        #expect(mac.store.state.selectedCardId == "card_new")
 
         await box.peerSync.pullAll()
         try await box.engine.adopt(cardId: "card_new")

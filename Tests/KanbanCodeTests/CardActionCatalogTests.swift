@@ -98,7 +98,7 @@ struct CardActionCatalogTests {
         let r = Recorder()
         let catalogs = [
             Self.catalog(Self.card("live"), r),
-            Self.catalog(Self.card("backlog", column: .backlog), r),
+            Self.catalog(KanbanCodeCard(link: Link(id: "fresh", projectPath: "/repo", column: .backlog, source: .manual)), r),
             Self.catalog(Self.card("archived", archived: true), r),
         ]
         for catalog in catalogs {

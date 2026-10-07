@@ -126,6 +126,7 @@ public final class MasterEngine {
         }
         if isForeign(cardId) {
             // The master that owns the card starts it.
+            if !keepSelection { store.dispatch(.selectCard(cardId: cardId)) }
             forwardToOwner(cardId, "start the card", isStart: true) { client in _ = try await client.resume(cardId: cardId) }
             completion?(nil)
             return
@@ -139,6 +140,7 @@ public final class MasterEngine {
         }
         if runRemotely, let name = machineChoice?.machineName, let peer = peerMachine(named: name) {
             // Another master runs it: the card moves there and starts there.
+            if !keepSelection { store.dispatch(.selectCard(cardId: cardId)) }
             launchOnPeer(cardId: cardId, prompt: prompt, worktree: worktreeName, peer: peer)
             completion?(nil)
             return
@@ -628,6 +630,7 @@ public final class MasterEngine {
         guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return false }
         if isForeign(cardId) {
             // The master that owns the card resumes it.
+            if !keepSelection { store.dispatch(.selectCard(cardId: cardId)) }
             forwardToOwner(cardId, "resume the card", isStart: true) { client in _ = try await client.resume(cardId: cardId) }
             return false
         }
@@ -644,6 +647,7 @@ public final class MasterEngine {
             // master continues the conversation, also while this one is off.
             // A card that ran there over ssh moves the same way.
             KanbanCodeLog.info("resume", "Card=\(cardId.prefix(12)) continues on \(peer.name), handing it over")
+            if !keepSelection { store.dispatch(.selectCard(cardId: cardId)) }
             afterDispatch?()
             Task {
                 do {
