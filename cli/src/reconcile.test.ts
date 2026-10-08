@@ -59,7 +59,7 @@ describe("reconciler (real git + tmux)", skipIfNoTmux, () => {
   const slugs: string[] = [];
 
   function makeFile(agents: AgentsFile["agents"]): AgentsFile {
-    return { reposDir, workspacesDir, agents };
+    return { reposDir, workspacesDir, host: "tmux", agents, warnings: [] };
   }
   function trackSlug(s: string): string {
     slugs.push(s);

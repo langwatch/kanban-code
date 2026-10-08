@@ -63,7 +63,7 @@ export function reconcileAgent(
     repos.push({ name, worktreeCreated: created, worktree });
   }
 
-  const launch = ensureAgentSession(agentIdentity(agent.slug, agent.runtime), {
+  const launch = ensureAgentSession(agentIdentity(agent.slug, agent.runtime, agent.host), {
     cwd: workspace,
     model: agent.model,
     bin: opts.bin,
@@ -91,7 +91,7 @@ function sleepMs(ms: number): void {
 }
 
 /// Reconcile every agent in the config, optionally pruning de-configured ones.
-/// Launches are staggered: agents whose tmux session is already alive cost no
+/// Launches are staggered: agents whose session is already in place cost no
 /// wait, so a routine reconcile over a healthy fleet stays instant and the
 /// gaps only spend time when processes actually start (boot, or a recovery).
 export function reconcileAll(file: AgentsFile, opts: ReconcileOptions = {}): ReconcileResult {

@@ -14,7 +14,10 @@ import { writeActivePill, readActivePill, clearActivePill } from "./active-pill.
 import { writeEyesAnchor, readEyesAnchor, clearEyesAnchor, PersistedEyesAnchor } from "./eyes-anchor.js";
 import { downloadSlackFile, formatPromptWithAttachments, DownloadedFile, sweepInbox, DEFAULT_RETENTION_DAYS } from "./inbox.js";
 import { parsePicker, Picker } from "./picker.js";
-import { findSessionJsonl, findCodexRollout, pasteTmuxPrompt, captureTmuxPane, sendTmuxKey } from "../data.js";
+import { findSessionJsonl, findCodexRollout, captureTmuxPane, sendTmuxKey, readLinks, rushIdFromSessionName } from "../data.js";
+import { agentSessionName, deliverAgentMessage } from "../agents/session-name.js";
+import { Link } from "../types.js";
+import { listRushHosts, rushPendingQuestion, RushHostInfo } from "../agents/rush-host.js";
 
 export interface BridgeOptions {
   botToken: string;
@@ -44,6 +47,13 @@ interface PickerState {
   options: { number: number; title: string }[];
   messageTs: string;
   channelId: string;
+}
+
+/// The Slack text for a question a rush-hosted agent waits on. Rush reports
+/// the question but not its options, so it is posted as text and the next
+/// message in the channel answers it.
+export function rushQuestionText(slug: string, question: string): string {
+  return `:question: *${slug}* asks: *${question}*\nReply in this channel to answer.`;
 }
 
 /// Build the Block Kit payload for a picker. Numbered buttons map 1:1 to the
@@ -495,13 +505,51 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
   // interactivity socket as a tmux send-keys of the chosen digit (no Enter
   // — Claude Code commits on the bare digit). Codex agents are skipped to
   // avoid send-keys-ing into a session that does not have this UI.
+  //
+  // An agent on a rush host has no pane: rush reports the question it is
+  // blocked on (without options), which is posted as text, and the next
+  // channel message answers it (deliverAgentMessage).
   const pickerByAgent = new Map<string, PickerState>();
+  const rushQuestionByAgent = new Map<string /* slug */, string /* question */>();
   const PICKER_POLL_MS = 1000;
   const claudeAgents = tails.filter((t) => t.runtime === "claude");
+  const mirrorRushQuestion = async (t: TailState, question: string | undefined): Promise<void> => {
+    if (!question) {
+      rushQuestionByAgent.delete(t.slug);
+      return;
+    }
+    if (rushQuestionByAgent.get(t.slug) === question) return;
+    rushQuestionByAgent.set(t.slug, question);
+    try {
+      await drainBuffer(t.slug, t.channelId);
+      const ts = await client.post(t.channelId, rushQuestionText(t.slug, question));
+      if (ts) {
+        writeThreadRoot(t.slug, ts);
+        active.delete(t.slug);
+      }
+    } catch (e) {
+      console.error(`question post for ${t.slug} failed:`, e);
+    }
+  };
   if (claudeAgents.length) {
     setInterval(async () => {
+      let links: Link[];
+      try {
+        links = readLinks();
+      } catch {
+        links = [];
+      }
+      let rushHosts: Map<string, RushHostInfo> | undefined;
       for (const t of claudeAgents) {
-        const pane = captureTmuxPane(t.slug);
+        const session = agentSessionName(t.slug, links);
+        const rushId = rushIdFromSessionName(session);
+        if (rushId) {
+          rushHosts ??= new Map(listRushHosts().map((h) => [h.id, h]));
+          const host = rushHosts.get(rushId);
+          await mirrorRushQuestion(t, host ? rushPendingQuestion(host) : undefined);
+          continue;
+        }
+        const pane = captureTmuxPane(session);
         if (!pane) continue;
         const picker = parsePicker(pane);
         const prev = pickerByAgent.get(t.slug);
@@ -558,7 +606,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
       return;
     }
     if (ack) await ack();
-    const res = sendTmuxKey(slug, "Escape");
+    const res = sendTmuxKey(agentSessionName(slug), "Escape");
     if (!res.ok) {
       console.error(`/stop -> ${slug} send-keys Escape failed:`, res.error);
       try {
@@ -613,7 +661,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
         console.error(`picker click for ${slug} chose ${chosen} but options are ${state.options.map((o) => o.number).join(",")}`);
         continue;
       }
-      const res = sendTmuxKey(slug, String(chosen));
+      const res = sendTmuxKey(agentSessionName(slug), String(chosen));
       if (!res.ok) {
         console.error(`send-key ${chosen} -> ${slug} failed:`, res.error);
         continue;
@@ -672,7 +720,8 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     const relays = recentRelays.get(decision.slug) ?? [];
     relays.push({ text: authored, ts: Date.now() });
     recentRelays.set(decision.slug, relays);
-    pasteTmuxPrompt(decision.slug, authored); // tmux session name == slug
+    const delivered = deliverAgentMessage(agentSessionName(decision.slug), authored);
+    if (!delivered.ok) console.error(`deliver to ${decision.slug} failed:`, delivered.error);
 
     // Post a 👀 ack and light the working pill on it, ONLY if the agent
     // isn't already mid-turn. The eyes give the channel a visible

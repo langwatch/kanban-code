@@ -37,7 +37,7 @@ import {
 import { agentIdentity } from "./agents/identity.js";
 import { runVaultAlias } from "./vault-alias.js";
 import { ensureAgentSession } from "./agents/launch.js";
-import { loadAgentsConfig } from "./agents/config.js";
+import { loadAgentsConfig, isAgentHost } from "./agents/config.js";
 import { reconcileAll } from "./agents/reconcile.js";
 import { runtimeSpec } from "./agents/runtime.js";
 import { installHooks } from "./hooks.js";
@@ -589,18 +589,20 @@ program
 
 program
   .command("launch")
-  .description("Launch or resume a long-lived agent session in tmux with a stable, readable identity")
+  .description("Launch or resume a long-lived Claude agent session (tmux or a rush host) with a stable, readable identity")
   .argument("<slug>", "Readable agent slug, e.g. dependabot-scout")
   .requiredOption("--cwd <path>", "Working directory for the session (the agent's worktree/workspace)")
   .option("--model <model>", "Model alias or full name")
   .option("--no-skip-permissions", "Do NOT pass --dangerously-skip-permissions")
   .option("--no-resume", "Always start a fresh session, never resume a prior one under this slug (for ephemeral agents)")
+  .option("--host <host>", "Where the session runs: tmux, or rush (a rush host that moves between signed-in Claude accounts)", "tmux")
   .option("-j, --json", "Output as JSON")
   .action((slug: string, opts) => {
     try {
       const cwd = resolve(opts.cwd);
       if (!existsSync(cwd)) throw new Error(`cwd does not exist: ${cwd}`);
-      const identity = agentIdentity(slug);
+      if (!isAgentHost(opts.host)) throw new Error(`--host must be tmux or rush, not ${JSON.stringify(opts.host)}`);
+      const identity = agentIdentity(slug, "claude", opts.host);
       const result = ensureAgentSession(identity, {
         cwd,
         model: opts.model,
@@ -616,7 +618,7 @@ program
           resumed: "resumed",
         }[result.action];
         output(
-          `Agent "${slug}" ${verb} (session ${result.sessionId}, tmux ${result.tmuxName}, card ${result.card.id})`,
+          `Agent "${slug}" ${verb} (session ${result.sessionId}, ${identity.host} ${result.tmuxName}, card ${result.card.id})`,
           opts
         );
       }
@@ -660,7 +662,8 @@ program
           wantsName && a.launch.action !== "noop-running" && !a.launch.named
             ? " (unnamed)"
             : "";
-        lines.push(`${a.slug}: ${a.launch.action}${nameNote} [${repoNote}]`);
+        const hostNote = a.launch.identity.host === "rush" ? ` on ${a.launch.tmuxName}` : "";
+        lines.push(`${a.slug}: ${a.launch.action}${nameNote}${hostNote} [${repoNote}]`);
       }
       if (result.pruned.length) lines.push(`pruned: ${result.pruned.join(", ")}`);
       output(lines.join("\n") || "no agents configured", opts);

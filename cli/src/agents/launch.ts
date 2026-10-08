@@ -7,9 +7,23 @@ import {
   sendTmuxEnter,
   findSessionJsonl,
   findCodexRollout,
-  readLinks,
+  killTmuxSession,
+  rushIdFromSessionName,
 } from "../data.js";
-import { upsertCard, isoNow } from "../cards.js";
+import {
+  listAgentRushHosts,
+  rushHostId,
+  rushHostInPlace,
+  rushSessionNameFor,
+  rushStartArgs,
+  startRushHost,
+  stopRushHost,
+  RushHostInfo,
+  RUSH_AGENT_META,
+  RUSH_CARD_META,
+  RUSH_SESSION_META,
+} from "./rush-host.js";
+import { upsertCard, isoNow, findCardByName } from "../cards.js";
 import { generateKsuid } from "../ksuid.js";
 import { Link, ManualOverrides } from "../types.js";
 import { runtimeSpec, RuntimeSpec } from "./runtime.js";
@@ -61,8 +75,9 @@ const DEFAULT_OVERRIDES: ManualOverrides = {
   issueLink: false,
 };
 
-/// Idempotently ensure an agent's session is running in tmux and its kanban card
-/// reflects reality. Decides launch vs resume vs no-op:
+/// Idempotently ensure an agent's session is running and its kanban card
+/// reflects reality. An agent whose host is rush goes to ensureRushAgentSession;
+/// the rest run in tmux. Decides launch vs resume vs no-op:
 ///   - tmux session already alive            -> no-op (never restart a live agent)
 ///   - runtime can resume + prior session     -> resume
 ///   - otherwise                              -> fresh launch
@@ -73,9 +88,17 @@ export function ensureAgentSession(
   identity: AgentIdentity,
   opts: LaunchOptions
 ): LaunchResult {
+  if (identity.host === "rush") return ensureRushAgentSession(identity, opts);
+
   const spec = runtimeSpec(identity.runtime);
   const bin = opts.bin ?? spec.bin;
   const skipPerms = opts.skipPermissions ?? true;
+
+  // An agent moving off rush: its host would run the same conversation next
+  // to the tmux one.
+  const previous = findCardByName(identity.cardName)?.tmuxLink?.sessionName;
+  const previousRushId = previous ? rushIdFromSessionName(previous) : undefined;
+  if (previousRushId) stopRushHost(previousRushId);
 
   const tmuxAlive = hasTmuxSession(identity.tmuxName);
   const sessionExists =
@@ -148,6 +171,91 @@ export function ensureAgentSession(
     card,
     named,
   };
+}
+
+/// The rush half of ensureAgentSession, for a Claude agent on a rush host:
+///   - a host of this agent running or resting      -> no-op (a message wakes a resting one)
+///   - a saved host that never took a turn           -> no-op (a message wakes it from its own config)
+///   - a transcript for the session id               -> `rush session start --resume`
+///   - otherwise                                     -> `rush session start`
+/// The host id is the first eight hex digits of the session id, so the card's
+/// session name `rush-<host id>` is known before the host starts. A tmux
+/// session left from before the agent moved to rush is killed first, so two
+/// processes never run the same conversation.
+export function ensureRushAgentSession(
+  identity: AgentIdentity,
+  opts: LaunchOptions
+): LaunchResult {
+  const skipPerms = opts.skipPermissions ?? true;
+  const existing = findCardByName(identity.cardName);
+  const cardId = existing?.id ?? generateKsuid("card");
+
+  if (hasTmuxSession(identity.slug)) killTmuxSession(identity.slug);
+
+  const hosts = listAgentRushHosts(identity.slug);
+  const inPlace = pickHost(hosts.filter(rushHostInPlace), identity.sessionId);
+
+  let action: LaunchAction;
+  let command: string | undefined;
+  let sessionId: string;
+  let hostId: string;
+
+  if (inPlace) {
+    action = "noop-running";
+    sessionId = inPlace.sessionId;
+    hostId = inPlace.id;
+  } else {
+    sessionId = opts.forceFresh ? randomUUID() : identity.sessionId;
+    hostId = rushHostId(sessionId);
+    const resume = !opts.forceFresh && !!findSessionJsonl(sessionId);
+    const saved = hosts.find((h) => h.id === hostId);
+    if (saved && !resume) {
+      action = "noop-running";
+    } else {
+      const start = {
+        cwd: opts.cwd,
+        sessionId,
+        resume,
+        name: identity.slug,
+        model: opts.model,
+        permissionMode: skipPerms ? "bypassPermissions" : undefined,
+        binary: opts.bin,
+        env: {
+          ...(opts.env ?? {}),
+          KANBAN_SESSION_ID: sessionId,
+          KANBAN_SLUG: identity.slug,
+        },
+        meta: {
+          [RUSH_SESSION_META]: rushSessionNameFor(sessionId),
+          [RUSH_AGENT_META]: identity.slug,
+          [RUSH_CARD_META]: cardId,
+        },
+      };
+      command = ["rush", ...rushStartArgs(start)].join(" ");
+      runtimeSpec(identity.runtime).prepareWorkspace?.(opts.cwd);
+      const started = startRushHost(start);
+      if (started?.id) hostId = started.id;
+      action = resume ? "resumed" : "launched";
+    }
+  }
+
+  const launchIdentity: AgentIdentity = { ...identity, sessionId, tmuxName: `rush-${hostId}` };
+  const card = upsertAgentCard(launchIdentity, opts.cwd, cardId);
+  return {
+    action,
+    identity: launchIdentity,
+    sessionId,
+    tmuxName: launchIdentity.tmuxName,
+    command,
+    card,
+    named: false,
+  };
+}
+
+/// The host on the agent's stable session id when there is one, else the
+/// newest of the others (a forced-fresh launch mints its own id).
+function pickHost(hosts: RushHostInfo[], stableSessionId: string): RushHostInfo | undefined {
+  return hosts.find((h) => h.sessionId === stableSessionId) ?? hosts[hosts.length - 1];
 }
 
 /// How long a runtime named after launch gets to come up. Codex spends a few
@@ -302,8 +410,8 @@ function sleepMs(ms: number): void {
 
 /// Reconcile the agent's card to current truth. Writes only when something
 /// meaningful changed, so a healthy reconcile is a true no-op on disk.
-function upsertAgentCard(identity: AgentIdentity, cwd: string): Link {
-  const existing = readLinks().find((l) => l.name === identity.cardName);
+function upsertAgentCard(identity: AgentIdentity, cwd: string, cardId?: string): Link {
+  const existing = findCardByName(identity.cardName);
   const sessionPath = findSessionJsonl(identity.sessionId);
 
   const unchanged =
@@ -317,7 +425,7 @@ function upsertAgentCard(identity: AgentIdentity, cwd: string): Link {
 
   const now = isoNow();
   const card: Link = {
-    id: existing?.id ?? generateKsuid("card"),
+    id: existing?.id ?? cardId ?? generateKsuid("card"),
     name: identity.cardName,
     column: existing?.column ?? "in_progress",
     createdAt: existing?.createdAt ?? now,

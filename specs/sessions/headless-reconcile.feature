@@ -89,3 +89,45 @@ Feature: Headless agent session reconciliation (CLI)
     When the reconciler runs with pruning enabled
     Then that agent's tmux session is killed, its card is archived, and its workspace is removed
     And cards whose worktree path is not the managed path are never touched
+
+  Scenario: An agent can run on a rush host instead of tmux
+    Given agents.yaml sets "host: rush" at the top level or on the agent
+    And the agent's runtime is claude
+    When the reconciler runs for a new agent
+    Then it runs "rush session start --agent claude --session-id <uuid> --name <slug> --permission-mode bypassPermissions --json"
+    And the host carries the metas kanban_session=rush-<host id>, kanban_agent=<slug> and kanban_card=<card id>
+    And the card's session name is "rush-<host id>", where the host id is the first eight hex digits of the session id
+    # Rush keeps several Claude accounts signed in and moves a session to
+    # another one when the current account runs low.
+
+  Scenario: A Codex agent asked to run on rush stays on tmux
+    Given an agent with runtime codex and "host: rush"
+    When the config is parsed
+    Then the agent runs on tmux and a warning names it
+
+  Scenario: A rush host that is running or resting is never restarted
+    Given the agent's rush host is running, or resting after its turn
+    When the reconciler runs again
+    Then no host is started and links.json is not rewritten
+    # A resting host wakes on the next message sent to it.
+
+  Scenario: A dead rush host with a transcript is resumed
+    Given the agent's rush host is stopped
+    And a transcript for the session id exists on disk
+    When the reconciler runs
+    Then it runs "rush session start --session-id <uuid> --resume"
+
+  Scenario: Moving an agent between tmux and rush leaves one process
+    Given an agent running in tmux
+    When its host is changed to rush and the reconciler runs
+    Then the tmux session is killed before the rush host starts
+    And the same card now names the rush host
+    When its host is changed back to tmux and the reconciler runs
+    Then the rush host is stopped and the card names the tmux session again
+
+  Scenario: The Slack bridge reaches an agent through its card
+    Given an agent whose card names a rush host
+    When a person writes in the agent's channel
+    Then the message is sent to the rush host, not to a tmux session named after the slug
+    And when the host is blocked on a question, the message answers it with "rush session answer"
+    And the question itself is posted to the channel as text, since rush does not report its options

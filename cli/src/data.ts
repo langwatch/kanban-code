@@ -225,16 +225,20 @@ interface RushHost {
   id: string;
   cwd?: string;
   alive?: boolean;
+  sleeping?: boolean;
+  state?: string;
   meta?: Record<string, string> | null;
 }
 
-/// Live rush hosts as tmux sessions, so liveness checks see them.
+/// Live rush hosts as tmux sessions, so liveness checks see them. A host
+/// resting after its turn counts: the next message wakes it. Same rule as
+/// `RushHost.isOpen` in KanbanCodeCore.
 export function listRushSessions(): TmuxSession[] {
   try {
     const out = execSync(`${shellToken(findRush())} session list --json 2>/dev/null`, { encoding: "utf-8" });
     const hosts = JSON.parse(out.trim() || "[]") as RushHost[] | null;
     return (hosts ?? [])
-      .filter((host) => host.alive)
+      .filter((host) => host.alive || (host.sleeping && host.state !== "stopped"))
       .map((host) => ({ name: rushSessionName(host), path: host.cwd ?? "", attached: false }));
   } catch {
     return [];
