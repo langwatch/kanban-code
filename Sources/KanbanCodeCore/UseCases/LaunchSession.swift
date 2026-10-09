@@ -152,9 +152,17 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
     public static func tmuxSessionName(project: String, worktree: String?) -> String {
         let projectName = (project as NSString).lastPathComponent
         if let worktree {
-            return "\(projectName)-\(worktree)"
+            return tmuxSafeName("\(projectName)-\(worktree)")
         }
-        return projectName
+        return tmuxSafeName(projectName)
+    }
+
+    /// tmux reads `:` and `.` in a `-t` target as the window and pane
+    /// separators, so a session named after a folder like `foo.bar` can be
+    /// created but never found again: `has-session`, `send-keys` and
+    /// `attach-session` all look for a window of a session named `foo`.
+    public static func tmuxSafeName(_ name: String) -> String {
+        name.replacingOccurrences(of: ".", with: "_").replacingOccurrences(of: ":", with: "_")
     }
 
     private func shellEscape(_ str: String) -> String {
