@@ -144,10 +144,21 @@ final class BoardModel {
     }
 
     /// Answers a decision on this master; it clears on every device.
-    func resolveAttention(_ request: AttentionRequest, resolution: String, unsealed: VaultUnsealed? = nil) async throws {
+    /// With `noteFollows` the vault holds a refusal for the note the
+    /// phone asks for next.
+    func resolveAttention(_ request: AttentionRequest, resolution: String, unsealed: VaultUnsealed? = nil,
+                          noteFollows: Bool = false) async throws {
         guard let client else { return }
-        try await client.resolveAttention(id: request.id, resolution: resolution, by: "phone", unsealed: unsealed)
+        try await client.resolveAttention(id: request.id, resolution: resolution, by: "phone", unsealed: unsealed,
+                                          noteFollows: noteFollows)
         attention.removeAll { $0.id == request.id }
+    }
+
+    /// The note of a refused vault request (nil: no note), or with
+    /// `typing` the sign that one is being written.
+    func noteAttention(id: String, note: String?, typing: Bool = false) async throws {
+        guard let client else { return }
+        try await client.noteAttention(id: id, note: note, typing: typing)
     }
 
     /// Replaces one card right away after an action, before the next event.

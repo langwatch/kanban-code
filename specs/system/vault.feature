@@ -308,6 +308,54 @@ Feature: Vault projects, environments and card identity
       | a sealed secret                        | the phone        |
       | a change to a secret                   | the phone        |
 
+  Scenario: A refusal with a note for the agent
+    Given an open request for a secret of tier ask
+    When the human picks "Deny" on the Mac sheet or the phone
+    Then the request is refused at once and closes on every device
+    And the device shows "Tell the agent why (optional)" with Send and Skip
+    When the human writes "you are testing lw-dev, use the dev key" and sends it
+    Then kv prints "kv: denied by the owner: you are testing lw-dev, use the dev key"
+    And a second line tells the agent to stop and not retry the same request
+    And kv exits with code 77
+    And the audit line of the refusal carries the note
+    And "kv log" and "kv asks" show it
+
+  Scenario: The refusal waits for the note
+    Given the human picked "Deny" and the note field is showing
+    Then kv keeps waiting for up to 20 seconds
+    And each keystroke moves the wait to 45 seconds from then, 120 seconds from the refusal at most
+    And Send, Skip or closing the field ends the wait at once
+    And every caller joined to the request gets the same single message
+
+  Scenario Outline: A refusal without a note reads as before
+    When the request is refused by <how>
+    Then kv prints what it printed before notes existed, with exit code 77
+    And nothing waits for a note
+
+    Examples:
+      | how                                        |
+      | "Deny" followed by Skip                    |
+      | "Deny" on the Mac banner                   |
+      | "Deny" from a phone on an older build      |
+      | a peer master on an older build            |
+      | the 12 hour timeout                        |
+      | Jev or a tier rule                         |
+
+  Scenario: A note is cleaned before it is kept
+    When the note has line breaks, control characters or more than 500 characters
+    Then it is kept as one trimmed line of at most 500 characters without them
+    And a note that is empty after that counts as no note
+
+  Scenario: A note sent to another master
+    Given the request was raised by the box and is answered on the Mac
+    When the human denies it with a note
+    Then the Mac forwards the refusal and the note to the box
+    And the caller on the box gets the note
+
+  Scenario: The note needs no authentication
+    When the human sends a note after "Deny"
+    Then no Touch ID, Face ID, password or device key is asked for
+
   Scenario: Approving still needs the device
     Given an open request for a sealed secret
     When the human picks "Approve once"

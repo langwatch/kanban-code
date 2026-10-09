@@ -31,6 +31,8 @@ export interface VaultResponse {
   env?: Record<string, string>;
   /** What was asked for -> the secret it resolved to (a dry-run rename: old name -> outcome). */
   resolved?: Record<string, string>;
+  /** What the owner wrote for the caller when refusing the request. */
+  ownerNote?: string | null;
 }
 
 export interface AwsProcessCredentials {
@@ -89,6 +91,8 @@ export interface VaultAskSummary {
   reasons: Array<{ text: string; count: number }>;
   why: Array<{ text: string; count: number }>;
   commands: Array<{ text: string; count: number }>;
+  /** What the owner wrote when refusing. */
+  notes?: Array<{ text: string; count: number }> | null;
 }
 
 export interface VaultAuditEntry {
@@ -103,6 +107,8 @@ export interface VaultAuditEntry {
   command?: string;
   reason?: string;
   detail?: string;
+  /** What the owner wrote for the caller when refusing the request. */
+  note?: string | null;
 }
 
 export class VaultCliError extends Error {
@@ -257,9 +263,19 @@ export function callerContext(env: NodeJS.ProcessEnv): { cardId?: string; sessio
 /**
  * The vault's own refusal, as it gave it (Jev's verdict with the secret's
  * rules, a human's no, a tier rule). The reason-writing help is only for
- * reasons kv itself refuses (`checkedReason`), not for these.
+ * reasons kv itself refuses (`checkedReason`), not for these. A refusal
+ * the owner wrote a note with prints the note and tells the caller not
+ * to ask the same thing again.
  */
 export function deniedError(r: VaultResponse): VaultCliError {
+  const note = r.ownerNote?.trim();
+  if (note) {
+    return new VaultCliError(
+      `kv: denied by the owner: ${note}\n` +
+        "Stop and rethink what you are doing before you ask again: do not retry the same request.",
+      EXIT_DENIED
+    );
+  }
   const hint = r.message.includes("kv request")
     ? ""
     : `\nIf the work needs it anyway, ask Rogerio: kv request NAME --reason "<one plain sentence>"`;
@@ -1074,6 +1090,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
         // One command that used several secrets is printed once, under the last of its lines.
         const next = body[i + 1];
         const sameCall = next && next.command === e.command && next.cardId === e.cardId && next.at.slice(0, 19) === e.at.slice(0, 19);
+        if (e.note) out(`    note to the agent: ${e.note}\n`);
         if (e.command && !sameCall) out(`    $ ${logCommand(e.command)}\n`);
       }
       return 0;
@@ -1096,6 +1113,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
         out(`${String(a.asks).padStart(4)}  ${secretDisplay(a.secret)}  (${a.approved} approved, ${a.denied} denied${outside}; last ${a.lastAt.slice(0, 10)})\n`);
         for (const w of a.why) out(`        why: ${w.text} x${w.count}\n`);
         for (const r of a.reasons) out(`        reason: ${r.text} x${r.count}\n`);
+        for (const n of a.notes ?? []) out(`        denied with: ${n.text} x${n.count}\n`);
         for (const c of a.commands) out(`        $ ${logCommand(c.text)} x${c.count}\n`);
       }
       return 0;

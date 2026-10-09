@@ -124,7 +124,7 @@ The token a master holds for its peer has the `peer` scope, in both directions. 
 - Card sync: `GET /v1/links`, `POST /v1/links/changed`, `GET /v1/peers`, `GET /v1/board`, `GET /v1/machines`, `GET /v1/events`, `GET /v1/me`.
 - What the human does to a card the peer owns: `POST /v1/tasks`, `GET /v1/cards/search`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `pasted-image`, `discover`, `worktree/remove`.
 - Moves between masters: `POST /v1/cards/{id}/move`, `GET /v1/cards/{id}/handover`.
-- Approvals: `GET /v1/attention`, `POST /v1/attention/presence`, `POST /v1/attention/{id}/resolve`.
+- Approvals: `GET /v1/attention`, `POST /v1/attention/presence`, `POST /v1/attention/{id}/resolve`, `POST /v1/attention/{id}/note` (the note of a refused vault request, see [vault.md](vault.md)).
 - Channels: `POST /v1/cli` (`kanban channel` and `dm` only), `GET` and `PUT /v1/channels/files`.
 - Agent sync: `/v1/sync/state`, `/v1/sync/file`, `/v1/sync/changed`, `POST /v1/optmem/run` (memo `note`, `nap`, `forget`, `wake`, `recall`, `zoom` only).
 - Vault: `GET` and `POST /v1/vault/replica` (the encrypted file), `POST /v1/vault/card-token`, and the audit log mirror (`GET /v1/vault/audit/hashes`, `GET` and `POST /v1/vault/audit/mirror`).

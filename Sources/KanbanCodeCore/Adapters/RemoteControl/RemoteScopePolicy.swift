@@ -33,7 +33,7 @@ enum RemoteScopePolicy {
         "GET me", "GET board", "GET machines", "GET events", "GET peers", "GET links", "POST links/changed",
         "GET sync/state", "GET sync/file", "POST sync/changed", "POST optmem/run",
         "POST cli", "GET channels/files", "PUT channels/files",
-        "GET attention", "POST attention/presence", "POST attention/*/resolve",
+        "GET attention", "POST attention/presence", "POST attention/*/resolve", "POST attention/*/note",
         "GET vault/replica", "POST vault/replica", "POST vault/card-token",
         "GET vault/audit/hashes", "GET vault/audit/mirror", "POST vault/audit/mirror",
         "GET scrub/status", "GET scrub/index", "POST scrub/run", "PUT scrub/schedule",

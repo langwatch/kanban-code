@@ -651,7 +651,15 @@ public final class RemoteControlServer: Sendable {
                 return .error(400, "body must be {\"resolution\": \"...\"}")
             }
             try await host.resolveAttention(id: rest[1], resolution: resolve.resolution, by: resolve.by ?? device.name,
-                                            unsealed: resolve.unsealed)
+                                            unsealed: resolve.unsealed, note: resolve.note,
+                                            noteFollows: resolve.noteFollows ?? false)
+            return .noContent
+        case ("POST", 3) where rest[2] == "note":
+            guard device.scope.actsForOwner else { return .error(403, "the \(device.scope.rawValue) scope cannot resolve attention requests") }
+            guard let noted = try? JSONDecoder.remote.decode(AttentionNoteRequest.self, from: body) else {
+                return .error(400, "body must be {\"note\": \"...\"}")
+            }
+            try await host.noteAttention(id: rest[1], note: noted.note, typing: noted.typing ?? false)
             return .noContent
         case (_, 1), (_, 2), (_, 3):
             return .error(405, "method \(method) not allowed on /v1/\(rest.joined(separator: "/"))")

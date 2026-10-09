@@ -205,6 +205,9 @@ struct VaultAsksList: View {
                         ForEach(a.reasons, id: \.text) { r in
                             Text("\u{201C}\(r.text)\u{201D} (\(r.count))").font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
+                        ForEach(a.notes ?? [], id: \.text) { n in
+                            Text("Denied with: \(n.text) (\(n.count))").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
@@ -266,6 +269,9 @@ struct VaultApprovalsList: View {
                         .font(.caption).foregroundStyle(.secondary)
                     if let reason = e.reason, !reason.isEmpty {
                         Text(reason).font(.caption).lineLimit(2)
+                    }
+                    if let note = e.note, !note.isEmpty {
+                        Text("You told the agent: \(note)").font(.caption).foregroundStyle(.secondary).lineLimit(3)
                     }
                     if let command = e.command, !command.isEmpty {
                         Text(command).font(.system(.caption, design: .monospaced)).lineLimit(2).foregroundStyle(.secondary)

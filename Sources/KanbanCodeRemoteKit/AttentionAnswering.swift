@@ -6,6 +6,7 @@ public enum AttentionAnswerCopy {
     public static let gone = "This request is no longer open."
     public static let ownerUnreachable = "The machine that asked is not reachable."
     public static let sessionGone = "The session that asked is not running any more."
+    public static let noteTooLate = "The refusal already reached the agent without a note."
     public static let needsDeviceKey = "Approving this unlocks a secret with the device's own key: answer it in Kanban Code on the Mac or the phone."
 
     /// "This was already answered on the phone: Approve once."

@@ -16,6 +16,8 @@ struct AttentionDetailPresenter: ViewModifier {
     let store: BoardStore
     @State private var shownId: String?
     @State private var waiting: [String] = []
+    /// The refused request whose sheet stays up for the note to the agent.
+    @State private var notingId: String?
 
     private func isOpen(_ id: String) -> Bool {
         store.state.attentionRequests[id]?.isOpen == true
@@ -36,7 +38,7 @@ struct AttentionDetailPresenter: ViewModifier {
                 }
             }
             .onChange(of: openIds) {
-                guard let shown = shownId, !isOpen(shown) else {
+                guard let shown = shownId, !isOpen(shown), shown != notingId else {
                     waiting = waiting.filter(isOpen)
                     return
                 }
@@ -44,6 +46,7 @@ struct AttentionDetailPresenter: ViewModifier {
                 shownId = nil
             }
             .onChange(of: shownId) {
+                if shownId != notingId { notingId = nil }
                 guard shownId == nil, !waiting.isEmpty else { return }
                 Task { @MainActor in
                     // Lets the closing sheet finish before the next one opens.
@@ -56,11 +59,12 @@ struct AttentionDetailPresenter: ViewModifier {
                 get: { shownId.map(AttentionSheetTarget.init) },
                 set: { shownId = $0?.id }
             )) { target in
-                if let request = store.state.attentionRequests[target.id], request.isOpen {
+                if let request = store.state.attentionRequests[target.id], request.isOpen || notingId == request.id {
                     AttentionDetailSheet(
                         request: request,
                         cardName: request.cardId.flatMap { id in store.state.cards.first { $0.id == id }?.displayTitle },
                         waitingAfter: AttentionSheetQueue.waitingCount(waiting, isOpen: isOpen),
+                        onNoting: { notingId = $0 ? request.id : nil },
                         onClose: { shownId = nil }
                     )
                 } else {
@@ -101,12 +105,26 @@ struct AttentionDetailSheet: View {
     let request: AttentionRequest
     let cardName: String?
     var waitingAfter: Int = 0
+    /// Keeps the sheet up after a refusal (true) for the note field, or
+    /// lets it close with its request again (false).
+    var onNoting: (Bool) -> Void = { _ in }
     let onClose: () -> Void
     @State private var busy: String?
     /// Why the last answer was not taken.
     @State private var failure: String?
+    /// Set once the request was refused here: the sheet asks for the note.
+    @State private var note: DenialNotePacer?
 
     var body: some View {
+        if let note {
+            DenialNoteView(requestId: request.id, title: AttentionCopy.notification(for: request, cardName: cardName).title,
+                           pacer: note, onClose: onClose)
+        } else {
+            details
+        }
+    }
+
+    private var details: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: request.kind == .vaultApproval ? "key.fill" : "bell.badge")
@@ -184,16 +202,26 @@ struct AttentionDetailSheet: View {
         busy = option
         failure = nil
         let request = request
+        // A refused vault request is refused at once; the sheet then
+        // offers a note for the agent, and the vault holds the refusal
+        // for it.
+        let takesNote = request.kind == .vaultApproval && AttentionCopy.isDenial(option)
+        if takesNote { onNoting(true) }
         Task { @MainActor in
             defer { busy = nil }
-            switch await MacVaultDevice.answer(request, option: option) {
+            switch await MacVaultDevice.answer(request, option: option, noteFollows: takesNote) {
             case .cancelled:
-                return
+                if takesNote { onNoting(false) }
             case .failed(let problem):
                 // A request settled elsewhere closes on its own state change.
                 failure = problem
+                if takesNote { onNoting(false) }
             case .sent:
-                onClose()
+                if takesNote {
+                    note = DenialNotePacer()
+                } else {
+                    onClose()
+                }
             }
         }
     }
@@ -201,5 +229,113 @@ struct AttentionDetailSheet: View {
     static func isNegative(_ option: String) -> Bool {
         let lower = option.lowercased()
         return lower.hasPrefix("deny") || lower.hasPrefix("no")
+    }
+}
+
+/// Shown after a vault request was refused: an optional note that goes to
+/// the agent with the refusal. The vault holds the refusal while this is
+/// up; Send, Skip, closing the sheet or the countdown release it.
+private struct DenialNoteView: View {
+    let requestId: String
+    let title: String
+    @State var pacer: DenialNotePacer
+    let onClose: () -> Void
+    @State private var text = ""
+    @State private var sending = false
+    @State private var failure: String?
+    /// The refusal was released from here, with or without a note.
+    @State private var released = false
+    @FocusState private var focused: Bool
+
+    private var cleaned: String? { DenialNote.clean(text) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "xmark.octagon.fill")
+                    .font(.title2)
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Denied")
+                        .font(.title3.weight(.semibold))
+                    Text(title)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            TextField("Tell the agent why (optional)", text: $text, axis: .vertical)
+                .lineLimit(2...5)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(send)
+                .onChange(of: text) {
+                    if text.count > DenialNote.limit { text = String(text.prefix(DenialNote.limit)) }
+                    guard !text.isEmpty, pacer.typed() else { return }
+                    let id = requestId
+                    Task { _ = await AppServices.noteAttention?(id, nil, true) }
+                }
+
+            if let failure {
+                Label("Not sent: \(failure)", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let left = max(0, Int(pacer.deadline.timeIntervalSince(context.date).rounded(.up)))
+                    Text("The agent hears of the denial in \(left)s, or when you send or skip.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Skip") { finish() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(sending)
+                Button(sending ? "Sending..." : "Send", action: send)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(sending || cleaned == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .onAppear { focused = true }
+        .task(id: pacer.deadline) {
+            // The vault releases the refusal at the deadline on its own.
+            let wait = pacer.deadline.timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard !Task.isCancelled, !sending else { return }
+            released = true
+            onClose()
+        }
+        .onDisappear {
+            guard !released else { return }
+            released = true
+            let id = requestId
+            Task { _ = await AppServices.noteAttention?(id, nil, false) }
+        }
+    }
+
+    private func send() {
+        guard let note = cleaned, !sending else { return }
+        sending = true
+        failure = nil
+        let id = requestId
+        Task { @MainActor in
+            let problem = await AppServices.noteAttention?(id, note, false)
+            sending = false
+            if let problem {
+                failure = problem
+            } else {
+                released = true
+                finish()
+            }
+        }
+    }
+
+    /// Closes the sheet; a refusal still held is released without a note.
+    private func finish() {
+        onClose()
     }
 }

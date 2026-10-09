@@ -202,8 +202,11 @@ extension MasterEngine {
     /// permissions; for a vault approval the vault reads the resolution.
     /// A request another master raised is answered there.
     /// `unsealed` is what the answering device opened with its own key,
-    /// for a vault approval that needs it.
-    public func resolveAttention(id: String, resolution: String, by device: String, unsealed: VaultUnsealed? = nil) async throws {
+    /// for a vault approval that needs it. A refused vault request takes
+    /// a `note` for the agent; with `noteFollows` the refusal waits for
+    /// `noteAttention`, up to `DenialNote.window`.
+    public func resolveAttention(id: String, resolution: String, by device: String, unsealed: VaultUnsealed? = nil,
+                                 note: String? = nil, noteFollows: Bool = false) async throws {
         guard let request = store.state.attentionRequests[id] else {
             throw RemoteHostError.notFound(AttentionAnswerCopy.gone)
         }
@@ -215,12 +218,17 @@ extension MasterEngine {
         if request.needsDeviceKey, !AttentionCopy.isDenial(resolution), unsealed == nil {
             throw RemoteHostError.conflict(AttentionAnswerCopy.needsDeviceKey)
         }
+        let takesNote = request.kind == .vaultApproval && AttentionCopy.isDenial(resolution)
+        let note = takesNote ? DenialNote.clean(note) : nil
+        let noteFollows = takesNote && note == nil && noteFollows
+        let noteUntil = noteFollows ? Date().addingTimeInterval(DenialNote.window) : nil
         if let owner = request.machineId, !store.state.localMachineId.isEmpty, owner != store.state.localMachineId {
             guard let client = await peerClient(machineId: owner) else {
                 throw RemoteHostError.conflict(AttentionAnswerCopy.ownerUnreachable)
             }
             do {
-                try await client.resolveAttention(id: id, resolution: resolution, by: device, unsealed: unsealed)
+                try await client.resolveAttention(id: id, resolution: resolution, by: device, unsealed: unsealed,
+                                                  note: note, noteFollows: noteFollows)
             } catch let error as RemoteClientError {
                 // Settled on its own master already: it is over here too.
                 switch error {
@@ -231,7 +239,7 @@ extension MasterEngine {
                 }
                 throw MasterRemoteControlHost.hostError(error)
             }
-            store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device))
+            store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device, note: note, noteUntil: noteUntil))
             return
         }
         if request.kind != .vaultApproval {
@@ -239,7 +247,39 @@ extension MasterEngine {
         } else if let unsealed {
             await vaultUnsealed?(id, unsealed)
         }
-        store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device))
+        store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device, note: note, noteUntil: noteUntil))
+    }
+
+    /// The note of a refusal answered with `noteFollows`: the vault sends
+    /// the refusal to the agent with it. Nil sends the refusal on without
+    /// a note. `typing` sends no note: the owner is writing one, so the
+    /// refusal waits `DenialNote.typingWindow` more, at most
+    /// `DenialNote.maximumWait` in all. Refused once the refusal went out.
+    public func noteAttention(id: String, note: String?, typing: Bool = false) async throws {
+        guard let request = store.state.attentionRequests[id] else {
+            throw RemoteHostError.notFound(AttentionAnswerCopy.gone)
+        }
+        guard !request.isOpen, let until = request.noteUntil, let deniedAt = request.resolvedAt,
+              Date() <= until.addingTimeInterval(DenialNote.slack) else {
+            throw RemoteHostError.conflict(AttentionAnswerCopy.noteTooLate)
+        }
+        let note = typing ? nil : DenialNote.clean(note)
+        if let owner = request.machineId, !store.state.localMachineId.isEmpty, owner != store.state.localMachineId {
+            guard let client = await peerClient(machineId: owner) else {
+                throw RemoteHostError.conflict(AttentionAnswerCopy.ownerUnreachable)
+            }
+            do {
+                try await client.noteAttention(id: id, note: note, typing: typing)
+            } catch let error as RemoteClientError {
+                store.dispatch(.attentionNoted(id: id, note: nil))
+                throw MasterRemoteControlHost.hostError(error)
+            }
+        }
+        if typing {
+            store.dispatch(.attentionNoteAwaited(id: id, until: DenialNote.typingDeadline(deniedAt: deniedAt)))
+        } else {
+            store.dispatch(.attentionNoted(id: id, note: note))
+        }
     }
 
     /// Answers the question or plan the card's session waits on, as the

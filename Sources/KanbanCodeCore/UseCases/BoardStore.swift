@@ -796,7 +796,13 @@ public enum Action: Sendable {
     /// A request is raised, or an open one is updated (same id).
     case attentionRaised(AttentionRequest)
     /// A request is resolved by `by` ("mac", "phone", "session", "timeout").
-    case attentionResolved(id: String, resolution: String?, by: String)
+    /// `note` is what the owner tells the agent with a refused vault
+    /// request; `noteUntil` keeps the refusal waiting for one sent next.
+    case attentionResolved(id: String, resolution: String?, by: String, note: String? = nil, noteUntil: Date? = nil)
+    /// The note of a refusal that waited for one; nil sends it on without.
+    case attentionNoted(id: String, note: String?)
+    /// The owner is writing the note: the refusal waits until `until`.
+    case attentionNoteAwaited(id: String, until: Date)
     /// Resolved requests older than `before` are dropped.
     case attentionPruned(before: Date)
     case deleteChannel(name: String)
@@ -1586,13 +1592,28 @@ public enum Reducer {
             state.attentionRequests[request.id] = request
             return isNew ? [.deliverAttention(request)] : [.updateAttention(request)]
 
-        case .attentionResolved(let id, let resolution, let by):
+        case .attentionResolved(let id, let resolution, let by, let note, let noteUntil):
             guard var request = state.attentionRequests[id], request.isOpen else { return [] }
             request.resolvedAt = Date()
             request.resolution = resolution
             request.resolvedBy = by
+            request.resolutionNote = DenialNote.clean(note)
+            request.noteUntil = request.resolutionNote == nil ? noteUntil : nil
             state.attentionRequests[id] = request
             return [.withdrawAttention(request)]
+
+        case .attentionNoted(let id, let note):
+            guard var request = state.attentionRequests[id], !request.isOpen, request.noteUntil != nil else { return [] }
+            request.resolutionNote = DenialNote.clean(note)
+            request.noteUntil = nil
+            state.attentionRequests[id] = request
+            return []
+
+        case .attentionNoteAwaited(let id, let until):
+            guard var request = state.attentionRequests[id], !request.isOpen, request.noteUntil != nil else { return [] }
+            request.noteUntil = until
+            state.attentionRequests[id] = request
+            return []
 
         case .attentionPruned(let before):
             state.attentionRequests = state.attentionRequests.filter { _, request in

@@ -22,6 +22,8 @@ final class FakeRemoteHost: RemoteControlHost {
         var scrolls: [(session: String, lines: Int)] = []
         var attention: [AttentionRequest] = []
         var resolutions: [(id: String, resolution: String, by: String)] = []
+        var resolutionNotes: [(id: String, note: String?, noteFollows: Bool)] = []
+        var notes: [(id: String, note: String?, typing: Bool)] = []
         var presences: [MacPresence] = []
         var sideChats: [String: RemoteSideChatRun] = [:]
         var sideChatRequests: [RemoteSideChatRequest] = []
@@ -98,6 +100,16 @@ final class FakeRemoteHost: RemoteControlHost {
             return Array(s.continuations.values)
         }
         conts.forEach { $0.yield() }
+    }
+
+    func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?,
+                          note: String?, noteFollows: Bool) async throws {
+        try await resolveAttention(id: id, resolution: resolution, by: by, unsealed: unsealed)
+        state.withLock { $0.resolutionNotes.append((id, note, noteFollows)) }
+    }
+
+    func noteAttention(id: String, note: String?, typing: Bool) async throws {
+        state.withLock { $0.notes.append((id, note, typing)) }
     }
 
     func reportPresence(_ presence: MacPresence) async {

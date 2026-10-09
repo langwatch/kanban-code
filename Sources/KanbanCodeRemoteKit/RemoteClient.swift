@@ -253,9 +253,21 @@ public struct RemoteClient: Sendable {
     }
 
     /// Answers a decision: `resolution` is one of its options or free text.
-    public func resolveAttention(id: String, resolution: String, by: String? = nil, unsealed: VaultUnsealed? = nil) async throws {
+    /// A refusal of a vault request takes a `note` for the agent, or
+    /// `noteFollows` when the note comes next through `noteAttention`.
+    public func resolveAttention(id: String, resolution: String, by: String? = nil, unsealed: VaultUnsealed? = nil,
+                                 note: String? = nil, noteFollows: Bool = false) async throws {
         try await sendEmpty(makeRequest("POST", "v1/attention/\(Self.escape(id))/resolve",
-                                        body: AttentionResolveRequest(resolution: resolution, by: by, unsealed: unsealed)))
+                                        body: AttentionResolveRequest(resolution: resolution, by: by, unsealed: unsealed,
+                                                                      note: note, noteFollows: noteFollows ? true : nil)))
+    }
+
+    /// The note of a refusal sent with `noteFollows`; nil sends the
+    /// refusal on without one.
+    /// `typing` sends no note: the owner is writing one, wait longer.
+    public func noteAttention(id: String, note: String?, typing: Bool = false) async throws {
+        try await sendEmpty(makeRequest("POST", "v1/attention/\(Self.escape(id))/note",
+                                        body: AttentionNoteRequest(note: typing ? nil : note, typing: typing ? true : nil)))
     }
 
     /// The keys of the vault's owner-only secrets on this master.

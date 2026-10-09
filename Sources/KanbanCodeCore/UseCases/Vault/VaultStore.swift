@@ -702,6 +702,8 @@ public actor VaultStore {
         }
         return Dictionary(grouping: requests.values, by: { $0[0].secret }).map { secret, asks in
             let firsts = asks.map { group in group.first { $0.outcome == .asked } ?? group[0] }
+            let refusals: [VaultAuditEntry] = asks.flatMap { $0 }.filter { $0.decider == .human && $0.outcome == .denied }
+            let notes: [String] = refusals.compactMap(\.note)
             return VaultAskSummary(
                 secret: secret,
                 asks: asks.count,
@@ -711,7 +713,8 @@ public actor VaultStore {
                 lastAt: asks.flatMap { $0 }.map(\.at).max() ?? since,
                 reasons: top(firsts.compactMap(\.reason)),
                 why: top(firsts.compactMap { $0.detail.map(Self.askCause) }),
-                commands: top(firsts.compactMap(\.command))
+                commands: top(firsts.compactMap(\.command)),
+                notes: top(notes)
             )
         }.sorted { $0.asks != $1.asks ? $0.asks > $1.asks : $0.secret < $1.secret }
     }

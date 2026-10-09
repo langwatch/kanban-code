@@ -242,13 +242,24 @@ final class AppComposition {
             let notifications = Self.readNotificationSettings()
             Task { await attentionCenter.configure(settings: notifications.attentionPolicy, phone: notifications.phoneSender) }
         }
-        AppServices.resolveAttention = { [weak engine] id, resolution, unsealed in
+        AppServices.resolveAttention = { [weak engine] id, resolution, unsealed, noteFollows in
             guard let engine else { return "Kanban Code is still starting." }
             do {
-                try await engine.resolveAttention(id: id, resolution: resolution, by: MacVaultDevice.deviceName, unsealed: unsealed)
+                try await engine.resolveAttention(id: id, resolution: resolution, by: MacVaultDevice.deviceName, unsealed: unsealed,
+                                                  noteFollows: noteFollows)
                 return nil
             } catch {
                 KanbanCodeLog.warn("attention", "Resolving \(id) from the Mac failed: \(error)")
+                return (error as? RemoteHostError)?.message ?? error.localizedDescription
+            }
+        }
+        AppServices.noteAttention = { [weak engine] id, note, typing in
+            guard let engine else { return "Kanban Code is still starting." }
+            do {
+                try await engine.noteAttention(id: id, note: note, typing: typing)
+                return nil
+            } catch {
+                KanbanCodeLog.warn("attention", "The note for \(id) from the Mac was not taken: \(error)")
                 return (error as? RemoteHostError)?.message ?? error.localizedDescription
             }
         }

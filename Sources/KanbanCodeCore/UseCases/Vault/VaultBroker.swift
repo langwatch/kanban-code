@@ -15,6 +15,31 @@ public protocol VaultApprovals: Sendable {
     /// Closes a request the human did not answer here: a timeout, or one
     /// an approval elsewhere settled.
     func close(id: String, resolution: String, by: String) async
+    /// The whole answer once the request was resolved, nil while open.
+    func answer(of id: String) async -> VaultHumanAnswer?
+}
+
+extension VaultApprovals {
+    public func answer(of id: String) async -> VaultHumanAnswer? {
+        await resolution(of: id).map { VaultHumanAnswer(resolution: $0.resolution, by: $0.by) }
+    }
+}
+
+/// How a human resolved a vault request.
+public struct VaultHumanAnswer: Sendable, Equatable {
+    public var resolution: String?
+    public var by: String
+    /// What the owner tells the agent with a refusal.
+    public var note: String?
+    /// The refusing device may still send a note until then.
+    public var noteUntil: Date?
+
+    public init(resolution: String?, by: String, note: String? = nil, noteUntil: Date? = nil) {
+        self.resolution = resolution
+        self.by = by
+        self.note = note
+        self.noteUntil = noteUntil
+    }
 }
 
 /// Body of `POST /v1/vault/release`.
@@ -292,10 +317,13 @@ public struct VaultResponse: Codable, Sendable, Equatable {
     /// What was asked for (a name or an environment variable) -> the
     /// secret it resolved to; a dry-run rename: old name -> its outcome.
     public var resolved: [String: String]?
+    /// What the owner wrote for the caller when refusing the request.
+    public var ownerNote: String?
 
     public init(status: Status, message: String, id: String? = nil, values: [String: String]? = nil,
                 skipped: [String]? = nil, credentials: AwsProcessCredentials? = nil, card: String? = nil,
-                env: [String: String]? = nil, resolved: [String: String]? = nil) {
+                env: [String: String]? = nil, resolved: [String: String]? = nil, ownerNote: String? = nil) {
+        self.ownerNote = ownerNote
         self.status = status
         self.message = message
         self.id = id
@@ -1497,8 +1525,15 @@ public actor VaultBroker {
     private func waitForHuman(id: String) async {
         guard let approvals, let started = pending[id]?.createdAt else { return }
         while Date().timeIntervalSince(started) < approvalTimeout {
-            if let answer = await approvals.resolution(of: id) {
-                await settle(id: id, approval: VaultPolicy.approval(from: answer.resolution), by: answer.by)
+            if var answer = await approvals.answer(of: id) {
+                let approval = VaultPolicy.approval(from: answer.resolution)
+                // A refusal whose device still shows the note field waits
+                // for the note, so the caller gets one message with it.
+                while approval == .deny, answer.note == nil, let until = answer.noteUntil, Date() < until {
+                    try? await Task.sleep(for: .seconds(min(pollInterval, max(0.01, until.timeIntervalSinceNow))))
+                    answer = await approvals.answer(of: id) ?? answer
+                }
+                await settle(id: id, approval: approval, by: answer.by, note: approval == .deny ? DenialNote.clean(answer.note) : nil)
                 return
             }
             try? await Task.sleep(for: .seconds(pollInterval))
@@ -1507,7 +1542,7 @@ public actor VaultBroker {
         await settle(id: id, approval: .deny, by: "timeout")
     }
 
-    private func settle(id: String, approval: VaultPolicy.Approval, by: String) async {
+    private func settle(id: String, approval: VaultPolicy.Approval, by: String, note: String? = nil) async {
         guard let p = pending[id], p.result == nil, p.joinedTo == nil else { return }
         let now = Date()
         let unsealed = delivered.removeValue(forKey: id)
@@ -1548,7 +1583,7 @@ public actor VaultBroker {
         for member in [id] + joined {
             guard let m = pending[member], m.result == nil else { continue }
             pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed,
-                                                    leaseSeconds: leaseSeconds)
+                                                    leaseSeconds: leaseSeconds, note: note)
             expireResult(member, after: unclaimedResultLifetime)
         }
         await persist()
@@ -1569,22 +1604,25 @@ public actor VaultBroker {
     /// What one waiting request gets for the human's answer.
     /// `leaseSeconds` is the length of the card lease the answer gave.
     private func outcome(of p: Pending, id: String, approval: VaultPolicy.Approval, by: String, now: Date,
-                         unsealed: VaultUnsealed? = nil, leaseSeconds: TimeInterval? = nil) async -> VaultResponse {
+                         unsealed: VaultUnsealed? = nil, leaseSeconds: TimeInterval? = nil,
+                         note: String? = nil) async -> VaultResponse {
         switch (approval, p.action) {
         case (.deny, _):
             let timedOut = by == "timeout"
+            let note = timedOut ? nil : note
             let message = timedOut
                 ? "No answer in \(VaultPolicy.span(approvalTimeout)), so it was denied. Ask again with a reason: kv request NAME --reason \"...\""
-                : "Rogerio denied it."
+                : note.map { "Rogerio denied it: \($0)" } ?? "Rogerio denied it."
             var command: String?
             if case .release(let req, _) = p.action { command = req.command }
             for name in names(of: p.action) {
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: p.caller.cardId, sessionId: p.caller.sessionId,
                                                    secret: name, tier: nil, outcome: .denied, decider: timedOut ? .timeout : .human,
                                                    action: actionName(p.action), command: command.map(Self.auditCommand),
-                                                   reason: p.request.vault?.reason, detail: "by \(by)", requestId: id))
+                                                   reason: p.request.vault?.reason, detail: "by \(by)", requestId: id,
+                                                   note: note))
             }
-            return VaultResponse(status: .denied, message: message, id: id, card: p.caller.cardId)
+            return VaultResponse(status: .denied, message: message, id: id, card: p.caller.cardId, ownerNote: note)
 
         case (_, .release(let req, let asked)):
             let wanted = (try? await self.wanted(for: req)) ?? []

@@ -9,7 +9,12 @@ import KanbanCodeRemoteKit
 enum AppServices {
     /// Answers an attention request from this Mac, with what its vault key
     /// unlocked for the approval; the problem as text when it was not taken.
-    nonisolated(unsafe) static var resolveAttention: (@Sendable (String, String, VaultUnsealed?) async -> String?)?
+    /// The last argument says a note for the agent follows the refusal.
+    nonisolated(unsafe) static var resolveAttention: (@Sendable (String, String, VaultUnsealed?, Bool) async -> String?)?
+    /// Sends the note of a refused vault request (nil: no note), or with
+    /// `typing` the sign that one is being written; the problem as text
+    /// when it was not taken.
+    nonisolated(unsafe) static var noteAttention: (@Sendable (_ id: String, _ note: String?, _ typing: Bool) async -> String?)?
     /// Answers the question or plan a card waits on from the chat; false
     /// when it waits on none.
     nonisolated(unsafe) static var answerCard: (@Sendable (String, String) async -> Bool)?

@@ -141,6 +141,59 @@ test("a denial exits with the denied code and a hint", async () => {
   m.close();
 });
 
+test("a denial with the owner's note prints the note and tells the caller to stop", async () => {
+  const note = "what? why do you need prod credentials? you are testing lw-dev";
+  const m = await fakeMaster((method) =>
+    method === "POST"
+      ? { status: 202, body: { status: "pending", message: "Waiting for Rogerio's approval", id: "vault_1" } }
+      : { status: 403, body: { status: "denied", message: `Rogerio denied it: ${note}`, id: "vault_1", ownerNote: note } }
+  );
+  await assert.rejects(runKv(["run", "A", "--", "true"], io(m.url, [])), (e: any) => {
+    assert.equal(e.code, EXIT_DENIED);
+    assert.equal(
+      e.message,
+      `kv: denied by the owner: ${note}\n` +
+        "Stop and rethink what you are doing before you ask again: do not retry the same request."
+    );
+    assert.doesNotMatch(e.message, /kv request NAME/);
+    return true;
+  });
+  m.close();
+});
+
+test("a denial without a note reads as before", async () => {
+  for (const ownerNote of [undefined, null, "", "  "]) {
+    const m = await fakeMaster(() => ({ status: 403, body: { status: "denied", message: "Rogerio denied it.", ownerNote } }));
+    await assert.rejects(runKv(["get", "A"], io(m.url, [])), (e: any) => {
+      assert.equal(e.code, EXIT_DENIED);
+      assert.equal(e.message, 'kv: Rogerio denied it.\nIf the work needs it anyway, ask Rogerio: kv request NAME --reason "<one plain sentence>"');
+      return true;
+    });
+    m.close();
+  }
+});
+
+test("kv log and kv asks show the owner's note of a denial", async () => {
+  const m = await fakeMaster((_method, path) =>
+    path.startsWith("/v1/vault/log")
+      ? {
+          status: 200,
+          body: [{ at: "2026-10-09T10:00:00Z", machine: "mac", secret: "PROD_KEY", outcome: "denied", decider: "human", action: "run", detail: "by mac", note: "use the dev key" }],
+        }
+      : {
+          status: 200,
+          body: [{ secret: "PROD_KEY", asks: 1, approved: 0, denied: 1, outsideCard: 0, lastAt: "2026-10-09T10:00:00Z", reasons: [], why: [], commands: [], notes: [{ text: "use the dev key", count: 1 }] }],
+        }
+  );
+  const lines: string[] = [];
+  const stdout = { ...io(m.url, []), stdout: (s: string) => lines.push(s) };
+  assert.equal(await runKv(["log"], stdout), 0);
+  assert.equal(await runKv(["asks"], stdout), 0);
+  m.close();
+  assert.match(lines.join(""), /    note to the agent: use the dev key\n/);
+  assert.match(lines.join(""), /        denied with: use the dev key x1\n/);
+});
+
 test("kv run passes the command line for Jev", async () => {
   const m = await fakeMaster(() => ({ status: 200, body: { status: "granted", message: "released", values: { A: "v" } } }));
   const reason = "Check that the test script sees the key it needs";

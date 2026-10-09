@@ -92,6 +92,17 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// `unsealed` is what the device opened with its own vault key.
     func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws
 
+    /// The same, for a refused vault request: `note` is what the owner
+    /// tells the agent, `noteFollows` makes the refusal wait for
+    /// `noteAttention`.
+    func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?,
+                          note: String?, noteFollows: Bool) async throws
+
+    /// The note of a refusal answered with `noteFollows`; nil sends the
+    /// refusal on without one. `typing` sends no note: the owner is
+    /// writing one, wait longer.
+    func noteAttention(id: String, note: String?, typing: Bool) async throws
+
     /// Presence the Mac reported, for the escalation of the requests here.
     func reportPresence(_ presence: MacPresence) async
 
@@ -173,6 +184,15 @@ extension RemoteControlHost {
 
     public func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?) async throws {
         throw RemoteHostError.notFound("this host has no attention requests")
+    }
+
+    public func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?,
+                                 note: String?, noteFollows: Bool) async throws {
+        try await resolveAttention(id: id, resolution: resolution, by: by, unsealed: unsealed)
+    }
+
+    public func noteAttention(id: String, note: String?, typing: Bool) async throws {
+        throw RemoteHostError.notFound("this host takes no notes on attention requests")
     }
 
     public func reportPresence(_ presence: MacPresence) async {}

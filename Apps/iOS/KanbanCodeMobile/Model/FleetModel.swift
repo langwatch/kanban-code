@@ -83,6 +83,17 @@ final class FleetModel {
     /// Answers on their way and the requests settled from this phone.
     private(set) var answers = AttentionAnswerState()
 
+    /// A vault request just refused from this phone: the vault holds the
+    /// refusal while the phone asks for a note to the agent.
+    struct DenialNoteTarget: Identifiable {
+        let id: String
+        let title: String
+        let master: BoardModel
+        let pacer: DenialNotePacer
+    }
+
+    var denialNote: DenialNoteTarget?
+
     /// Open decisions on every master, oldest first, each once. The master
     /// that raised a request decides whether it is still open; one this
     /// phone answered is gone at once (`AttentionFleet`).
@@ -135,10 +146,16 @@ final class FleetModel {
             }
             return
         }
+        // A refused vault request is refused at once; a note for the agent
+        // is asked for next, and the vault holds the refusal for it.
+        let takesNote = isVault && AttentionCopy.isDenial(resolution)
         do {
-            try await item.master.resolveAttention(item.request, resolution: resolution, unsealed: unsealed)
+            try await item.master.resolveAttention(item.request, resolution: resolution, unsealed: unsealed, noteFollows: takesNote)
             if isVault { PhoneVaultDevice.approvals.record(item.request, resolution: resolution) }
             answers.succeeded(id)
+            if takesNote {
+                denialNote = DenialNoteTarget(id: id, title: item.request.title, master: item.master, pacer: DenialNotePacer())
+            }
         } catch {
             if isVault { PhoneVaultDevice.approvals.record(item.request, resolution: resolution, error: error.localizedDescription) }
             answers.failed(id, error: error)

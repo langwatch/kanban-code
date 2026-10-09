@@ -435,6 +435,16 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         try await engine.resolveAttention(id: id, resolution: resolution, by: by, unsealed: unsealed)
     }
 
+    public func resolveAttention(id: String, resolution: String, by: String, unsealed: VaultUnsealed?,
+                                 note: String?, noteFollows: Bool) async throws {
+        try await engine.resolveAttention(id: id, resolution: resolution, by: by, unsealed: unsealed,
+                                          note: note, noteFollows: noteFollows)
+    }
+
+    public func noteAttention(id: String, note: String?, typing: Bool) async throws {
+        try await engine.noteAttention(id: id, note: note, typing: typing)
+    }
+
     public func reportPresence(_ presence: MacPresence) async {
         await engine.attentionCenter?.reportPresence(presence)
     }

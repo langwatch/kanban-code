@@ -69,6 +69,10 @@ struct AttentionListView: View {
                 }
             }
             .onDisappear { fleet.clearAttentionNote() }
+            .sheet(item: Binding(get: { fleet.denialNote }, set: { fleet.denialNote = $0 })) { target in
+                DenialNoteSheet(target: target, onGone: { fleet.denialNote = nil })
+                    .presentationDetents([.medium])
+            }
         }
     }
 
@@ -280,5 +284,107 @@ struct AttentionDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle(item.cardName ?? "Vault request")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Shown after a vault request was refused: an optional note that goes to
+/// the agent with the refusal. The vault holds the refusal while this is
+/// up; Send, Skip, closing the sheet or the countdown release it.
+struct DenialNoteSheet: View {
+    let target: FleetModel.DenialNoteTarget
+    /// Runs when the sheet went away, however it was closed.
+    let onGone: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var pacer: DenialNotePacer
+    @State private var text = ""
+    @State private var sending = false
+    @State private var failure: String?
+    /// The refusal was released from here, with or without a note.
+    @State private var released = false
+    @FocusState private var focused: Bool
+
+    init(target: FleetModel.DenialNoteTarget, onGone: @escaping () -> Void) {
+        self.target = target
+        self.onGone = onGone
+        _pacer = State(initialValue: target.pacer)
+    }
+
+    private var cleaned: String? { DenialNote.clean(text) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Tell the agent why (optional)", text: $text, axis: .vertical)
+                        .lineLimit(3...6)
+                        .focused($focused)
+                        .accessibilityIdentifier("denial-note-field")
+                        .onChange(of: text) {
+                            if text.count > DenialNote.limit { text = String(text.prefix(DenialNote.limit)) }
+                            guard !text.isEmpty, pacer.typed() else { return }
+                            let target = target
+                            Task { try? await target.master.noteAttention(id: target.id, note: nil, typing: true) }
+                        }
+                } header: {
+                    Text("Denied: \(target.title)")
+                } footer: {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let left = max(0, Int(pacer.deadline.timeIntervalSince(context.date).rounded(.up)))
+                        Text("The agent hears of the denial in \(left)s, or when you send or skip.")
+                    }
+                }
+                if let failure {
+                    Label("Not sent: \(failure)", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("Denied")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Skip") { dismiss() }
+                        .disabled(sending)
+                        .accessibilityIdentifier("denial-note-skip")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(sending ? "Sending..." : "Send", action: send)
+                        .disabled(sending || cleaned == nil)
+                        .accessibilityIdentifier("denial-note-send")
+                }
+            }
+        }
+        .onAppear { focused = true }
+        .task(id: pacer.deadline) {
+            // The vault releases the refusal at the deadline on its own.
+            let wait = pacer.deadline.timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard !Task.isCancelled, !sending else { return }
+            released = true
+            dismiss()
+        }
+        .onDisappear {
+            onGone()
+            guard !released else { return }
+            released = true
+            let target = target
+            Task { try? await target.master.noteAttention(id: target.id, note: nil) }
+        }
+    }
+
+    private func send() {
+        guard let note = cleaned, !sending else { return }
+        sending = true
+        failure = nil
+        Task { @MainActor in
+            do {
+                try await target.master.noteAttention(id: target.id, note: note)
+                released = true
+                dismiss()
+            } catch {
+                failure = error.localizedDescription
+            }
+            sending = false
+        }
     }
 }

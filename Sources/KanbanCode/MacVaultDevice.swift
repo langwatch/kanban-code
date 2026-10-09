@@ -38,8 +38,9 @@ enum MacVaultDevice {
     /// Answers `request` from this Mac. An approval that needs the device
     /// key unlocks with it (Touch ID, no password); any other approval
     /// that wants biometry asks for Touch ID or the password first. A
-    /// refusal is sent as it is (`AttentionAnswerGate`).
-    static func answer(_ request: AttentionRequest, option: String) async -> Answer {
+    /// refusal is sent as it is (`AttentionAnswerGate`); with
+    /// `noteFollows` the vault holds it for the note the sheet asks for next.
+    static func answer(_ request: AttentionRequest, option: String, noteFollows: Bool = false) async -> Answer {
         let unsealed: VaultUnsealed?
         do {
             let passed = try await AttentionAnswerGate.pass(request, option: option, unlock: { challenge in
@@ -58,7 +59,7 @@ enum MacVaultDevice {
             KanbanCodeLog.warn("vault", "Unlocking for \(request.id) on this Mac failed: \(text)")
             return isCancel(error) ? .cancelled : .failed("Not unlocked: \(text)")
         }
-        if let problem = await AppServices.resolveAttention?(request.id, option, unsealed) {
+        if let problem = await AppServices.resolveAttention?(request.id, option, unsealed, noteFollows) {
             if request.kind == .vaultApproval { approvals.record(request, resolution: option, error: problem) }
             return .failed(problem)
         }

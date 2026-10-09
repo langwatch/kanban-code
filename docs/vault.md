@@ -233,6 +233,29 @@ Each secret has its own lease time (`leasePolicy.leaseSeconds`), from 1 minute t
 
 "Deny" is sent as it is, on the Mac sheet, the Mac banner and the phone: no Touch ID, no Face ID, no password, no device key, also for a sealed secret or an AWS profile minted on the device. Only an approval unlocks with the device key or asks for a confirmation (`AttentionAnswerGate` in KanbanCodeRemoteKit). Closing the sheet answers nothing and asks nothing. A refusal goes over the same authenticated route as an approval (`POST /v1/attention/{id}/resolve`) and is written to the audit log as `denied`, decider `human`, "by mac" or "by phone", with the command and the reason of the request.
 
+### A refusal can carry a note for the agent
+
+After "Deny" on the Mac sheet or the phone, the device shows a field "Tell the agent why (optional)" with Send and Skip. The request is refused at that click: it closes on every device and can no longer be approved.
+
+- The device sends the refusal with `noteFollows`. The master that holds the request then keeps the refusal from `kv` for up to 20 seconds (`DenialNote.window`), so the caller gets one message with the note in it.
+- While the owner types, the device sends `POST /v1/attention/{id}/note` with `typing` (at most every 8 seconds); each one moves the wait to 45 seconds from then, 120 seconds from the refusal at most.
+- Send posts `{"note": "..."}` to the same route, Skip or closing the field posts no note. Either releases the refusal at once. With no post the refusal goes out when the wait ends. A note that arrives later gets HTTP 409 "The refusal already reached the agent without a note."
+- A refusal sent without `noteFollows` (the Mac banner action, a phone or a peer master on an older build) is not held. `POST /v1/attention/{id}/resolve` also takes `note` directly.
+- The note is one line of at most 500 characters: trimmed, line breaks turned into spaces, control and format characters removed (`DenialNote.clean`). It is cleaned on the device, on the master and again by the broker.
+- Another master forwards both routes to the master that raised the request, as it does for the answer. The peer scope allows `POST attention/*/note`.
+- The note asks for no Touch ID, Face ID or password.
+
+`kv` then prints, with exit code 77:
+
+```
+kv: denied by the owner: why do you need prod credentials? you are testing lw-dev
+Stop and rethink what you are doing before you ask again: do not retry the same request.
+```
+
+The response has the note as `ownerNote`, and `message` reads "Rogerio denied it: <note>" for a `kv` that does not know the field. Every caller joined to the request gets the same note. The audit line of the refusal keeps it as `note`: `kv log` prints it under the line ("note to the agent: ..."), Settings > Vault shows it, and `kv asks` lists the notes of a secret ("denied with: ...").
+
+A refusal without a note, a timeout and a denial by Jev or a tier rule read as before and carry no `ownerNote`.
+
 ## kv
 
 `kv` talks to `http://127.0.0.1:<remote control port>` (`KANBAN_VAULT_URL` overrides it). It needs no token. Exit code 77 means denied.

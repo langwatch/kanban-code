@@ -300,13 +300,16 @@ public struct VaultAuditEntry: Codable, Sendable, Equatable {
     public var requestId: String?
     /// When the card lease a human approval gave ends.
     public var leaseUntil: Date?
+    /// What the owner wrote for the caller when refusing the request.
+    public var note: String?
     /// SHA-256 of the line before this one in the log.
     public var prev: String?
 
     public init(at: Date = Date(), machine: String, cardId: String?, sessionId: String? = nil, secret: String,
                 tier: VaultTier?, outcome: VaultOutcome, decider: VaultDecider, action: String,
                 command: String? = nil, reason: String? = nil, detail: String? = nil, requestId: String? = nil,
-                leaseUntil: Date? = nil) {
+                leaseUntil: Date? = nil, note: String? = nil) {
+        self.note = note
         self.at = at
         self.machine = machine
         self.cardId = cardId
@@ -443,9 +446,12 @@ public struct VaultAskSummary: Codable, Sendable, Equatable {
     public var why: [Count]
     /// The commands that asked, most common first.
     public var commands: [Count]
+    /// What the owner wrote when refusing, most common first.
+    public var notes: [Count]?
 
     public init(secret: String, asks: Int, approved: Int, denied: Int, outsideCard: Int, lastAt: Date,
-                reasons: [Count], why: [Count], commands: [Count]) {
+                reasons: [Count], why: [Count], commands: [Count], notes: [Count]? = nil) {
+        self.notes = notes
         self.secret = secret
         self.asks = asks
         self.approved = approved
