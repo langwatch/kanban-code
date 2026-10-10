@@ -67,6 +67,9 @@ public struct RemoteHandoverInfo: Codable, Sendable, Equatable {
     /// files cannot follow to the adopting master, which can only start
     /// such a project fresh when there is nothing to bring.
     public var repoHasCommits: Bool?
+    /// Set when the card is coming back: the master it was released to
+    /// could not adopt it, for this reason.
+    public var refusal: String?
 
     public init(cardId: String, sessionId: String?, assistant: String, projectPath: String?, cwd: String?,
                 repoUrl: String?, branch: String?, worktreeName: String?, patch: String?, transcriptSize: Int) {

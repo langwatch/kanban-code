@@ -54,7 +54,7 @@ private final class TestMaster {
     /// A token this master issued, for the other one.
     var tokenForPeer = ""
 
-    init(name: String, root: String, alwaysOn: Bool = false) throws {
+    init(name: String, root: String, alwaysOn: Bool = false, clonesMissingProjects: Bool = true) throws {
         home = "\(root)/\(name)"
         try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
         identity = MachineIdentity(name: name, alwaysOn: alwaysOn ? true : nil)
@@ -70,6 +70,7 @@ private final class TestMaster {
         platform.projectsDirectory = "\(home)/Projects"
         platform.claudeProjectsDirectory = "\(home)/claude-projects"
         platform.kanbanHome = home
+        platform.clonesMissingProjects = clonesMissingProjects
         engine = MasterEngine(
             store: store,
             settingsStore: SettingsStore(basePath: home),
@@ -648,6 +649,69 @@ struct MasterHandoverTests {
             #expect(error.localizedDescription.contains("has no git remote"))
         }
         #expect(!FileManager.default.fileExists(atPath: "\(box.home)/Projects/twin"))
+    }
+
+    @Test("a card the peer cannot take comes back to the master that launched it, with the reason")
+    func refusedLaunchComesBack() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-launch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let origin = "\(root)/origin/widgets.git"
+        let repoA = "\(root)/mac/widgets"
+        try FileManager.default.createDirectory(atPath: "\(root)/origin", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: "\(root)/mac", withIntermediateDirectories: true)
+        try await sh(["git", "init", "--bare", "-q", origin], in: root)
+        try await sh(["git", "clone", "-q", origin, repoA], in: root)
+
+        let mac = try TestMaster(name: "mac", root: root)
+        // A master that has no clone of the project and may not make one.
+        let box = try TestMaster(name: "box", root: root, clonesMissingProjects: false)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+        await mac.peerSync.pullAll()
+        await box.peerSync.pullAll()
+
+        mac.store.dispatch(.createManualTask(Link(id: "card_new", name: "New work", projectPath: repoA, column: .backlog, promptBody: "do it")))
+        mac.engine.launch(cardId: "card_new", prompt: "do it now", projectPath: repoA, worktreeName: nil,
+                          runRemotely: true, machineChoice: .existing("box"))
+        #expect(mac.store.state.links["card_new"]?.column == .inProgress)
+        await box.peerSync.pullAll()
+
+        #expect(await box.engine.adoptOrHandBack(cardId: "card_new"))
+        #expect(box.store.state.links["card_new"]?.ownerMachine == mac.identity.id)
+        #expect(box.tmux.created.isEmpty)
+
+        await mac.peerSync.pullAll()
+        #expect(mac.store.state.links["card_new"]?.migrating == true)
+        #expect(await mac.engine.adoptOrHandBack(cardId: "card_new"))
+        let back = mac.store.state.links["card_new"]
+        #expect(back?.ownerMachine == mac.identity.id)
+        #expect(back?.migrating == nil)
+        #expect(back?.column == .backlog)
+        #expect(back?.projectPath == repoA)
+        guard case .failed(let line) = mac.store.state.cardStarts["card_new"] else {
+            Issue.record("the card does not say why it came back")
+            return
+        }
+        #expect(line.contains("box could not take it"))
+        #expect(line.contains("no project with origin"))
+        #expect(mac.tmux.created.isEmpty)
+
+        // The peer no longer queues the card.
+        await box.peerSync.pullAll()
+        #expect(box.store.state.links["card_new"]?.migrating == nil)
+        #expect(box.store.state.links["card_new"]?.ownerMachine == mac.identity.id)
+    }
+
+    @Test("an adoption that may work on a later try leaves the card where it is")
+    func transientFailureKeepsTheCard() {
+        #expect(MasterPeerError.noProject("x").refusesAdoption)
+        #expect(MasterPeerError.failed("x").refusesAdoption)
+        #expect(!MasterPeerError.notReady("x").refusesAdoption)
+        #expect(!MasterPeerError.peerOffline("x").refusesAdoption)
+        #expect(!MasterPeerError.unknownPeer("x").refusesAdoption)
     }
 
     @Test("a task for a peer in a project only the peer knows is created and run there")

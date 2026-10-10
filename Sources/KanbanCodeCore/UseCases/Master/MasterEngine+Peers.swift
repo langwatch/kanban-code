@@ -18,6 +18,7 @@ public enum MasterPeerError: Error, LocalizedError, Equatable {
     case peerOffline(String)
     case busy(String)
     case noProject(String)
+    case notReady(String)
     case failed(String)
 
     public var errorDescription: String? {
@@ -28,7 +29,17 @@ public enum MasterPeerError: Error, LocalizedError, Equatable {
         case .peerOffline(let name): "\(name) is offline"
         case .busy(let id): "card \(id) is launching or moving already"
         case .noProject(let url): "no project with origin \(url) here; add it in Settings"
+        case .notReady(let message): message
         case .failed(let message): message
+        }
+    }
+
+    /// Whether trying the adoption again would end the same way: the card
+    /// then goes back to the master that released it, with this reason.
+    public var refusesAdoption: Bool {
+        switch self {
+        case .noProject, .failed: true
+        case .unknownCard, .notOwner, .unknownPeer, .peerOffline, .busy, .notReady: false
         }
     }
 }
@@ -370,6 +381,7 @@ extension MasterEngine {
         if repoUrl == nil, let repoRoot, FileManager.default.fileExists(atPath: repoRoot) {
             info.repoHasCommits = await Self.git(["rev-parse", "--verify", "-q", "HEAD"], in: repoRoot)?.succeeded == true
         }
+        info.refusal = refusedHandovers[cardId]
         if let launch {
             info.launchPrompt = launch.prompt
             info.launchWorktree = launch.worktree
@@ -430,6 +442,9 @@ extension MasterEngine {
                 pendingPeerLaunches[id] = nil
                 store.dispatch(.handoverProgress(cardId: id, progress: nil))
             }
+            for (id, _) in refusedHandovers where store.state.links[id]?.migrating != true {
+                refusedHandovers[id] = nil
+            }
             for link in store.state.links.values where link.ownerMachine == local && link.migrating == true {
                 let id = link.id
                 guard !handoversInFlight.contains(id) else { continue }
@@ -438,17 +453,56 @@ extension MasterEngine {
                 handoversInFlight.insert(id)
                 Task {
                     defer { handoversInFlight.remove(id) }
-                    do {
-                        try await adopt(cardId: id)
-                        lastAttempt[id] = nil
-                    } catch {
-                        store.dispatch(.handoverProgress(cardId: id, progress: nil))
-                        KanbanCodeLog.warn("handover", "Adopting card=\(id.prefix(12)) failed: \(error.localizedDescription)")
-                        store.dispatch(.setError("Could not take over \(link.name ?? id): \(error.localizedDescription)"))
-                    }
+                    if await adoptOrHandBack(cardId: id) { lastAttempt[id] = nil }
                 }
             }
         }
+    }
+
+    /// Adopts a card a peer released to this master. A failure that
+    /// another try would repeat sends the card back to that peer with the
+    /// reason; any other failure leaves the card for the next try. Returns
+    /// whether the card left the adoption queue.
+    @discardableResult
+    func adoptOrHandBack(cardId id: String) async -> Bool {
+        do {
+            try await adopt(cardId: id)
+            return true
+        } catch {
+            let link = store.state.links[id]
+            store.dispatch(.handoverProgress(cardId: id, progress: nil))
+            KanbanCodeLog.warn("handover", "Adopting card=\(id.prefix(12)) failed: \(error.localizedDescription)")
+            store.dispatch(.setError("Could not take over \(link?.name ?? id): \(error.localizedDescription)"))
+            guard let refusal = error as? MasterPeerError, refusal.refusesAdoption,
+                  let from = link?.ownerRev?.machine, from != store.state.localMachineId
+            else { return false }
+            refusedHandovers[id] = refusal.localizedDescription
+            store.dispatch(.releaseCardOwnership(cardId: id, to: from))
+            guard store.state.links[id]?.ownerMachine == from else {
+                refusedHandovers[id] = nil
+                return false
+            }
+            KanbanCodeLog.info("handover", "Card=\(id.prefix(12)) goes back to \(peerName(from))")
+            notifyPeers()
+            return true
+        }
+    }
+
+    /// Keeps a card the peer could not take: it stays as it was here, with
+    /// the peer's reason as the result of its start.
+    private func takeBack(cardId: String, from: String, reason: String) throws {
+        let before = store.state.links[cardId]
+        store.dispatch(.adoptCard(cardId: cardId, sessionLink: nil, worktreeLink: nil, projectPath: nil))
+        guard store.state.links[cardId]?.migrating == nil else { throw MasterPeerError.notReady("card \(cardId) could not be taken back") }
+        pendingPeerLaunches[cardId] = nil
+        releasedCards[cardId] = nil
+        if before?.sessionLink == nil, before?.column == .inProgress {
+            store.dispatch(.moveCard(cardId: cardId, to: .backlog))
+        }
+        let line = "\(peerName(from)) could not take it: \(reason)"
+        KanbanCodeLog.warn("handover", "Card=\(cardId.prefix(12)) stays here. \(line)")
+        store.dispatch(.cardStartReported(cardId: cardId, report: .failed(line)))
+        store.dispatch(.setError("\(before?.name ?? cardId) stays on this machine. \(line)"))
     }
 
     /// Takes over a card a peer released to this master: its repository
@@ -460,6 +514,10 @@ extension MasterEngine {
         else { throw MasterPeerError.unknownPeer(link.ownerRev?.machine ?? "the releasing master") }
         KanbanCodeLog.info("handover", "Adopting card=\(cardId.prefix(12)) from \(peerName(from))")
         let info = try await client.handover(cardId: cardId)
+        if let reason = info.refusal {
+            try takeBack(cardId: cardId, from: from, reason: reason)
+            return
+        }
         let assistant = CodingAssistant(rawValue: info.assistant) ?? link.effectiveAssistant
 
         let repoRoot = try await localRepository(repoUrl: info.repoUrl, fallback: info.projectPath, hasCommits: info.repoHasCommits ?? true)
@@ -487,7 +545,7 @@ extension MasterEngine {
             guard assistant == .claude else { throw MasterPeerError.failed("only Claude conversations move between masters") }
             // An empty transcript would replace the conversation with nothing.
             guard info.transcriptSize > 0 else {
-                throw MasterPeerError.failed("\(peerName(from)) has no transcript for this card yet")
+                throw MasterPeerError.notReady("\(peerName(from)) has no transcript for this card yet")
             }
             let path = transcriptPath(cwd: cwd, sessionId: sessionId)
             var raw = await Self.mirroredPrefix(
@@ -521,7 +579,7 @@ extension MasterEngine {
         }
 
         store.dispatch(.adoptCard(cardId: cardId, sessionLink: sessionLink, worktreeLink: worktreeLink, projectPath: repoRoot))
-        guard store.state.links[cardId]?.migrating == nil else { throw MasterPeerError.failed("card \(cardId) could not be adopted") }
+        guard store.state.links[cardId]?.migrating == nil else { throw MasterPeerError.notReady("card \(cardId) could not be adopted") }
         notifyPeers()
 
         if sessionLink != nil {
@@ -597,9 +655,11 @@ extension MasterEngine {
         }
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         KanbanCodeLog.info("handover", "Starting \(name) as a new repository in \(dir)")
-        guard await Self.git(["init"], in: dir)?.succeeded == true else {
-            throw MasterPeerError.failed("git init in \(dir) failed")
-        }
+        // A worktree needs a commit to branch from.
+        let identity = ["-c", "user.name=Kanban Code", "-c", "user.email=kanban-code@localhost"]
+        guard await Self.git(["init"], in: dir)?.succeeded == true,
+              await Self.git(identity + ["commit", "--allow-empty", "-m", "Initial commit"], in: dir)?.succeeded == true
+        else { throw MasterPeerError.failed("git init in \(dir) failed") }
         await addProjectIfMissing(dir)
         return dir
     }
