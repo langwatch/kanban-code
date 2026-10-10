@@ -367,6 +367,9 @@ extension MasterEngine {
             patch: patch,
             transcriptSize: size
         )
+        if repoUrl == nil, let repoRoot, FileManager.default.fileExists(atPath: repoRoot) {
+            info.repoHasCommits = await Self.git(["rev-parse", "--verify", "-q", "HEAD"], in: repoRoot)?.succeeded == true
+        }
         if let launch {
             info.launchPrompt = launch.prompt
             info.launchWorktree = launch.worktree
@@ -459,7 +462,7 @@ extension MasterEngine {
         let info = try await client.handover(cardId: cardId)
         let assistant = CodingAssistant(rawValue: info.assistant) ?? link.effectiveAssistant
 
-        let repoRoot = try await localRepository(repoUrl: info.repoUrl, fallback: info.projectPath)
+        let repoRoot = try await localRepository(repoUrl: info.repoUrl, fallback: info.projectPath, hasCommits: info.repoHasCommits ?? true)
         var cwd = repoRoot
         var worktreeLink: WorktreeLink?
         // A card that ran over ssh on this very machine continues in the
@@ -548,10 +551,11 @@ extension MasterEngine {
 
     /// The repository with origin `repoUrl` here: a configured project, or
     /// a clone next to the others where this master may clone.
-    func localRepository(repoUrl: String?, fallback: String?) async throws -> String {
+    func localRepository(repoUrl: String?, fallback: String?, hasCommits: Bool = true) async throws -> String {
         guard let repoUrl, let wanted = Self.normalizedRepoURL(repoUrl) else {
             if let fallback, FileManager.default.fileExists(atPath: fallback) { return fallback }
-            throw MasterPeerError.noProject(fallback ?? "unknown")
+            guard let fallback else { throw MasterPeerError.noProject("unknown") }
+            return try await unpublishedRepository(named: (fallback as NSString).lastPathComponent, origin: fallback, hasCommits: hasCommits)
         }
         var candidates = store.state.configuredProjects.map(\.effectiveRepoRoot)
         let cloneDir = (platform.projectsDirectory as NSString).appendingPathComponent(Self.repoName(of: repoUrl))
@@ -575,6 +579,29 @@ extension MasterEngine {
         }
         await addProjectIfMissing(cloneDir)
         return cloneDir
+    }
+
+    /// The folder here for a project that has no `origin` on the master
+    /// that released the card: the one of the same name in the projects
+    /// directory, created as a new repository when the project has no
+    /// commits to bring.
+    private func unpublishedRepository(named name: String, origin: String, hasCommits: Bool) async throws -> String {
+        let dir = (platform.projectsDirectory as NSString).appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: dir) {
+            await addProjectIfMissing(dir)
+            return dir
+        }
+        guard platform.clonesMissingProjects else { throw MasterPeerError.noProject(origin) }
+        guard !hasCommits else {
+            throw MasterPeerError.failed("\(name) has no git remote, so its files cannot follow here; give it a remote, or copy it to \(dir)")
+        }
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        KanbanCodeLog.info("handover", "Starting \(name) as a new repository in \(dir)")
+        guard await Self.git(["init"], in: dir)?.succeeded == true else {
+            throw MasterPeerError.failed("git init in \(dir) failed")
+        }
+        await addProjectIfMissing(dir)
+        return dir
     }
 
     private func addProjectIfMissing(_ path: String) async {

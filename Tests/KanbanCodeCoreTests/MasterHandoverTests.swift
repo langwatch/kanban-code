@@ -603,6 +603,53 @@ struct MasterHandoverTests {
         #expect(box.tmux.created.count == 1)
     }
 
+    @Test("a card of a project with no remote says whether the project has commits to bring")
+    func unpublishedProjectTellsItsCommits() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-launch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let repo = "\(root)/mac/twin"
+        try FileManager.default.createDirectory(atPath: repo, withIntermediateDirectories: true)
+        try await sh(["git", "init", "-q"], in: repo)
+        let mac = try TestMaster(name: "mac", root: root)
+        mac.store.dispatch(.createManualTask(Link(id: "card_new", name: "New work", projectPath: repo, column: .backlog, promptBody: "do it")))
+
+        var info = try await mac.engine.handoverInfo(cardId: "card_new")
+        #expect(info.repoUrl == nil)
+        #expect(info.repoHasCommits == false)
+
+        try await sh(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        info = try await mac.engine.handoverInfo(cardId: "card_new")
+        #expect(info.repoHasCommits == true)
+    }
+
+    @Test("a new project with no remote and no commits starts on the adopting master as a new repository")
+    func unpublishedEmptyProjectStartsFresh() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-launch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let box = try TestMaster(name: "box", root: root)
+
+        let here = try await box.engine.localRepository(repoUrl: nil, fallback: "/nowhere/Projects/twin", hasCommits: false)
+        #expect(here == "\(box.home)/Projects/twin")
+        #expect(FileManager.default.fileExists(atPath: "\(here)/.git"))
+        // The next card of the project finds the folder made for the first.
+        #expect(try await box.engine.localRepository(repoUrl: nil, fallback: "/nowhere/Projects/twin", hasCommits: true) == here)
+    }
+
+    @Test("a project with commits and no remote is refused by the adopting master, naming the reason")
+    func unpublishedCommitsAreRefused() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-launch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let box = try TestMaster(name: "box", root: root)
+
+        do {
+            _ = try await box.engine.localRepository(repoUrl: nil, fallback: "/nowhere/Projects/twin", hasCommits: true)
+            Issue.record("the project was taken")
+        } catch {
+            #expect(error.localizedDescription.contains("has no git remote"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: "\(box.home)/Projects/twin"))
+    }
+
     @Test("a task for a peer in a project only the peer knows is created and run there")
     func taskForwardedToPeer() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-task-\(UUID().uuidString)")

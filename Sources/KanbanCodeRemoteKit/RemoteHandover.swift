@@ -63,6 +63,10 @@ public struct RemoteHandoverInfo: Codable, Sendable, Equatable {
     /// adopting master's own machine: the adopter continues there, with
     /// the worktree and transcript as they are.
     public var machineCwd: String?
+    /// For a repository with no `origin`: whether it has commits. Its
+    /// files cannot follow to the adopting master, which can only start
+    /// such a project fresh when there is nothing to bring.
+    public var repoHasCommits: Bool?
 
     public init(cardId: String, sessionId: String?, assistant: String, projectPath: String?, cwd: String?,
                 repoUrl: String?, branch: String?, worktreeName: String?, patch: String?, transcriptSize: Int) {
