@@ -576,6 +576,12 @@ public final class RemoteControlServer: Sendable {
                 }
                 return .response(.json(try await host.moveCard(cardId: id, to: body.to.trimmingCharacters(in: .whitespaces))))
 
+            case ("POST", "cards/*/fork"):
+                let body = request.body.isEmpty ? RemoteForkRequest()
+                    : (try? JSONDecoder.remote.decode(RemoteForkRequest.self, from: request.body))
+                guard let body else { return .response(.error(400, "body must be {\"keepWorktree\": true|false}")) }
+                return .response(.json(try await host.forkCard(cardId: id, keepWorktree: body.keepWorktree ?? false)))
+
             case ("POST", "cards/*/worktree/remove"):
                 // It deletes files on the machine, uncommitted work included.
                 guard device.scope.actsForOwner else {
@@ -682,7 +688,7 @@ public final class RemoteControlServer: Sendable {
     private static let knownShapes: Set<String> = [
         "me", "board", "machines", "cards/search", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt", "cards/*/queue/*",
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
-        "cards/*/move", "cards/*/handover", "cards/*/transcript/raw",
+        "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
         "cards/*/slash-commands", "cards/*/pasted-image",
     ]

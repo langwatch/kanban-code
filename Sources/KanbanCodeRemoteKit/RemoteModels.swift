@@ -31,9 +31,11 @@ public enum RemoteAPI {
         public static let slashCommands = "slashCommands"
         /// `GET /v1/cards/search`.
         public static let cardSearch = "cardSearch"
+        /// `POST /v1/cards/{id}/fork`.
+        public static let fork = "fork"
     }
 
-    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch]
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.

@@ -65,6 +65,10 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// a machine this master drives, or back here.
     func moveCard(cardId: String, to target: String) async throws -> RemoteCard
 
+    /// Copies the card's conversation into a new card, on the master that
+    /// owns the card. Returns the new card.
+    func forkCard(cardId: String, keepWorktree: Bool) async throws -> RemoteCard
+
     /// Removes the card's worktree on the machine that holds it and drops
     /// the worktree from the card (the card itself when it has no session).
     func removeWorktree(cardId: String) async throws -> RemoteWorktreeRemoval
@@ -138,6 +142,10 @@ extension RemoteControlHost {
 
     public func moveCard(cardId: String, to target: String) async throws -> RemoteCard {
         throw RemoteHostError.notFound("this host does not move cards")
+    }
+
+    public func forkCard(cardId: String, keepWorktree: Bool) async throws -> RemoteCard {
+        throw RemoteHostError.notFound("this host does not fork cards")
     }
 
     public func updateCard(cardId: String, _ update: RemoteCardUpdate) async throws -> RemoteCard {

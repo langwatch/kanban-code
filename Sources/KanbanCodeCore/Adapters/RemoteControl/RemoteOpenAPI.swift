@@ -123,6 +123,10 @@ enum RemoteOpenAPI {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {"summary": "Keep an image pasted into the card's terminal as a file on the owning master. The body is the image bytes (PNG, JPEG, GIF or WebP, at most 20 MiB)", "requestBody": {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "responses": {"201": {"description": "{\"path\"}: the file on the owning master"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
     },
+    "/v1/cards/{id}/fork": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}],
+      "post": {"summary": "Copy the card's conversation into a new card in Waiting, on the owning master; {\"keepWorktree\": true} keeps the worktree, else the fork runs from the project root", "responses": {"200": {"description": "the new card", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Card"}}}}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/cards/{id}/handover": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "get": {"summary": "What a master adopting the card needs: repository origin, branch, uncommitted changes, transcript size", "responses": {"200": {"description": "RemoteHandoverInfo"}, "404": {"$ref": "#/components/responses/Error"}}}

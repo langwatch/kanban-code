@@ -4,6 +4,16 @@ import FoundationNetworking
 #endif
 
 /// POST /v1/cards/{id}/move: continue the card somewhere else.
+/// Body of `POST /v1/cards/{id}/fork`.
+public struct RemoteForkRequest: Codable, Sendable, Equatable {
+    /// Keep the card's worktree; otherwise the fork runs from the project root.
+    public var keepWorktree: Bool?
+
+    public init(keepWorktree: Bool? = nil) {
+        self.keepWorktree = keepWorktree
+    }
+}
+
 public struct RemoteMoveRequest: Codable, Sendable, Equatable {
     /// A master (its machine id or name), "mac"/"local" for the master that
     /// serves the request, or a boxd/ssh machine that master drives.
@@ -166,6 +176,15 @@ extension RemoteClient {
     /// POST /v1/cards/{id}/move
     public func move(cardId: String, to target: String) async throws -> RemoteCard {
         let request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/move", body: RemoteMoveRequest(to: target))
+        let (data, status) = try await rawData(for: request)
+        guard (200..<300).contains(status) else { throw RemoteClientError.from(status: status, body: data) }
+        return try JSONDecoder.remote.decode(RemoteCard.self, from: data)
+    }
+
+    /// POST /v1/cards/{id}/fork: the new card, in Waiting with a copy of
+    /// the conversation.
+    public func fork(cardId: String, keepWorktree: Bool) async throws -> RemoteCard {
+        let request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/fork", body: RemoteForkRequest(keepWorktree: keepWorktree))
         let (data, status) = try await rawData(for: request)
         guard (200..<300).contains(status) else { throw RemoteClientError.from(status: status, body: data) }
         return try JSONDecoder.remote.decode(RemoteCard.self, from: data)

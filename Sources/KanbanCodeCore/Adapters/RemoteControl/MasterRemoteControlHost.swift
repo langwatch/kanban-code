@@ -654,6 +654,19 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         return try await MainActor.run { try remoteCard(cardId) }
     }
 
+    public func forkCard(cardId: String, keepWorktree: Bool) async throws -> RemoteCard {
+        if let owner = await ownerClient(cardId) {
+            return try await forwarded { try await owner.fork(cardId: cardId, keepWorktree: keepWorktree) }
+        }
+        let newId: String
+        do {
+            newId = try await engine.forkCard(cardId: cardId, keepWorktree: keepWorktree)
+        } catch let error as MasterPeerError {
+            throw Self.hostError(error)
+        }
+        return try await MainActor.run { try remoteCard(newId) }
+    }
+
     // MARK: Cards another master owns
 
     /// The owner's client when another master owns the card: calls about

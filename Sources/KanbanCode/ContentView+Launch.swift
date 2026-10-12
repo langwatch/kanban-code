@@ -236,64 +236,10 @@ extension ContentView {
     }
 
     func forkCard(cardId: String, keepWorktree: Bool = false) {
-        guard let card = store.state.cards.first(where: { $0.id == cardId }),
-              let sessionPath = card.link.sessionLink?.sessionPath else { return }
         Task {
             do {
-                // Determine the project path and session directory for the fork.
-                // When forking from a worktree (and not keeping it), use the parent project.
-                var forkProjectPath = card.link.projectPath
-                var targetDir: String? = nil
-                if !keepWorktree {
-                    // Extract parent project if projectPath is a worktree path
-                    if let pp = forkProjectPath,
-                       let range = pp.range(of: "/.claude/worktrees/") {
-                        forkProjectPath = String(pp[..<range.lowerBound])
-                    }
-                    // Always place the forked session in the correct project dir
-                    // so `claude --resume` can find it from the project root.
-                    if card.link.effectiveAssistant == .claude, let fp = forkProjectPath {
-                        let encoded = SessionFileMover.encodeProjectPath(fp)
-                        let home = NSHomeDirectory()
-                        targetDir = "\(home)/.claude/projects/\(encoded)"
-                    }
-                }
-
-                let cardStore = assistantRegistry.store(for: card.link.effectiveAssistant) ?? store.sessionStore
-                let newSessionId = try await cardStore.forkSession(
-                    sessionPath: sessionPath, targetDirectory: targetDir
-                )
-                let dir = targetDir ?? (sessionPath as NSString).deletingLastPathComponent
-                let newPath = MasterEngine.forkedSessionPath(
-                    assistant: card.link.effectiveAssistant,
-                    sessionId: newSessionId,
-                    directory: dir
-                )
-                var newLink = Link(
-                    name: (card.link.name ?? card.link.displayTitle) + " (fork)",
-                    projectPath: forkProjectPath,
-                    column: .waiting,
-                    lastActivity: card.link.lastActivity,
-                    source: .discovered,
-                    parentCardId: card.link.parentCardId,
-                    modelOverride: card.link.modelOverride,
-                    selfCompactContextThresholdTokens: card.link.selfCompactContextThresholdTokens,
-                    sessionLink: SessionLink(sessionId: newSessionId, sessionPath: newPath),
-                    worktreeLink: keepWorktree ? card.link.worktreeLink : nil,
-                    assistant: card.link.effectiveAssistant
-                )
-                newLink.apiServiceId = card.link.apiServiceId
-                // Set watermark so reconciler ignores parent's baked-in gitBranch
-                if !keepWorktree && card.link.worktreeLink != nil {
-                    if let path = card.link.sessionLink?.sessionPath {
-                        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-                        newLink.manualOverrides.branchWatermark = size
-                    } else {
-                        newLink.manualOverrides.branchWatermark = 0
-                    }
-                }
-                store.dispatch(.createManualTask(newLink))
-                store.dispatch(.selectCard(cardId: newLink.id))
+                let newId = try await engine.forkCard(cardId: cardId, keepWorktree: keepWorktree)
+                store.dispatch(.selectCard(cardId: newId))
                 shouldFocusTerminal = true
             } catch {
                 KanbanCodeLog.error("fork", "Fork failed: \(error)")

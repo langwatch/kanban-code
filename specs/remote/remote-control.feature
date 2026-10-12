@@ -86,3 +86,10 @@ Feature: Remote control from a phone and from other agents
   Scenario: An agent token cannot open a terminal
     When OpenClaw opens WS /v1/cards/<id>/terminal
     Then it is refused with 403
+
+  Scenario: Forking a card from the phone
+    Given a card with a conversation, on any master
+    When I hold the card on the phone and pick Fork
+    And pick Same worktree or Project root when the card has a worktree
+    Then the master that owns the card makes a new card in Waiting with a copy of the conversation
+    And the fork keeps the worktree, or runs from the project root, as picked

@@ -12,6 +12,8 @@ enum CardAction {
     case moveToColumn(RemoteColumn)
     /// Continue the card on another master: `target` is its machine id.
     case continueOn(target: String, name: String)
+    /// A new card with a copy of the conversation.
+    case fork(keepWorktree: Bool)
     case archive
     case unarchive
     case delete
@@ -56,6 +58,11 @@ final class CardActionController {
     /// The master takes pin, unarchive and delete.
     func supportsCardActions(_ entry: FleetCard) -> Bool {
         master(for: entry)?.supports(RemoteAPI.Feature.cardActions) == true
+    }
+
+    /// The master forks cards.
+    func supportsFork(_ entry: FleetCard) -> Bool {
+        master(for: entry)?.supports(RemoteAPI.Feature.fork) == true
     }
 
     /// Masters the card may continue on: the other online masters, for a
@@ -121,6 +128,8 @@ final class CardActionController {
             edit(entry, "move the card", RemoteCardUpdate(column: column))
         case .continueOn(let target, let name):
             call(entry, "continue the card on \(name)") { try await $0.move(cardId: id, to: target) }
+        case .fork(let keepWorktree):
+            call(entry, "fork the card") { try await $0.fork(cardId: id, keepWorktree: keepWorktree) }
         case .archive:
             edit(entry, "archive the card", RemoteCardUpdate(archived: true))
         case .unarchive:
@@ -217,6 +226,20 @@ struct CardActionsMenu: View {
                         Label("Move to", systemImage: "rectangle.2.swap")
                     }
                     .disabled(!online)
+                }
+                if card.sessionId != nil, controller.supportsFork(entry) {
+                    if card.worktreePath != nil {
+                        Menu {
+                            Button("Same worktree", systemImage: "arrow.triangle.branch") { act(.fork(keepWorktree: true)) }
+                            Button("Project root", systemImage: "folder") { act(.fork(keepWorktree: false)) }
+                        } label: {
+                            Label("Fork", systemImage: "arrow.branch")
+                        }
+                        .disabled(!online)
+                    } else {
+                        Button("Fork", systemImage: "arrow.branch") { act(.fork(keepWorktree: false)) }
+                            .disabled(!online)
+                    }
                 }
                 let targets = controller.continueTargets(for: entry)
                 if !targets.isEmpty {

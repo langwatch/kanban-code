@@ -714,6 +714,48 @@ struct MasterHandoverTests {
         #expect(!MasterPeerError.unknownPeer("x").refusesAdoption)
     }
 
+    @Test("a fork asked from the phone on a card the peer owns is made on the peer, from the project root")
+    func forkOnTheOwner() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-fork-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        let project = "\(box.home)/Projects/widgets"
+        let worktree = "\(project)/.claude/worktrees/calm-river"
+        let dir = "\(box.home)/claude-projects/\(SessionFileMover.encodeProjectPath(worktree))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let transcript = "\(dir)/s-1.jsonl"
+        let line = #"{"type":"user","sessionId":"s-1","cwd":"\#(worktree)","message":{"role":"user","content":"hi"}}"#
+        try (line + "\n").write(toFile: transcript, atomically: true, encoding: .utf8)
+        box.store.dispatch(.createManualTask(Link(
+            id: "card_src", name: "Source", projectPath: worktree, column: .waiting,
+            sessionLink: SessionLink(sessionId: "s-1", sessionPath: transcript),
+            worktreeLink: WorktreeLink(path: worktree, branch: "calm-river"))))
+        await mac.peerSync.pullAll()
+        #expect(mac.store.state.links["card_src"]?.ownerMachine == box.identity.id)
+
+        let phone = RemoteClient(baseURL: URL(string: mac.url)!, token: mac.tokenForPeer)
+        let fork = try await phone.fork(cardId: "card_src", keepWorktree: false)
+        let made = try #require(box.store.state.links[fork.id])
+        #expect(made.name == "Source (fork)")
+        #expect(made.column == .waiting)
+        #expect(made.projectPath == project)
+        #expect(made.worktreeLink == nil)
+        let path = try #require(made.sessionLink?.sessionPath)
+        #expect(path.hasPrefix("\(box.home)/claude-projects/\(SessionFileMover.encodeProjectPath(project))/"))
+        #expect(FileManager.default.fileExists(atPath: path))
+        #expect(mac.store.state.links[fork.id]?.ownerMachine == nil || mac.store.state.links[fork.id]?.ownerMachine == box.identity.id)
+
+        let kept = try await phone.fork(cardId: "card_src", keepWorktree: true)
+        #expect(box.store.state.links[kept.id]?.worktreeLink?.path == worktree)
+    }
+
     @Test("a task for a peer in a project only the peer knows is created and run there")
     func taskForwardedToPeer() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("peer-task-\(UUID().uuidString)")

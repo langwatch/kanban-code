@@ -39,7 +39,7 @@ enum RemoteScopePolicy {
         "GET scrub/status", "GET scrub/index", "POST scrub/run", "PUT scrub/schedule",
         "POST tasks", "GET cards/search", "GET cards/*", "PATCH cards/*", "DELETE cards/*",
         "GET cards/*/transcript", "GET cards/*/transcript/raw", "GET cards/*/handover",
-        "POST cards/*/prompt", "POST cards/*/interrupt", "POST cards/*/resume", "POST cards/*/move",
+        "POST cards/*/prompt", "POST cards/*/interrupt", "POST cards/*/resume", "POST cards/*/move", "POST cards/*/fork",
         "POST cards/*/worktree/remove", "POST cards/*/discover",
         "POST cards/*/queue/*", "PATCH cards/*/queue/*", "DELETE cards/*/queue/*",
         "POST cards/*/side-chat", "GET cards/*/side-chat/*", "DELETE cards/*/side-chat/*",

@@ -418,6 +418,57 @@ extension MasterEngine {
 
     /// Where an assistant writes the transcript of a session forked into
     /// `directory`.
+    /// Copies the card's conversation into a new card in Waiting, ready to
+    /// resume. `keepWorktree` keeps the card's worktree; otherwise the fork
+    /// runs from the project root. Returns the new card's id.
+    @discardableResult
+    public func forkCard(cardId: String, keepWorktree: Bool = false) async throws -> String {
+        guard let link = store.state.links[cardId] else { throw MasterPeerError.unknownCard(cardId) }
+        guard let sessionPath = link.sessionLink?.sessionPath else {
+            throw MasterPeerError.failed("card \(cardId) has no conversation to fork")
+        }
+        let assistant = link.effectiveAssistant
+        var projectPath = link.projectPath
+        var targetDir: String?
+        if !keepWorktree {
+            if let path = projectPath, let range = path.range(of: "/.claude/worktrees/") {
+                projectPath = String(path[..<range.lowerBound])
+            }
+            // `claude --resume` finds the session only under the folder it runs in.
+            if assistant == .claude, let path = projectPath {
+                targetDir = "\(platform.claudeProjectsDirectory)/\(SessionFileMover.encodeProjectPath(path))"
+            }
+        }
+        let sessionStore = registry.store(for: assistant) ?? store.sessionStore
+        let newSessionId = try await sessionStore.forkSession(sessionPath: sessionPath, targetDirectory: targetDir)
+        let newPath = Self.forkedSessionPath(
+            assistant: assistant, sessionId: newSessionId,
+            directory: targetDir ?? (sessionPath as NSString).deletingLastPathComponent)
+        var newLink = Link(
+            name: (link.name ?? link.displayTitle) + " (fork)",
+            projectPath: projectPath,
+            column: .waiting,
+            lastActivity: link.lastActivity,
+            source: .discovered,
+            parentCardId: link.parentCardId,
+            modelOverride: link.modelOverride,
+            selfCompactContextThresholdTokens: link.selfCompactContextThresholdTokens,
+            sessionLink: SessionLink(sessionId: newSessionId, sessionPath: newPath),
+            worktreeLink: keepWorktree ? link.worktreeLink : nil,
+            assistant: assistant
+        )
+        newLink.apiServiceId = link.apiServiceId
+        if !keepWorktree, link.worktreeLink != nil {
+            // The copied conversation names the parent's branch; the
+            // reconciler reads only what the fork writes after this point.
+            let size = (try? FileManager.default.attributesOfItem(atPath: sessionPath)[.size] as? Int) ?? 0
+            newLink.manualOverrides.branchWatermark = size
+        }
+        store.dispatch(.createManualTask(newLink))
+        KanbanCodeLog.info("fork", "Forked card=\(cardId.prefix(12)) into card=\(newLink.id.prefix(12)) keepWorktree=\(keepWorktree)")
+        return newLink.id
+    }
+
     public nonisolated static func forkedSessionPath(
         assistant: CodingAssistant,
         sessionId: String,
