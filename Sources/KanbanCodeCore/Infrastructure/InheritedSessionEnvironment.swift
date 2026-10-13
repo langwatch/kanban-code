@@ -1,6 +1,7 @@
 import Foundation
 
-/// The variables an agent session sets for the commands it runs. An app
+/// The variables an agent session sets for the commands it runs, and the
+/// Anthropic key variables a shell may carry. An app
 /// launched from such a session (`make run-app` in a card's shell) inherits
 /// them, and passes them on to every session it starts: rush then files a
 /// card's session under the one that launched the app (RUSH_SESSION), and
@@ -12,6 +13,9 @@ public enum InheritedSessionEnvironment {
         "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH",
         "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_TMPDIR",
         "CLAUDE_PID", "CLAUDE_JOB_DIR", "CLAUDE_ENV_FILE",
+        // A shell that held an Anthropic API key would make every session
+        // the app starts bill that key instead of the signed-in account.
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
     ]
 
     /// The variables a card's session gets from the tmux session itself

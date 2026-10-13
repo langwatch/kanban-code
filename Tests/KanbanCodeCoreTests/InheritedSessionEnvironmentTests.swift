@@ -60,4 +60,10 @@ struct InheritedSessionEnvironmentTests {
         #expect(!env.contains("CLAUDE_CODE_SESSION_ID="))
         #expect(!env.contains("/.config/rush/sessions/"))
     }
+
+    @Test("an Anthropic API key in the launching shell is dropped, so sessions bill the signed-in account")
+    func anthropicKeyIsDropped() {
+        let env = ["ANTHROPIC_API_KEY": "sk-ant-api-x", "ANTHROPIC_AUTH_TOKEN": "t", "ANTHROPIC_BASE_URL": "https://example.invalid", "HOME": "/Users/x"]
+        #expect(InheritedSessionEnvironment.inherited(in: env) == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"])
+    }
 }
