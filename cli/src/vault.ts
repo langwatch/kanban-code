@@ -479,12 +479,11 @@ export function exportLines(env: Record<string, string>): string {
 }
 
 /**
- * The PreToolUse hook's answer for a Bash call: when the session's project
- * has a `.env.vault`, the command first loads the vault env into its own
- * shell, so `cd` and shell syntax keep working as written.
- */
-/**
- * The PreToolUse answer that makes a Bash command load the vault env first.
+ * The PreToolUse answer that makes a Bash command load the vault env first,
+ * in its own shell, so `cd` and shell syntax keep working as written. The
+ * command runs in a `{ }` group after `&&`, which stops it when kv fails:
+ * an `exit` there instead makes Claude Code unable to check the command's
+ * `rm` calls, and those it asks about even in bypass mode.
  * Codex applies `updatedInput` only next to `permissionDecision: "allow"`,
  * which there does not skip its own approval or sandbox; Claude Code takes
  * `updatedInput` alone, where "allow" would skip the permission prompt.
@@ -501,9 +500,9 @@ export function hookRewrite(
   if (!file) return undefined;
   const b64 = Buffer.from(command, "utf8").toString("base64");
   const wrapped =
-    `__kv_env="$(${shellQuote(kvPath)} env ${shellQuote(file)} --export --command-b64 ${b64})" || exit $?\n` +
-    `eval "$__kv_env"; unset __kv_env\n` +
-    command;
+    `__kv_env="$(${shellQuote(kvPath)} env ${shellQuote(file)} --export --command-b64 ${b64})" && ` +
+    `eval "$__kv_env" && unset __kv_env && {\n` +
+    `${command}\n}`;
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",

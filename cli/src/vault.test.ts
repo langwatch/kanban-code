@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -73,10 +74,39 @@ test("the hook wraps Bash commands only in projects with .env.vault", () => {
   };
   const cmd = out.hookSpecificOutput.updatedInput.command;
   assert.match(cmd, /env .*\.env\.vault --export --command-b64 /);
-  assert.ok(cmd.endsWith("\ncd x && pnpm test"));
+  assert.ok(cmd.endsWith("{\ncd x && pnpm test\n}"));
   assert.equal(hookRewrite({ tool_name: "Bash", tool_input: { command: cmd }, cwd: join(root, "repo") }, "/bin/kv"), undefined);
   assert.equal(hookRewrite({ tool_name: "Read", tool_input: {}, cwd: join(root, "repo") }, "/bin/kv"), undefined);
   assert.equal(hookRewrite({ tool_name: "Bash", tool_input: { command: "ls" }, cwd: join(root, "other") }, "/bin/kv"), undefined);
+});
+
+test("the rewritten command runs with the vault env in its own shell, and not at all when kv fails", () => {
+  const root = mkdtempSync(join(tmpdir(), "kv-hook-"));
+  mkdirSync(join(root, "repo/.git"), { recursive: true });
+  mkdirSync(join(root, "repo/sub"));
+  writeFileSync(join(root, "repo/.env.vault"), "A={{vault:A}}\n");
+  const kv = (body: string) => {
+    const path = join(root, `kv-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return path;
+  };
+  const run = (kvPath: string, command: string) => {
+    const out = hookRewrite({ tool_name: "Bash", tool_input: { command }, cwd: join(root, "repo") }, kvPath) as {
+      hookSpecificOutput: { updatedInput: { command: string } };
+    };
+    return spawnSync("/bin/sh", ["-c", `${out.hookSpecificOutput.updatedInput.command}\necho "cwd=$(basename "$PWD")"`], {
+      cwd: join(root, "repo"),
+      encoding: "utf8",
+    });
+  };
+
+  const ok = run(kv("echo \"export A='from vault'\""), "cd sub && echo \"A=$A\" && cat <<EOF\nheredoc\nEOF");
+  assert.equal(ok.status, 0);
+  assert.equal(ok.stdout, "A=from vault\nheredoc\ncwd=sub\n");
+
+  const failed = run(kv("echo denied >&2; exit 7"), "echo ran");
+  assert.equal(failed.stdout.includes("ran"), false);
+  assert.match(failed.stderr, /denied/);
 });
 
 test("the hook answers Codex with permissionDecision allow and Claude Code without it", () => {
