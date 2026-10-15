@@ -74,7 +74,7 @@ test("the hook wraps Bash commands only in projects with .env.vault", () => {
   };
   const cmd = out.hookSpecificOutput.updatedInput.command;
   assert.match(cmd, /env .*\.env\.vault --export --command-b64 /);
-  assert.ok(cmd.endsWith("{\ncd x && pnpm test\n}"));
+  assert.ok(cmd.endsWith("\ncd x && pnpm test\nelse exit $?; fi"));
   assert.equal(hookRewrite({ tool_name: "Bash", tool_input: { command: cmd }, cwd: join(root, "repo") }, "/bin/kv"), undefined);
   assert.equal(hookRewrite({ tool_name: "Read", tool_input: {}, cwd: join(root, "repo") }, "/bin/kv"), undefined);
   assert.equal(hookRewrite({ tool_name: "Bash", tool_input: { command: "ls" }, cwd: join(root, "other") }, "/bin/kv"), undefined);
@@ -105,6 +105,7 @@ test("the rewritten command runs with the vault env in its own shell, and not at
   assert.equal(ok.stdout, "A=from vault\nheredoc\ncwd=sub\n");
 
   const failed = run(kv("echo denied >&2; exit 7"), "echo ran");
+  assert.equal(failed.status, 7);
   assert.equal(failed.stdout.includes("ran"), false);
   assert.match(failed.stderr, /denied/);
 });
