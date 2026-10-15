@@ -304,10 +304,17 @@ struct RemoteControlServerTests {
         #expect(badStatus == 400)
         #expect(String(decoding: badData, as: UTF8.self).contains("not PNG, JPEG, GIF or WebP"))
 
+        // A message of seventeen pasted screenshots goes through whole.
+        let markers = (1...17).map { "[Image #\($0)]" }.joined(separator: " ")
+        let seventeen = try JSONEncoder.remote.encode(RemotePromptRequest(text: markers, images: Array(repeating: png, count: 17)))
+        let (seventeenStatus, _) = try await f.request("POST", "/v1/cards/card_live/prompt", token: f.agentToken, body: seventeen)
+        #expect(seventeenStatus == 204)
+        #expect(f.host.state.withLock { $0.promptImages.last?.count } == 17)
+
         let many = try JSONEncoder.remote.encode(RemotePromptRequest(text: "x", images: Array(repeating: png, count: RemoteImage.maxCount + 1)))
         let (manyStatus, _) = try await f.request("POST", "/v1/cards/card_live/prompt", token: f.agentToken, body: many)
         #expect(manyStatus == 400)
-        #expect(f.host.state.withLock { $0.prompts.count } == 1)
+        #expect(f.host.state.withLock { $0.prompts.count } == 2)
     }
 
     @Test("a prompt's images follow their [Image #N] markers; an image whose marker was deleted is dropped")

@@ -361,6 +361,93 @@ struct MasterHandoverTests {
         #expect(boxLink.queuedPrompts == nil || boxLink.queuedPrompts?.first?.body == "from the mac")
     }
 
+    @Test("a prompt of seventeen screenshots on a card another master owns reaches that master, journalled here first")
+    func foreignPromptManyImages() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("foreign-images-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        box.store.dispatch(.createManualTask(Link(
+            id: "card_box", name: "On the box", projectPath: "/tmp/acme", column: .waiting,
+            sessionLink: SessionLink(sessionId: "sid-box"), tmuxLink: TmuxLink(sessionName: "box-session")
+        )))
+        box.store.dispatch(.tmuxLivenessScanned(live: ["box-session"]))
+        await mac.peerSync.pullAll()
+        #expect(mac.engine.isForeign("card_box"))
+
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+        let paths = try (1...17).map { n -> String in
+            let path = "\(root)/pasted-\(n).png"
+            try png.write(to: URL(fileURLWithPath: path))
+            return path
+        }
+        let body = (1...17).map { "\($0). [Image #\($0)] look" }.joined(separator: "\n")
+        let prompt = QueuedPrompt(body: body, imagePaths: paths, humanWrittenAt: .now)
+        mac.store.dispatch(.addQueuedPrompt(cardId: "card_box", prompt: prompt, placement: .back))
+
+        let boxJournal = QueuedPromptJournal(basePath: box.home)
+        var arrived: QueuedPromptJournalEntry?
+        for _ in 0..<100 where arrived == nil {
+            arrived = await boxJournal.entries(forCard: "card_box").first { $0.body == body }
+            if arrived == nil { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(arrived?.imagePaths?.count == 17)
+        let sent = await QueuedPromptJournal(basePath: mac.home).entries(forCard: "card_box")
+        #expect(sent.contains { $0.promptId == prompt.id && $0.reason == .sent && $0.imagePaths == paths })
+        #expect(mac.store.state.failedPrompts["card_box"] == nil)
+    }
+
+    @Test("a prompt the owning master refuses comes back to the chat as failed, text and images kept")
+    func foreignPromptRefused() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("foreign-refused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        // No live session on the box: it refuses the prompt.
+        box.store.dispatch(.createManualTask(Link(
+            id: "card_box", name: "On the box", projectPath: "/tmp/acme", column: .waiting,
+            sessionLink: SessionLink(sessionId: "sid-box")
+        )))
+        await mac.peerSync.pullAll()
+        #expect(mac.engine.isForeign("card_box"))
+
+        let image = "\(root)/pasted.png"
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: URL(fileURLWithPath: image))
+        let prompt = QueuedPrompt(body: "this one: [Image #1]", imagePaths: [image], humanWrittenAt: .now)
+        mac.store.dispatch(.addQueuedPrompt(cardId: "card_box", prompt: prompt, placement: .back))
+
+        for _ in 0..<100 where mac.store.state.failedPrompts["card_box"] == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let failed = try #require(mac.store.state.failedPrompts["card_box"]?.first)
+        #expect(failed.prompt.body == "this one: [Image #1]")
+        #expect(failed.prompt.imagePaths == [image])
+        #expect(!failed.message.isEmpty)
+
+        var reasons: [QueuedPromptJournalReason] = []
+        for _ in 0..<40 where !reasons.contains(.failed) {
+            reasons = await QueuedPromptJournal(basePath: mac.home).entries(forCard: "card_box")
+                .filter { $0.promptId == prompt.id }.map(\.reason)
+            if !reasons.contains(.failed) { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(reasons == [.sent, .failed])
+
+        mac.store.dispatch(.dismissFailedPrompt(cardId: "card_box", promptId: prompt.id))
+        #expect(mac.store.state.failedPrompts["card_box"] == nil)
+    }
+
     @Test("an image pasted into the terminal of a card another master owns is stored on that master")
     func pastedImageGoesToTheOwner() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("pasted-\(UUID().uuidString)")

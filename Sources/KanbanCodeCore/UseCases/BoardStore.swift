@@ -116,6 +116,9 @@ public final class AppState: @unchecked Sendable {
     /// What each card's chat composer offers after `/`, as last read from
     /// the master that owns the card.
     public var slashCommands: [String: [RemoteSlashCommand]] = [:]
+    /// Prompts sent from a card's chat that never reached its session, by
+    /// card, oldest first.
+    public var failedPrompts: [String: [FailedPrompt]] = [:]
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
     /// `selectedCardId` / `selectedChannelName` / `selectedDMParticipant`
@@ -763,6 +766,10 @@ public enum Action: Sendable {
     // Settings / misc
     case settingsLoaded(projects: [Project], excludedPaths: [String], remote: RemoteSettings?, remoteMode: RemoteMode = .boxd, boxd: BoxdSettings? = nil)
     case setError(String?)
+    /// A prompt sent from the card's chat did not reach its session.
+    case promptSendFailed(cardId: String, prompt: QueuedPrompt, message: String)
+    /// The chat let go of a failed prompt: sent again, edited or discarded.
+    case dismissFailedPrompt(cardId: String, promptId: String)
     /// Same banner as `setError`, but says what kind of news it is.
     case setNotice(String?, kind: NoticeKind)
     case setRateLimitedRepos(Set<String>)
@@ -2919,6 +2926,19 @@ public enum Reducer {
 
         case .setError(let message):
             state.notice = message.map { Notice($0) }
+            return []
+
+        case .promptSendFailed(let cardId, let prompt, let message):
+            var failed = state.failedPrompts[cardId] ?? []
+            failed.removeAll { $0.id == prompt.id }
+            failed.append(FailedPrompt(prompt: prompt, message: message))
+            state.failedPrompts[cardId] = failed
+            return [.journalQueuedPrompt(cardId: cardId, prompt: prompt, reason: .failed)]
+
+        case .dismissFailedPrompt(let cardId, let promptId):
+            guard var failed = state.failedPrompts[cardId] else { return [] }
+            failed.removeAll { $0.id == promptId }
+            state.failedPrompts[cardId] = failed.isEmpty ? nil : failed
             return []
 
         case .setNotice(let message, let kind):

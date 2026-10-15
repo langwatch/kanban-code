@@ -120,7 +120,8 @@ export interface RemoteImage {
 }
 
 export const REMOTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-export const REMOTE_IMAGE_MAX_COUNT = 6;
+// Matches RemoteImage.maxCount on the server.
+export const REMOTE_IMAGE_MAX_COUNT = 40;
 
 /** The media type of image bytes, from their signature. */
 export function imageMediaType(bytes: Uint8Array): string | undefined {

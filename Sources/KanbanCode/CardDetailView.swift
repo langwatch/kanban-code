@@ -732,6 +732,10 @@ struct CardDetailView: View {
                 }
             },
             githubBaseURL: githubBaseURL,
+            failedPrompts: AppComposition.shared.store.state.failedPrompts[card.id] ?? [],
+            onDismissFailedPrompt: { failed in
+                AppComposition.shared.store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
+            },
             draftText: chatDraftText,
             draftImages: chatDraftImages,
             pendingMessage: $chatPendingMessage

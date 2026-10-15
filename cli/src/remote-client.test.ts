@@ -12,6 +12,8 @@ import {
   parseColumn,
   normalizeUrl,
   remoteClientConfigPath,
+  readImages,
+  REMOTE_IMAGE_MAX_COUNT,
   type RemoteCard,
   type RemoteIO,
   type RemoteMessage,
@@ -705,5 +707,33 @@ describe("devices.json", () => {
     assert.equal(tailscaleHost(status({ DNSName: "mac.tail1234.ts.net.", TailscaleIPs: ["100.1.2.3"] })), "mac.tail1234.ts.net");
     assert.equal(tailscaleHost(status({ DNSName: "", TailscaleIPs: ["fd7a::1", "100.1.2.3"] })), "100.1.2.3");
     assert.equal(tailscaleHost(() => { throw new Error("not installed"); }), undefined);
+  });
+});
+
+describe("readImages", () => {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  let dir: string;
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), "kanban-images-"));
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const files = (n: number) =>
+    Array.from({ length: n }, (_, i) => {
+      const path = join(dir, `shot-${i}.png`);
+      writeFileSync(path, png);
+      return path;
+    });
+
+  test("takes a message of seventeen screenshots, in order", () => {
+    const images = readImages(files(17));
+    assert.equal(images.length, 17);
+    assert.ok(images.every((image) => image.mediaType === "image/png"));
+  });
+
+  test("refuses more images than the server takes", () => {
+    assert.throws(() => readImages(files(REMOTE_IMAGE_MAX_COUNT + 1)), /At most 40 images/);
   });
 });

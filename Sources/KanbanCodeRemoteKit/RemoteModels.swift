@@ -419,8 +419,10 @@ public struct RemoteQueuedPrompt: Codable, Sendable, Equatable, Identifiable {
 public struct RemoteImage: Codable, Sendable, Equatable {
     /// Largest image the server takes, decoded.
     public static let maxBytes = 5 * 1024 * 1024
-    /// Most images in one prompt or task.
-    public static let maxCount = 6
+    /// Most images in one prompt or task. The Mac chat takes any number of
+    /// pasted screenshots, so this is room for a long message of them; the
+    /// request body limit bounds their total size.
+    public static let maxCount = 40
 
     /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
     public var mediaType: String

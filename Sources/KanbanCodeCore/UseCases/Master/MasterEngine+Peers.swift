@@ -102,15 +102,7 @@ extension MasterEngine {
         case .addQueuedPrompt(let cardId, let prompt, _):
             guard isForeign(cardId) else { return false }
             forwardedPromptIds.insert(prompt.id)
-            let images = (prompt.imagePaths ?? []).compactMap { path -> RemoteImage? in
-                guard let data = FileManager.default.contents(atPath: path) else { return nil }
-                return RemoteImage(mediaType: MasterRemoteControlHost.mediaType(ofExtension: (path as NSString).pathExtension),
-                                   data: data.base64EncodedString())
-            }
-            forwardToOwner(cardId, "send the prompt") { client in
-                try await client.sendPrompt(cardId: cardId, text: prompt.body, mode: .queue, images: images,
-                                            human: prompt.isHuman)
-            }
+            forwardPrompt(cardId: cardId, prompt: prompt)
             return true
         case .sendQueuedPrompt(let cardId, let promptId):
             guard isForeign(cardId) else { return false }
@@ -136,6 +128,45 @@ extension MasterEngine {
             return isForeign(cardId)
         default:
             return false
+        }
+    }
+
+    /// Sends a prompt typed here to the master that owns the card. It is
+    /// journalled before it leaves, and a send the owner does not take comes
+    /// back to the card's chat as a failed prompt, text and images kept.
+    func forwardPrompt(cardId: String, prompt: QueuedPrompt) {
+        let journal = promptJournal
+        let store = self.store
+        let ownerName = peerName(store.state.links[cardId]?.ownerMachine ?? "")
+        Task {
+            await journal.append(QueuedPromptJournalEntry(
+                cardId: cardId, promptId: prompt.id, reason: .sent, body: prompt.body,
+                imagePaths: prompt.imagePaths, sendAutomatically: prompt.sendAutomatically))
+            @MainActor func fail(_ message: String) {
+                KanbanCodeLog.warn("peers", "prompt \(prompt.id) to \(cardId) not sent: \(message)")
+                store.dispatch(.promptSendFailed(cardId: cardId, prompt: prompt, message: message))
+                store.dispatch(.setError("Could not send the prompt on \(ownerName): \(message)"))
+            }
+            var images: [RemoteImage] = []
+            for path in prompt.imagePaths ?? [] {
+                guard let data = FileManager.default.contents(atPath: path) else {
+                    return fail("the image \((path as NSString).lastPathComponent) is gone")
+                }
+                images.append(RemoteImage(mediaType: MasterRemoteControlHost.mediaType(ofExtension: (path as NSString).pathExtension),
+                                          data: data.base64EncodedString()))
+            }
+            guard let client = await ownerClient(forCard: cardId) else {
+                return fail("\(ownerName) is not a configured peer")
+            }
+            do {
+                try await client.sendPrompt(cardId: cardId, text: prompt.body, mode: .queue, images: images,
+                                            human: prompt.isHuman)
+                if let card = try? await client.card(id: cardId) {
+                    store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
+                }
+            } catch {
+                fail(error.localizedDescription)
+            }
         }
     }
 

@@ -6,6 +6,8 @@ public enum QueuedPromptJournalReason: String, Codable, Sendable {
     case edited
     case sent
     case removed
+    /// The send did not reach the session.
+    case failed
 }
 
 public struct QueuedPromptJournalEntry: Codable, Sendable {

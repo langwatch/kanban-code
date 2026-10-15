@@ -37,6 +37,10 @@ struct ChatView: View {
     var onCheckpoint: ((ConversationTurn) -> Void)?
     var onEscape: (() -> Void)?
     var githubBaseURL: String?
+    /// Prompts from this chat that never reached the session.
+    var failedPrompts: [FailedPrompt] = []
+    /// Lets go of a failed prompt once it is sent again, edited or discarded.
+    var onDismissFailedPrompt: ((FailedPrompt) -> Void)?
     @Binding var draftText: String
     @Binding var draftImages: [Data]
 
@@ -124,6 +128,17 @@ struct ChatView: View {
                     isBusyFromPane: $isBusyFromPane,
                     contextUsage: $contextUsage,
                     pendingMessage: pendingMessage,
+                    failedPrompts: failedPrompts,
+                    onRetryFailedPrompt: { failed in
+                        onDismissFailedPrompt?(failed)
+                        sendToSession(failed.prompt.body, failed.prompt.imagePaths ?? [])
+                    },
+                    onEditFailedPrompt: { failed in
+                        onDismissFailedPrompt?(failed)
+                        draftText = failed.prompt.body
+                        draftImages = (failed.prompt.imagePaths ?? []).compactMap { FileManager.default.contents(atPath: $0) }
+                    },
+                    onDiscardFailedPrompt: { failed in onDismissFailedPrompt?(failed) },
                     onLoadMore: onLoadMore,
                     onLoadAroundTurn: onLoadAroundTurn,
                     collapsedRanges: collapsedRanges,
@@ -244,6 +259,18 @@ struct ChatView: View {
         .onAppear {
             clearPendingIfMatched()
         }
+        .task(id: pendingMessageTime) {
+            // The 30 second cap holds even when nothing else changes.
+            guard pendingMessage != nil else { return }
+            try? await Task.sleep(for: .seconds(31))
+            clearPendingIfMatched()
+        }
+        .onChange(of: failedPrompts.map(\.id)) { old, new in
+            // A failed send shows as its own bubble, not as one still going out.
+            if !Set(new).subtracting(old).isEmpty {
+                pendingMessage = nil
+            }
+        }
         .onChange(of: turns.count) {
             clearPendingIfMatched()
         }
@@ -299,6 +326,10 @@ private struct ChatMessageList: View {
     @State private var pollKick: Int = 0
     @State private var lastBusyDetected: Date = .distantPast
     var pendingMessage: String?
+    var failedPrompts: [FailedPrompt] = []
+    var onRetryFailedPrompt: ((FailedPrompt) -> Void)?
+    var onEditFailedPrompt: ((FailedPrompt) -> Void)?
+    var onDiscardFailedPrompt: ((FailedPrompt) -> Void)?
     var onLoadMore: (() -> Void)?
     var onLoadAroundTurn: ((Int) -> Void)?
     var collapsedRanges: [CollapsedTurnRange] = []
@@ -826,6 +857,22 @@ private struct ChatMessageList: View {
                         }
                         .padding(.vertical, 4)
                         .id("pending")
+                    }
+                    ForEach(failedPrompts) { failed in
+                        HStack {
+                            Spacer(minLength: 0)
+                            FailedPromptBubble(
+                                failed: failed,
+                                onRetry: { onRetryFailedPrompt?(failed) },
+                                onEdit: { onEditFailedPrompt?(failed) },
+                                onDiscard: { onDiscardFailedPrompt?(failed) }
+                            )
+                            .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                            .frame(maxWidth: chatMaxWidth, alignment: .trailing)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 4)
+                        .id("failed-\(failed.id)")
                     }
 
                     // Bottom spacer for scroll anchor — tall enough to keep
@@ -1513,5 +1560,42 @@ private struct ScrollNearTopDetector: ViewModifier {
             guard newNearTop != isNearTop else { return }
             isNearTop = newNearTop
         })
+    }
+}
+
+/// A message from this chat that never reached the session: its text, why it
+/// failed, and the ways to get it out.
+struct FailedPromptBubble: View {
+    let failed: FailedPrompt
+    var onRetry: () -> Void
+    var onEdit: () -> Void
+    var onDiscard: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Text(failed.prompt.body)
+                .font(.app(.body))
+                .lineLimit(8)
+                .textSelection(.enabled)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.red.opacity(0.5), lineWidth: 1))
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+                let images = failed.prompt.imagePaths?.count ?? 0
+                Text("Not sent\(images > 0 ? " (\(images) image\(images == 1 ? "" : "s"))" : ""): \(failed.message)")
+                    .font(.app(.caption))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(failed.message)
+                Button("Retry", action: onRetry)
+                Button("Edit", action: onEdit)
+                Button("Discard", role: .destructive, action: onDiscard)
+            }
+            .buttonStyle(.borderless)
+            .font(.app(.caption))
+        }
     }
 }

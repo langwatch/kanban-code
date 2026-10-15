@@ -71,6 +71,8 @@ public final class MasterEngine {
     public lazy var sideChat = SideChatService(runner: ClaudeSideChatRunner(kanbanHome: platform.kanbanHome))
     /// What the human typed and sent from a Kanban chat, by card.
     public lazy var humanMessages = HumanMessageLog(kanbanHome: platform.kanbanHome)
+    /// Every prompt that passed through a card's queue or left for a peer.
+    public lazy var promptJournal = QueuedPromptJournal(basePath: platform.kanbanHome)
     /// Each card's last catch-up, shown again while the session has nothing new.
     public lazy var catchUps = CatchUpKeep(kanbanHome: platform.kanbanHome)
 

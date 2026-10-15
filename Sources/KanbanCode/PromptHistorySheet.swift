@@ -46,6 +46,7 @@ struct PromptHistoryItem: Identifiable, Equatable {
         case .queued: "Queued"
         case .edited: "Edited"
         case .removed: "Deleted"
+        case .failed: "Not sent"
         }
     }
 }

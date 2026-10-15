@@ -58,8 +58,9 @@ final class RemoteConnection: @unchecked Sendable {
     private var isClosed = false
 
     static let maxHeaderBytes = 64 * 1024
-    /// Room for `RemoteImage.maxCount` images of `RemoteImage.maxBytes`, base64 encoded.
-    static let maxBodyBytes = 48 * 1024 * 1024
+    /// Room for a prompt of many screenshots, base64 encoded. A request over
+    /// it gets a 413, which the sender shows as a failed send.
+    static let maxBodyBytes = 96 * 1024 * 1024
 
     init(_ stream: any RemoteByteStream) {
         self.stream = stream
