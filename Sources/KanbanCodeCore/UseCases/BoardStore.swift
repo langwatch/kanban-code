@@ -128,7 +128,17 @@ public final class AppState: @unchecked Sendable {
     public var paletteOpen: Bool = false
     public var detailExpanded: Bool = false
     public var promptEditorFocused: Bool = false
-    public var notice: Notice?
+    /// The banner over the board. Every one shown is written to the app log
+    /// too, since it is gone from the screen a few seconds later.
+    public var notice: Notice? {
+        didSet {
+            guard let notice, notice != oldValue else { return }
+            switch notice.kind {
+            case .error: KanbanCodeLog.warn("notice", "error shown: \(notice.message)")
+            default: KanbanCodeLog.info("notice", "\(notice.kind) shown: \(notice.message)")
+            }
+        }
+    }
     public var isLoading: Bool = false
     public var lastRefresh: Date?
 

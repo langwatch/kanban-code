@@ -2336,6 +2336,7 @@ struct CardDetailView: View {
     }
 
     private func showCopyToast(_ message: String) {
+        KanbanCodeLog.info("toast", "card \(card.id): \(message)")
         copyToast = message
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))

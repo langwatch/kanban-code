@@ -193,6 +193,7 @@ extension MasterEngine {
             }
         }
         func report(_ message: String) {
+            KanbanCodeLog.warn("peers", "card \(cardId): \(message)")
             if isStart {
                 store.dispatch(.cardStartReported(cardId: cardId, report: .failed(message)))
             } else {

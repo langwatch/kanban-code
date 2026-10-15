@@ -1311,12 +1311,15 @@ struct ChatInputBar: View {
         let normalized = PromptImagePlaceholders.normalize(text: text, images: pastedImages)
         let trimmed = normalized.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // Save images to temp files for the prompt queue
-        var imagePaths: [String] = []
-        for data in normalized.images {
-            let path = NSTemporaryDirectory() + "kanban-chat-\(UUID().uuidString).png"
-            try? data.write(to: URL(fileURLWithPath: path))
-            imagePaths.append(path)
+        // The images are kept under ~/.kanban-code before the prompt goes
+        // out, so a send that fails can be sent again with them.
+        let imagePaths: [String]
+        do {
+            imagePaths = try ChatImageStore().save(normalized.images)
+        } catch {
+            KanbanCodeLog.warn("chat", "Could not keep \(normalized.images.count) pasted image(s) for card \(cardId): \(error)")
+            AppComposition.shared.store.dispatch(.setError("Could not save the pasted images: \(error.localizedDescription)"))
+            return
         }
         secretOffer.submit(trimmed) { final in
             onSend(final, imagePaths)

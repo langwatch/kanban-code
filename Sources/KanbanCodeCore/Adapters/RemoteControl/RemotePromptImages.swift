@@ -50,7 +50,7 @@ public enum RemotePromptImages {
     }
 
     /// Where a prompt's images go, as the Mac chat's own pasted images.
-    public static var promptDirectory: String { NSTemporaryDirectory() }
+    public static var promptDirectory: String { ChatImageStore().directory }
 
     /// Where a task's images go: they stay with the card, as the New Task dialog's do.
     public static var taskDirectory: String {
