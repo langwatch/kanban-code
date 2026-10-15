@@ -433,9 +433,12 @@ public actor VaultBroker {
 
     /// A value a device unlocked for a card lease, kept in memory for the
     /// lease's time. A restart forgets it and the next use asks again.
+    /// `sealed` is the stored form it came from: once the secret holds
+    /// another value, the held one is dropped.
     private struct HeldValue: Sendable {
         var value: String
         var until: Date
+        var sealed: String?
     }
 
     static let lockedWhy = "it opens only with your Touch ID or Face ID"
@@ -552,10 +555,16 @@ public actor VaultBroker {
     private func heldValue(_ s: VaultSecret, now: Date) -> String? {
         for name in s.allNames {
             guard let h = held[name] else { continue }
-            if h.until > now { return h.value }
+            if h.until > now && h.sealed == s.sealed { return h.value }
             held[name] = nil
         }
         return nil
+    }
+
+    /// Keeps a value a device unlocked for `name` until `until`.
+    private func hold(_ name: String, value: String, until: Date) async {
+        let sealed = ((try? await store.secret(name)) ?? nil)?.sealed
+        held[name] = HeldValue(value: value, until: until, sealed: sealed)
     }
 
     /// The credentials a device minted for a profile, while they stay
@@ -1235,6 +1244,13 @@ public actor VaultBroker {
                     aliases: existing?.aliases
                 )
                 try await store.upsert(secret, now: now)
+                // A lease is on the secret, not on one value: what the card
+                // holds becomes the new value.
+                for alias in [name] + (existing?.aliases ?? []) {
+                    guard let h = held[alias] else { continue }
+                    held[alias] = nil
+                    if h.until > now { await hold(name, value: req.value, until: h.until) }
+                }
                 await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
                                                    secret: name, tier: secret.tier, outcome: .allowed, decider: by,
                                                    action: existing == nil ? "add" : "replace", requestId: requestId))
@@ -1559,7 +1575,7 @@ public actor VaultBroker {
             for name in asked {
                 try? await store.grantLease(VaultLease(cardId: card, secret: name, reason: req.reason, grantedAt: now,
                                                        expiresAt: now.addingTimeInterval(seconds), grantedBy: "human:\(by)"))
-                if let value = unsealed?.values[name] { held[name] = HeldValue(value: value, until: now.addingTimeInterval(seconds)) }
+                if let value = unsealed?.values[name] { await hold(name, value: value, until: now.addingTimeInterval(seconds)) }
             }
             leasedTo = card
             leaseSeconds = seconds
@@ -1569,7 +1585,7 @@ public actor VaultBroker {
             leaseSeconds = seconds
             for want in wanted {
                 guard let value = unsealed?.values[want.name] else { continue }
-                held[want.name] = HeldValue(value: value, until: now.addingTimeInterval(seconds))
+                await hold(want.name, value: value, until: now.addingTimeInterval(seconds))
             }
             for (profile, credentials) in unsealed?.credentials ?? [:] {
                 guard let s = (try? await store.secret(profile)) ?? nil, let role = s.aws, !s.leasePolicy.everyUseAsks,
