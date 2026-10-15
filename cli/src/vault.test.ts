@@ -31,6 +31,7 @@ import {
   reasonProblem,
   runKv,
   shellQuote,
+  typedValueReader,
   type VaultIO,
 } from "./vault.js";
 import { envVaultFor, environmentOfEnvFile, isSecret, planAws, planSecrets, renderPlan, tierFor } from "./vault-import.js";
@@ -692,6 +693,39 @@ test("kv same says how a value compares with the stored one and writes no secret
   assert.deepEqual(printed, ["same\n", "different\n"]);
   assert.deepEqual(m.calls.map((c) => `${c.method} ${c.path}`), ["POST /v1/vault/compare?card=card_x", "POST /v1/vault/compare?card=card_x"]);
   assert.equal(m.calls[0].body.value, "stored");
+});
+
+const FAKE_PEM = `-----BEGIN PRIVATE KEY-----\n${"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n".repeat(26)}-----END PRIVATE KEY-----`;
+
+test("kv set sends a multi-line value whole", async () => {
+  const m = await fakeMaster(() => ({ status: 200, body: { status: "granted", message: "added FAKE_PEM" } }));
+  const long = "x".repeat(4000);
+  assert.equal(await runKv(["set", "FAKE_PEM"], { ...io(m.url, []), stdin: async () => `${FAKE_PEM}\n` }), 0);
+  assert.equal(await runKv(["set", "FAKE_LONG"], { ...io(m.url, []), stdin: async () => long }), 0);
+  m.close();
+  assert.equal(m.calls[0].body.value, FAKE_PEM);
+  assert.equal(m.calls[1].body.value, long);
+});
+
+test("a value pasted at the terminal keeps its newlines", () => {
+  const feed = (chunks: string[]) => {
+    const read = typedValueReader();
+    for (const c of chunks) {
+      const r = read(c);
+      if (r.done) return r.value;
+    }
+    return "not done";
+  };
+  const raw = FAKE_PEM.replace(/\n/g, "\r");
+  // Bracketed paste, then Enter.
+  assert.equal(feed([`\u001b[200~${raw}\r\u001b[201~`, "\r"]), FAKE_PEM);
+  // The paste markers split across chunks.
+  assert.equal(feed(["\u001b[20", `0~${raw.slice(0, 50)}`, `${raw.slice(50)}\u001b[2`, "01~", "\r"]), FAKE_PEM);
+  // A terminal without bracketed paste sends the paste as one chunk.
+  assert.equal(feed([raw, "\r"]), FAKE_PEM);
+  // Typing: Enter alone ends it, backspace edits, Ctrl-C aborts.
+  assert.equal(feed(["a", "b", "x", "\u007f", "c", "\r"]), "abc");
+  assert.equal(feed(["a", "\u0003"]), undefined);
 });
 
 test("import names a second value after its project and environment", () => {

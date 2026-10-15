@@ -616,29 +616,87 @@ function readStdin(): Promise<string> {
   });
 }
 
+const PASTE_START = "\u001b[200~";
+const PASTE_END = "\u001b[201~";
+
+/**
+ * Reads a value typed or pasted at a terminal in raw mode, one chunk of
+ * input at a time. A pasted value keeps its newlines: the terminal's
+ * bracketed paste marks it, and without that a newline followed by more
+ * input in the same chunk is part of a paste too. Enter on its own ends
+ * the value, Ctrl-D too; Ctrl-C aborts.
+ */
+export function typedValueReader(): (chunk: string) => { done: false } | { done: true; value?: string } {
+  let value = "";
+  let pasting = false;
+  let pending = "";
+  return (chunk) => {
+    let text = pending + chunk;
+    pending = "";
+    // A marker split across two chunks waits for the rest.
+    for (const marker of [PASTE_START, PASTE_END]) {
+      for (let n = marker.length - 1; n > 0; n--) {
+        if (text.endsWith(marker.slice(0, n))) {
+          pending = text.slice(text.length - n);
+          text = text.slice(0, text.length - n);
+          break;
+        }
+      }
+      if (pending) break;
+    }
+    let i = 0;
+    while (i < text.length) {
+      if (text.startsWith(PASTE_START, i)) {
+        pasting = true;
+        i += PASTE_START.length;
+        continue;
+      }
+      if (text.startsWith(PASTE_END, i)) {
+        pasting = false;
+        i += PASTE_END.length;
+        continue;
+      }
+      const c = text[i];
+      const last = i === text.length - 1;
+      if (c === "\r" || c === "\n") {
+        if (pasting || !last) {
+          value += "\n";
+          if (c === "\r" && text[i + 1] === "\n") i++;
+          i++;
+          continue;
+        }
+        return { done: true, value: value.replace(/\n$/, "") };
+      }
+      if (c === "\u0004" && !pasting) return { done: true, value: value.replace(/\n$/, "") };
+      if (c === "\u0003" && !pasting) return { done: true };
+      if (c === "\u007f" && !pasting) value = value.slice(0, -1);
+      else value += c;
+      i++;
+    }
+    return { done: false };
+  };
+}
+
 async function readSecretFromStdin(name: string): Promise<string> {
   if (!process.stdin.isTTY) return (await readStdin()).replace(/\r?\n$/, "");
-  process.stderr.write(`Value for ${name} (not shown): `);
+  process.stderr.write(`Value for ${name} (not shown, paste keeps newlines): `);
   return new Promise((resolveValue) => {
     const stdin = process.stdin;
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding("utf8");
-    let value = "";
-    const onData = (ch: string) => {
-      for (const c of ch) {
-        if (c === "\r" || c === "\n" || c === "\u0004") {
-          stdin.setRawMode(false);
-          stdin.pause();
-          stdin.off("data", onData);
-          process.stderr.write("\n");
-          resolveValue(value);
-          return;
-        }
-        if (c === "\u0003") process.exit(130);
-        if (c === "\u007f") value = value.slice(0, -1);
-        else value += c;
-      }
+    process.stderr.write("\u001b[?2004h");
+    const read = typedValueReader();
+    const onData = (chunk: string) => {
+      const r = read(chunk);
+      if (!r.done) return;
+      process.stderr.write("\u001b[?2004l");
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off("data", onData);
+      process.stderr.write("\n");
+      if (r.value === undefined) process.exit(130);
+      resolveValue(r.value);
     };
     stdin.on("data", onData);
   });
@@ -933,7 +991,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const reason = checkedReason(takeOption(args, "--reason"), io.env, false);
       const name = args[0];
       if (!name) throw new VaultCliError("kv set KEY [--project P|.] [--env E] [--tier t] [--rules '...'] [--lease 1h|--every-use-asks]  (value on stdin)");
-      const value = await readSecretFromStdin(name);
+      const value = io.stdin ? (await io.stdin()).replace(/\r?\n$/, "") : await readSecretFromStdin(name);
       if (!value) throw new VaultCliError("kv: empty value, nothing added");
       const { body } = await client.call<VaultResponse>("POST", `secrets${ctx.cardId ? `?card=${ctx.cardId}` : ""}`, {
         name,
