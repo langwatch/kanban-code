@@ -54,6 +54,11 @@ struct RemoteControlHostTests {
             echo "ARGS $*" >> '\(dir)/calls.log'
             case "$2" in
               send) echo "STDIN $(cat)" >> '\(dir)/calls.log' ;;
+              queue) if [ -f '\(dir)/queue-error.txt' ]; then
+                  cat '\(dir)/queue-error.txt' >&2
+                  if [ -f '\(dir)/queue-after.json' ]; then cp '\(dir)/queue-after.json' '\(dir)/queue.json'; fi
+                  exit 1
+                fi ;;
               info) printf '{"id":"%s","sessionId":"s","cwd":"/r","state":"working","alive":true,"queue":%s}' "$3" "$(cat '\(dir)/queue.json' 2>/dev/null || echo '[]')" ;;
             esac
             """
@@ -63,6 +68,15 @@ struct RemoteControlHostTests {
 
         func setQueue(_ queue: [String]) throws {
             try JSONEncoder().encode(queue).write(to: URL(fileURLWithPath: "\(dir)/queue.json"))
+        }
+
+        /// Makes `queue send` and `queue remove` fail with `message`,
+        /// leaving the queue as `after` (nil: as it was).
+        func failQueueCommands(_ message: String, after: [String]? = nil) throws {
+            try message.write(toFile: "\(dir)/queue-error.txt", atomically: true, encoding: .utf8)
+            if let after {
+                try JSONEncoder().encode(after).write(to: URL(fileURLWithPath: "\(dir)/queue-after.json"))
+            }
         }
 
         func calls() -> String { (try? String(contentsOfFile: "\(dir)/calls.log", encoding: .utf8)) ?? "" }
@@ -325,9 +339,82 @@ struct RemoteControlHostTests {
         try await host.removeQueuedPrompt(cardId: "card_a", promptId: ids[0])
         #expect(fake.calls().contains("ARGS session queue 0a1b2c3d remove 0 --was one"))
 
+        // rush sent it when the turn ended: send now has nothing left to do.
         try fake.setQueue([])
-        await #expect(throws: RemoteHostError.self) {
-            try await host.sendQueuedPromptNow(cardId: "card_a", promptId: ids[1])
+        try await host.sendQueuedPromptNow(cardId: "card_a", promptId: ids[1])
+        #expect(store.state.rushQueues.isEmpty)
+        await #expect(throws: RemoteHostError.notFound("card card_a has no queued prompt \(ids[1]); it may have been sent already")) {
+            try await host.removeQueuedPrompt(cardId: "card_a", promptId: ids[1])
+        }
+    }
+
+    @Test("send now on a message rush sent while the board still showed it is taken as sent, not reposted")
+    func rushQueueSendRace() async throws {
+        let fake = try FakeRush()
+        defer { fake.cleanup() }
+        let (host, store, _) = makeHost(rush: fake.adapter())
+        addCard(store, id: "card_a", session: "rush-0a1b2c3d", live: true, busy: true)
+        let long = "ok I have several things to comment on:\n\n" + String(repeating: "[Image #1] a long note ", count: 600)
+        store.dispatch(.rushQueueRead(sessionName: "rush-0a1b2c3d", queue: [long]))
+        try fake.setQueue([long])
+        let id = try #require(await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.first?.id)
+        // The CLI reads the queue first and finds the message gone.
+        try fake.failQueueCommands("no such message in the queue", after: [])
+
+        try await host.sendQueuedPromptNow(cardId: "card_a", promptId: id)
+
+        #expect(fake.calls().contains("ARGS session queue 0a1b2c3d send 0 --was ok I have"))
+        #expect(!fake.calls().contains("ARGS session send"))
+        #expect(store.state.rushQueues.isEmpty)
+        #expect(await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.isEmpty == true)
+    }
+
+    @Test("a rush queue command that times out after the message went out is taken as sent")
+    func rushQueueSendTimedOutButSent() async throws {
+        let fake = try FakeRush()
+        defer { fake.cleanup() }
+        let (host, store, _) = makeHost(rush: fake.adapter())
+        addCard(store, id: "card_a", session: "rush-0a1b2c3d", live: true, busy: true)
+        store.dispatch(.rushQueueRead(sessionName: "rush-0a1b2c3d", queue: ["one", "two"]))
+        try fake.setQueue(["one", "two"])
+        let ids = await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.map(\.id) ?? []
+        try fake.failQueueCommands("session 0a1b2c3d didn't answer", after: ["one"])
+
+        try await host.sendQueuedPromptNow(cardId: "card_a", promptId: ids[1])
+
+        #expect(store.state.rushQueues == ["rush-0a1b2c3d": ["one"]])
+    }
+
+    @Test("a rush queue send refused while the message is still queued fails and keeps it queued")
+    func rushQueueSendRealFailure() async throws {
+        let fake = try FakeRush()
+        defer { fake.cleanup() }
+        let (host, store, _) = makeHost(rush: fake.adapter())
+        addCard(store, id: "card_a", session: "rush-0a1b2c3d", live: true, busy: true)
+        store.dispatch(.rushQueueRead(sessionName: "rush-0a1b2c3d", queue: ["one"]))
+        try fake.setQueue(["one"])
+        let id = try #require(await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.first?.id)
+        try fake.failQueueCommands("session 0a1b2c3d went away")
+
+        await #expect(throws: RemoteHostError.conflict("rush: session 0a1b2c3d went away")) {
+            try await host.sendQueuedPromptNow(cardId: "card_a", promptId: id)
+        }
+        #expect(store.state.rushQueues == ["rush-0a1b2c3d": ["one"]])
+    }
+
+    @Test("removing a message rush already sent says it was sent")
+    func rushQueueRemoveAfterSend() async throws {
+        let fake = try FakeRush()
+        defer { fake.cleanup() }
+        let (host, store, _) = makeHost(rush: fake.adapter())
+        addCard(store, id: "card_a", session: "rush-0a1b2c3d", live: true, busy: true)
+        store.dispatch(.rushQueueRead(sessionName: "rush-0a1b2c3d", queue: ["one"]))
+        try fake.setQueue(["one"])
+        let id = try #require(await host.board().cards.first { $0.id == "card_a" }?.queuedPrompts.first?.id)
+        try fake.failQueueCommands("that message has already been sent", after: [])
+
+        await #expect(throws: RemoteHostError.notFound("card card_a has no queued prompt \(id); it was sent already")) {
+            try await host.removeQueuedPrompt(cardId: "card_a", promptId: id)
         }
         #expect(store.state.rushQueues.isEmpty)
     }

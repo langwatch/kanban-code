@@ -362,6 +362,12 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
     // MARK: rush queue
 
     /// Sends now, or drops, a message queued in the card's rush host.
+    /// rush sends its queue on its own when a turn ends, so a send that
+    /// finds the message gone from the queue succeeds: it went out already,
+    /// and sending it again would post it twice. A send rush refuses while
+    /// the message is still queued is a real failure, and the message stays
+    /// queued with its images. Every outcome reads the queue again, so the
+    /// board never offers a message rush no longer holds.
     private func rushQueueAction(cardId: String, promptId: String, send: Bool) async throws {
         let (session, queue) = try await MainActor.run { () throws -> (String, [String]) in
             let (session, _) = try liveSession(cardId)
@@ -378,6 +384,10 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         }
         guard let index = RemoteBoardMapper.rushQueueIndex(of: promptId, in: current) else {
             await readRushQueue(session: session, rushId: rushId)
+            if send {
+                KanbanCodeLog.info("remote", "card \(cardId): queued prompt \(promptId) left rush's queue before send now; taken as sent")
+                return
+            }
             throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
         }
         do {
@@ -386,19 +396,31 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
             } else {
                 try await rushFor(session).removeQueued(id: rushId, index: index, was: current[index])
             }
-        } catch let error as RushCommandFailed where error.message.contains("already been sent") {
-            await readRushQueue(session: session, rushId: rushId)
-            throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it was sent already")
+        } catch let error as RushCommandFailed {
+            let queue = await readRushQueue(session: session, rushId: rushId)
+            let stillQueued = queue.map { RemoteBoardMapper.rushQueueIndex(of: promptId, in: $0) != nil } ?? true
+            if error.messageLeftQueue || !stillQueued {
+                if send {
+                    KanbanCodeLog.info("remote", "card \(cardId): queued prompt \(promptId) was sent by rush already (\(error.message))")
+                    return
+                }
+                throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it was sent already")
+            }
+            KanbanCodeLog.warn("remote", "card \(cardId): rush queue \(send ? "send" : "remove") failed: \(error.message)")
+            throw RemoteHostError.conflict("rush: \(error.message)")
         }
         await readRushQueue(session: session, rushId: rushId)
     }
 
     /// Reads one rush host's queue into the store, then keeps watching
-    /// while any host has something queued.
-    private func readRushQueue(session: String, rushId: String) async {
-        guard let info = try? await rushFor(session).info(id: rushId) else { return }
+    /// while any host has something queued. Returns the queue, nil when
+    /// rush did not answer.
+    @discardableResult
+    private func readRushQueue(session: String, rushId: String) async -> [String]? {
+        guard let info = try? await rushFor(session).info(id: rushId) else { return nil }
         await MainActor.run { store.dispatch(.rushQueueRead(sessionName: session, queue: info.queue)) }
         await watchRushQueues()
+        return info.queue
     }
 
     /// While a rush host has messages queued, reads its queue every two

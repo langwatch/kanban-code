@@ -115,6 +115,15 @@ public struct RushCommandFailed: Error, LocalizedError {
     public let message: String
 
     public var errorDescription: String? { "rush \(arguments.first ?? "") failed: \(message)" }
+
+    /// Whether a `queue send` or `queue remove` failed because the message
+    /// was no longer in the queue: rush sent it when the turn ended, or
+    /// another client moved it. The host says "that message has already
+    /// been sent"; the CLI, which reads the queue first, says "no such
+    /// message in the queue".
+    public var messageLeftQueue: Bool {
+        message.contains("already been sent") || message.contains("no such message in the queue")
+    }
 }
 
 /// Drives rush hosts through the `rush session` CLI, on this machine or,

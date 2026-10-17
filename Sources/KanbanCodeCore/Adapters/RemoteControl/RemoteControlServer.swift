@@ -702,6 +702,7 @@ public final class RemoteControlServer: Sendable {
             }
         }
         if let e = error as? RemoteError { return .error(400, e.error) }
+        if let description = (error as? LocalizedError)?.errorDescription { return .error(500, description) }
         return .error(500, "\(error)")
     }
 

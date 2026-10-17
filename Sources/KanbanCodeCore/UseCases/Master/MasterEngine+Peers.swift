@@ -89,6 +89,14 @@ extension MasterEngine {
         return !local.isEmpty && owner != local
     }
 
+    /// Whether a queued prompt is gone from the owner's `queue`. rush ids
+    /// carry the message's place, which shifts as the queue sends, so a
+    /// known `body` is matched by its text and only an unknown one by id.
+    nonisolated static func queuedPromptLeft(promptId: String, body: String?, queue: [RemoteQueuedPrompt]) -> Bool {
+        if let body { return !queue.contains { $0.text == body } }
+        return !queue.contains { $0.id == promptId }
+    }
+
     /// Sends the prompt and queue actions on cards another master owns to
     /// that master, the way the phone does: the owner runs them.
     public func installForeignCardHandler() {
@@ -107,8 +115,18 @@ extension MasterEngine {
         case .sendQueuedPrompt(let cardId, let promptId):
             guard isForeign(cardId) else { return false }
             if forwardedPromptIds.remove(promptId) != nil { return true }
+            let body = store.state.peerCards[cardId]?.queue.first { $0.id == promptId }?.body
             forwardToOwner(cardId, "send the queued prompt") { client in
-                try await client.sendQueuedPromptNow(cardId: cardId, promptId: promptId)
+                do {
+                    try await client.sendQueuedPromptNow(cardId: cardId, promptId: promptId)
+                } catch {
+                    // The owner's queue sends itself when the turn ends; a
+                    // send that lost that race went out already.
+                    guard let card = try? await client.card(id: cardId),
+                          Self.queuedPromptLeft(promptId: promptId, body: body, queue: card.queuedPrompts)
+                    else { throw error }
+                    KanbanCodeLog.info("peers", "card \(cardId): queued prompt \(promptId) left the owner's queue; taken as sent")
+                }
             }
             return true
         case .removeQueuedPrompt(let cardId, let promptId):
@@ -189,6 +207,11 @@ extension MasterEngine {
                     store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
                 }
             } catch {
+                // The owner's queue as it is now, so the bar does not keep
+                // offering a prompt the owner no longer holds.
+                if let card = try? await client.card(id: cardId) {
+                    store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
+                }
                 report("Could not \(what) on \(owner): \(error.localizedDescription)")
             }
         }
