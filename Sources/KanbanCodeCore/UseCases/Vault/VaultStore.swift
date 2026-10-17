@@ -115,6 +115,8 @@ public enum VaultError: Error, Equatable, CustomStringConvertible {
 ///   audit.jsonl   append-only release log of this machine, each line
 ///                 naming the hash of the one before
 ///   audit-mirror/ the logs of the peer masters, as they pushed them
+///   audit-archive/ older segments of both, gzipped, plus the human
+///                 decisions they held (see VaultAuditSegments.swift)
 ///
 /// Every master holding the identity can open the same `vault.age`; the
 /// replicas converge with `VaultDocument.merged`.
@@ -128,6 +130,16 @@ public actor VaultStore {
     private var lastAuditHash: String?
     /// Called after a line was added to the audit log.
     private var onAudit: (@Sendable () -> Void)?
+    /// Open-tier releases held back from the log, by card, session and secret.
+    var folds: [String: AuditFold] = [:]
+    var lastFoldSweep = Date.distantPast
+    /// Repeats of an open-tier hook release within this window are folded.
+    var auditFoldWindow: TimeInterval = 3600
+    /// A segment past this size is archived and a new one started.
+    var auditSegmentLimit: UInt64 = 64 << 20
+    var auditSize: UInt64?
+    var mirrorStates: [String: MirrorState] = [:]
+    var archivesResumed = false
 
     public init(directory: String, keys: any VaultKeyProvider) {
         self.directory = directory
@@ -569,8 +581,29 @@ public actor VaultStore {
     // MARK: - Audit
 
     /// Adds a line to the audit log. It carries the hash of the line
-    /// before it, so a removed or changed line breaks the chain.
+    /// before it, so a removed or changed line breaks the chain. Repeats
+    /// of an open-tier hook release are folded into one counted line.
     public func append(_ entry: VaultAuditEntry) {
+        sweepFolds(now: entry.at)
+        if Self.isFoldable(entry) {
+            let key = Self.foldKey(entry)
+            if var fold = folds[key] {
+                if entry.at.timeIntervalSince(fold.windowStart) < auditFoldWindow {
+                    fold.count += 1
+                    fold.firstAt = fold.firstAt ?? entry.at
+                    fold.last = entry
+                    folds[key] = fold
+                    return
+                }
+                flushFold(key)
+            }
+            folds[key] = AuditFold(windowStart: entry.at)
+        }
+        write(entry)
+    }
+
+    func write(_ entry: VaultAuditEntry) {
+        resumeArchives()
         var entry = entry
         entry.command = withoutValues(entry.command)
         entry.reason = withoutValues(entry.reason)
@@ -581,6 +614,12 @@ public actor VaultStore {
         line.append(0x0A)
         guard AuditChain.appendRaw(line, to: auditPath) else { return }
         lastAuditHash = hash
+        let size = (auditSize ?? Self.fileSize(auditPath)) + (auditSize == nil ? 0 : UInt64(line.count))
+        auditSize = size
+        if size > auditSegmentLimit {
+            archiveSegment(path: auditPath, base: "audit", lastHash: hash)
+            auditSize = 0
+        }
         onAudit?()
     }
 
@@ -603,7 +642,7 @@ public actor VaultStore {
 
     private func lastAuditLineHash() -> String {
         if let lastAuditHash { return lastAuditHash }
-        let hash = Self.tail(ofFileAt: auditPath).last.map(AuditChain.hash) ?? ""
+        let hash = Self.tail(ofFileAt: auditPath).last.map(AuditChain.hash) ?? head(of: auditPath)?.lastHash ?? ""
         lastAuditHash = hash
         return hash
     }
@@ -612,15 +651,35 @@ public actor VaultStore {
         onAudit = handler
     }
 
-    /// The audit log's raw lines, oldest first.
+    /// The current segment of the audit log, oldest first.
     public func auditLines() -> [Data] {
         AuditChain.lines(of: FileManager.default.contents(atPath: auditPath) ?? Data())
     }
 
-    /// The audit lines after the one hashed `hash`, oldest first, or nil when
-    /// no line in the log has that hash.
-    public func auditLines(after hash: String) -> [Data]? {
-        Self.lines(after: hash, inFileAt: auditPath)
+    /// Up to `limit` audit lines after the one hashed `hash`, oldest first,
+    /// or nil when no segment has that hash. Archived segments are searched
+    /// newest first, so a peer that fell behind costs only the segments it
+    /// missed, and never more than `limit` lines at once.
+    public func auditLines(after hash: String, limit: Int = 20_000) -> [Data]? {
+        if let after = Self.lines(after: hash, inFileAt: auditPath) { return Array(after.prefix(limit)) }
+        guard let head = head(of: auditPath) else { return nil }
+        if head.lastHash == hash { return Array(auditLines().prefix(limit)) }
+        let paths = head.archived.map(archivePath)
+        guard let found = paths.lastIndex(where: { path in
+            var has = false
+            Self.forEachLine(inFileAt: path) { line in has = AuditChain.hash(line) == hash; return !has }
+            return has
+        }) else { return nil }
+        var out: [Data] = []
+        var started = false
+        for path in paths[found...] {
+            Self.forEachLine(inFileAt: path) { line in
+                if started { out.append(line) } else { started = AuditChain.hash(line) == hash }
+                return out.count < limit
+            }
+            if out.count >= limit { return out }
+        }
+        return out + auditLines().prefix(limit - out.count)
     }
 
     /// The lines of a JSON-lines file after the one hashed `hash`, read from
@@ -694,33 +753,52 @@ public actor VaultStore {
             .filter { $0.hasSuffix(".jsonl") }.map { String($0.dropLast(6)) }.sorted()
     }
 
-    /// Where a peer's mirror stands: how many lines, and the hash of the last.
+    /// Where a peer's mirror stands: how many lines its current segment
+    /// has, and the hash of the last line mirrored.
     public func mirrorTail(machine: String) -> VaultAuditMirrorTail {
-        let tail = Self.tail(ofFileAt: mirrorPath(machine))
-        return VaultAuditMirrorTail(count: tail.count, lastHash: tail.last.map(AuditChain.hash))
+        let state = mirrorState(machine)
+        return VaultAuditMirrorTail(count: state.count, lastHash: state.lastHash)
     }
 
     /// Adds a peer's audit lines to its mirror here. Lines are only ever
     /// added: a line that does not follow the mirror's last one is kept
-    /// too, and shows as a break when the mirror is checked.
+    /// too, and shows as a break when the mirror is checked. A line that
+    /// follows the last one is new by construction; only a line that does
+    /// not is looked up among the hashes of the mirror's current segment.
     public func appendMirror(machine: String, lines: [String]) -> VaultAuditMirrorTail {
-        var known = Set(mirrorLines(machine: machine).map(AuditChain.hash))
+        let path = mirrorPath(machine)
+        var state = mirrorState(machine)
         var bytes = Data()
         for text in lines {
             let line = Data(text.utf8)
-            guard !line.isEmpty, !line.contains(0x0A), known.insert(AuditChain.hash(line)).inserted else { continue }
+            guard !line.isEmpty, !line.contains(0x0A) else { continue }
+            let hash = AuditChain.hash(line)
+            if AuditChain.prev(of: line) != (state.lastHash ?? "") {
+                if state.known == nil { state.known = Self.lineKeys(ofFileAt: path) }
+                if state.known?.contains(Self.lineKey(hash)) == true { continue }
+            }
+            state.known?.insert(Self.lineKey(hash))
+            state.lastHash = hash
+            state.count += 1
             bytes.append(line)
             bytes.append(0x0A)
         }
-        if !bytes.isEmpty { AuditChain.appendRaw(bytes, to: mirrorPath(machine)) }
-        return mirrorTail(machine: machine)
+        if !bytes.isEmpty, AuditChain.appendRaw(bytes, to: path) {
+            state.size += UInt64(bytes.count)
+            if state.size > auditSegmentLimit, let last = state.lastHash {
+                archiveSegment(path: path, base: Self.mirrorArchiveBase(machine), lastHash: last)
+                state = MirrorState(lastHash: last, count: 0, size: 0, known: [])
+            }
+        }
+        mirrorStates[machine] = state
+        return VaultAuditMirrorTail(count: state.count, lastHash: state.lastHash)
     }
 
     /// The releases a human approved, on this machine and on the peers
     /// mirrored here: those since `since`, and older ones whose card lease
     /// still runs at `now`. Newest first.
     public func approvals(since: Date, now: Date = Date()) -> [VaultAuditEntry] {
-        let lines = auditLines() + mirroredMachines().flatMap { mirrorLines(machine: $0) }
+        let lines = decisionLines()
         // The logs hold tens of thousands of ambient releases: decode only the human ones.
         let human = Data("\"decider\":\"human\"".utf8)
         return lines.filter { $0.range(of: human) != nil }
@@ -736,7 +814,7 @@ public actor VaultStore {
     /// Per secret, the requests since `since` that reached a human, on this
     /// machine and the peers mirrored here, most asked first.
     public func askSummary(since: Date, limit: Int = 3) -> [VaultAskSummary] {
-        let lines = auditLines() + mirroredMachines().flatMap { mirrorLines(machine: $0) }
+        let lines = decisionLines()
         let asked = Data("\"outcome\":\"asked\"".utf8), human = Data("\"decider\":\"human\"".utf8),
             timeout = Data("\"decider\":\"timeout\"".utf8)
         let entries = lines

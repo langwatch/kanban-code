@@ -235,7 +235,7 @@ public enum AuditChain {
         data.split(separator: 0x0A).map { Data($0) }
     }
 
-    static func prev(of line: Data) -> String? {
+    public static func prev(of line: Data) -> String? {
         (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["prev"] as? String
     }
 
@@ -252,19 +252,37 @@ public enum AuditChain {
     /// Lines written before the chain carry no `prev`; the first chained
     /// line names the hash of the last of them. After that every line
     /// must chain.
-    public static func verify(_ lines: [Data]) -> Report {
-        var report = Report(lines: lines.count, unchained: 0, breaks: [])
-        var chained = false
-        for (i, line) in lines.enumerated() {
-            guard let prev = prev(of: line) else {
-                if chained { report.breaks.append(i + 1) } else { report.unchained += 1 }
-                continue
+    public static func verify(_ lines: [Data], after head: String? = nil) -> Report {
+        var verifier = Verifier(after: head)
+        for line in lines { verifier.feed(line) }
+        return verifier.report
+    }
+
+    /// Checks a chain line by line, so a log split into segments (or too
+    /// big to hold) is checked as one. `head` is the hash of the line the
+    /// first one follows, when the lines before it were archived.
+    public struct Verifier: Sendable {
+        public private(set) var report = Report(lines: 0, unchained: 0, breaks: [])
+        /// Hash of the last line fed, or the head.
+        public private(set) var last: String
+        private var chained: Bool
+
+        public init(after head: String? = nil) {
+            last = head ?? ""
+            chained = !(head ?? "").isEmpty
+        }
+
+        public mutating func feed(_ line: Data) {
+            report.lines += 1
+            let lineHash = AuditChain.hash(line)
+            defer { last = lineHash }
+            guard let prev = AuditChain.prev(of: line) else {
+                if chained { report.breaks.append(report.lines) } else { report.unchained += 1 }
+                return
             }
             chained = true
-            let expected = i == 0 ? "" : hash(lines[i - 1])
-            if prev != expected { report.breaks.append(i + 1) }
+            if prev != last { report.breaks.append(report.lines) }
         }
-        return report
     }
 
     /// Appends `fields` as one line with its `prev`, creating the file 0600.

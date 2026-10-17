@@ -304,6 +304,11 @@ public struct VaultAuditEntry: Codable, Sendable, Equatable {
     public var note: String?
     /// SHA-256 of the line before this one in the log.
     public var prev: String?
+    /// How many open-tier releases this line stands for, when repeats of
+    /// the same card, session and secret were folded into it.
+    public var repeats: Int?
+    /// When the first of the folded releases happened.
+    public var firstAt: Date?
 
     public init(at: Date = Date(), machine: String, cardId: String?, sessionId: String? = nil, secret: String,
                 tier: VaultTier?, outcome: VaultOutcome, decider: VaultDecider, action: String,

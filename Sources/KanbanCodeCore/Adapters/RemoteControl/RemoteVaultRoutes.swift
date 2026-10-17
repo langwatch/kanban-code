@@ -27,7 +27,7 @@ import KanbanCodeRemoteKit
 ///   GET    /v1/vault/owner             the keys of the owner-only secrets, and how many are sealed
 ///   POST   /v1/vault/owner/enrol       one more device key (asks the human on an enrolled device)
 ///   GET    /v1/vault/audit/check       chain and mirror check of the audit logs
-///   GET    /v1/vault/audit/hashes      the hash of every line of this machine's log (peer masters)
+///   GET    /v1/vault/audit/hashes      the hash of every line of this machine's current log segment (peer masters)
 ///   GET    /v1/vault/audit/mirror      where the mirror of ?machine= stands here (peer masters)
 ///   POST   /v1/vault/audit/mirror      add a peer's audit lines to its mirror here (peer masters, add only)
 ///
@@ -234,7 +234,8 @@ enum RemoteVaultRoutes {
                 return .error(403, "the audit mirror is for peer masters only")
             }
             if path[1] == "hashes" {
-                return .json(VaultAuditHashes(machine: vault.broker.machine, hashes: await vault.store.auditLines().map(AuditChain.hash)))
+                return .json(VaultAuditHashes(machine: vault.broker.machine, hashes: await vault.store.auditLines().map(AuditChain.hash),
+                                              head: await vault.store.archivedSegments().head))
             }
             if method == "GET" {
                 guard let machine = query["machine"], !machine.isEmpty else { return .error(400, "name the machine: ?machine=") }

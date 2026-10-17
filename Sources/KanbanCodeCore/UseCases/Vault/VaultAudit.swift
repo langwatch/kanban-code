@@ -27,11 +27,19 @@ public struct VaultAuditMirrorPush: Codable, Sendable, Equatable {
     }
 }
 
-/// Body of `GET /v1/vault/audit/hashes`: the hash of every line of this
-/// machine's audit log, oldest first.
+/// Body of `GET /v1/vault/audit/hashes`: the hash of every line of the
+/// current segment of this machine's audit log, oldest first, and the hash
+/// of the last archived line it follows.
 public struct VaultAuditHashes: Codable, Sendable, Equatable {
     public var machine: String
     public var hashes: [String]
+    public var head: String?
+
+    public init(machine: String, hashes: [String], head: String? = nil) {
+        self.machine = machine
+        self.hashes = hashes
+        self.head = head
+    }
 }
 
 /// What `kv audit check` reports.
@@ -80,6 +88,8 @@ public actor VaultAuditSync {
     public let deviceApprovals: (log: VaultDeviceApprovals, name: String)?
     public var interval: TimeInterval = 60
     public var batch = 400
+    /// Lines read for one run of a push that catches a peer up.
+    public var catchUp = 20_000
     private var wake: CheckedContinuation<Void, Never>?
     private var dirty = false
 
@@ -139,6 +149,7 @@ public actor VaultAuditSync {
     }
 
     public func pushAll() async {
+        await store.flushFolds()
         for peer in await peers() where peer.enabled {
             await push(to: peer)
         }
@@ -154,22 +165,29 @@ public actor VaultAuditSync {
             let (data, status) = try await fetch(get)
             guard status == 200 else { return }
             var tail = try JSONDecoder().decode(VaultAuditMirrorTail.self, from: data)
-            // Every audit line pokes a push: read only what the mirror lacks.
-            let lines: [Data]
-            if let last = tail.lastHash, let after = await store.auditLines(after: last) {
-                lines = after
-            } else {
-                lines = await store.auditLines()
-            }
-            var start = 0
-            while start < lines.count {
-                let chunk = lines[start..<min(start + batch, lines.count)].map { String(decoding: $0, as: UTF8.self) }
-                let body = try JSONEncoder().encode(VaultAuditMirrorPush(machine: machine, lines: chunk))
-                guard let post = request(peer, "POST", "audit/mirror", body: body) else { return }
-                let (answer, code) = try await fetch(post)
-                guard code == 200 else { return }
-                tail = try JSONDecoder().decode(VaultAuditMirrorTail.self, from: answer)
-                start += chunk.count
+            // Every audit line pokes a push: read only what the mirror lacks,
+            // a bounded run at a time when it lacks a lot.
+            while true {
+                let before = tail.lastHash
+                let lines: [Data]
+                var more = false
+                if let last = tail.lastHash, let after = await store.auditLines(after: last, limit: catchUp) {
+                    lines = after
+                    more = after.count == catchUp
+                } else {
+                    lines = await store.auditLines()
+                }
+                var start = 0
+                while start < lines.count {
+                    let chunk = lines[start..<min(start + batch, lines.count)].map { String(decoding: $0, as: UTF8.self) }
+                    let body = try JSONEncoder().encode(VaultAuditMirrorPush(machine: machine, lines: chunk))
+                    guard let post = request(peer, "POST", "audit/mirror", body: body) else { return }
+                    let (answer, code) = try await fetch(post)
+                    guard code == 200 else { return }
+                    tail = try JSONDecoder().decode(VaultAuditMirrorTail.self, from: answer)
+                    start += chunk.count
+                }
+                guard more, tail.lastHash != before else { return }
             }
         } catch {
             KanbanCodeLog.debug("vault", "audit push to \(peer.name) failed: \(error.localizedDescription)")
@@ -181,10 +199,10 @@ public actor VaultAuditSync {
     public func check() async -> VaultAuditReport {
         var report = VaultAuditReport(machine: machine, logs: [], missing: [], unrecordedApprovals: [], notes: [])
         let own = await store.auditLines()
-        report.logs.append(Self.log("this machine (\(machine))", own))
+        report.logs.append(Self.log("this machine (\(machine))", own, archived: await store.archivedSegments()))
 
         var peerByMachine: [String: PeerConfig] = [:]
-        var peerHashes: [String: [String]] = [:]
+        var peerHashes: [String: VaultAuditHashes] = [:]
         for peer in await peers() where peer.enabled {
             guard let get = request(peer, "GET", "audit/hashes") else { continue }
             do {
@@ -195,7 +213,7 @@ public actor VaultAuditSync {
                 }
                 let hashes = try JSONDecoder().decode(VaultAuditHashes.self, from: data)
                 peerByMachine[hashes.machine] = peer
-                peerHashes[VaultStore.mirrorFileName(hashes.machine)] = hashes.hashes
+                peerHashes[VaultStore.mirrorFileName(hashes.machine)] = hashes
             } catch {
                 report.notes.append("\(peer.name) did not answer; its log was not compared")
             }
@@ -204,18 +222,17 @@ public actor VaultAuditSync {
         var mirrored: [(machine: String, lines: [Data])] = []
         for mirror in await store.mirroredMachines() {
             let lines = await store.mirrorLines(machine: mirror)
+            let archived = await store.archivedSegments(mirror: mirror)
             mirrored.append((mirror, lines))
-            report.logs.append(Self.log("mirror of \(mirror)", lines))
+            report.logs.append(Self.log("mirror of \(mirror)", lines, archived: archived))
             guard let theirs = peerHashes[VaultStore.mirrorFileName(mirror)] else {
                 report.notes.append("no answer from \(mirror); its mirror here was only checked against itself")
                 continue
             }
-            let current = Set(theirs)
-            let mine = Set(lines.map(AuditChain.hash))
-            let gone = lines.filter { !current.contains(AuditChain.hash($0)) }
-            report.missing.append(.init(machine: mirror, count: gone.count,
-                                        samples: gone.prefix(5).map { String(decoding: $0, as: UTF8.self) },
-                                        notMirroredYet: theirs.filter { !mine.contains($0) }.count))
+            let compared = Self.compare(mirror: lines, mirrorHead: archived.head, peer: theirs)
+            report.missing.append(.init(machine: mirror, count: compared.gone.count,
+                                        samples: compared.gone.prefix(5).map { String(decoding: $0, as: UTF8.self) },
+                                        notMirroredYet: compared.notMirroredYet))
         }
 
         if let deviceApprovals {
@@ -238,8 +255,50 @@ public actor VaultAuditSync {
         return report
     }
 
-    static func log(_ name: String, _ lines: [Data]) -> VaultAuditReport.Log {
-        let r = AuditChain.verify(lines)
-        return .init(name: name, lines: r.lines, unchained: r.unchained, breaks: r.breaks)
+    /// Checks the archived segments and the current one as one chain;
+    /// line numbers count from the first archived line.
+    static func log(_ name: String, _ lines: [Data], archived: (paths: [String], head: String?) = ([], nil)) -> VaultAuditReport.Log {
+        var verifier = AuditChain.Verifier()
+        for path in archived.paths {
+            VaultStore.forEachLine(inFileAt: path) { verifier.feed($0); return true }
+        }
+        // Archives that are gone (or never were) leave the current segment
+        // to be checked from its head.
+        if archived.paths.isEmpty, let head = archived.head { verifier = AuditChain.Verifier(after: head) }
+        for line in lines { verifier.feed(line) }
+        let r = verifier.report
+        let segments = archived.paths.count + 1
+        return .init(name: segments > 1 ? "\(name), \(segments) segments" : name, lines: r.lines, unchained: r.unchained, breaks: r.breaks)
+    }
+
+    /// The mirror's current segment against the peer's: lines the peer no
+    /// longer has, and how many of the peer's lines the mirror lacks. Each
+    /// side archives on its own schedule, so only the span both segments
+    /// cover is compared.
+    static func compare(mirror lines: [Data], mirrorHead: String?, peer: VaultAuditHashes) -> (gone: [Data], notMirroredYet: Int) {
+        let theirs = Set(peer.hashes)
+        let hashes = lines.map(AuditChain.hash)
+        // Lines up to the peer's head are in its archive, not gone.
+        var from = 0
+        if let head = peer.head {
+            if let at = hashes.lastIndex(of: head) {
+                from = at + 1
+            } else if let first = hashes.first, !theirs.contains(first), mirrorHead != head {
+                // The whole current mirror segment predates the peer's.
+                from = hashes.count
+            }
+        }
+        let gone = zip(lines, hashes).dropFirst(from).filter { !theirs.contains($0.1) }.map(\.0)
+        // The peer's lines after the last one mirrored here.
+        let notMirroredYet: Int
+        if let last = hashes.last ?? mirrorHead, let at = peer.hashes.lastIndex(of: last) {
+            notMirroredYet = peer.hashes.count - at - 1
+        } else if let last = hashes.last ?? mirrorHead, last == peer.head {
+            notMirroredYet = peer.hashes.count
+        } else {
+            let mine = Set(hashes)
+            notMirroredYet = peer.hashes.filter { !mine.contains($0) }.count
+        }
+        return (gone, notMirroredYet)
     }
 }
