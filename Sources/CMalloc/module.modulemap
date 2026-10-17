@@ -1,0 +1,4 @@
+module CMalloc [system] {
+    header "shim.h"
+    export *
+}

@@ -61,6 +61,8 @@ if linuxOnly {
     remoteKitDependencies.append(.product(name: "Crypto", package: "swift-crypto"))
     coreDependencies.append("CZlib")
     targets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
+    coreDependencies.append("CMalloc")
+    targets.append(.systemLibrary(name: "CMalloc", path: "Sources/CMalloc"))
 } else {
     products.insert(contentsOf: [
         .executable(name: "KanbanCode", targets: ["KanbanCode"]),

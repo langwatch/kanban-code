@@ -81,6 +81,9 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
+// Before any thread starts: see ProcessMemory for why the server needs it.
+ProcessMemory.tune()
+
 signal(SIGPIPE, SIG_IGN)
 
 // A server started by hand from a card's shell, or from an ssh login that
@@ -112,6 +115,7 @@ let scrubber = SecretScrubber(vault: master.vault, machine: await master.vault.b
     await peerSync.configuredPeers()
 }
 Task.detached(priority: .utility) { await scrubber.runSchedule() }
+Task.detached(priority: .utility) { await ProcessMemory.runMaintenance() }
 
 let loopbackOnly = options.loopbackOnly
 let server = RemoteControlServer(
