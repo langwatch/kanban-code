@@ -24,6 +24,10 @@ public enum CardReconciler {
         /// Remote machines whose tmux sessions are in `tmuxSessions`. A remote
         /// card on any other machine keeps its tmux link.
         public let connectedRemoteMachines: Set<String>
+        /// This master: duplicates are merged only among the cards it owns,
+        /// since a card another master runs is that master's to change.
+        /// Nil treats every card as local.
+        public let localMachineId: String?
 
         public init(
             sessions: [Session] = [],
@@ -31,8 +35,10 @@ public enum CardReconciler {
             didScanTmux: Bool = false,
             worktrees: [String: [Worktree]] = [:],
             pullRequests: [String: PullRequest] = [:],
-            connectedRemoteMachines: Set<String> = []
+            connectedRemoteMachines: Set<String> = [],
+            localMachineId: String? = nil
         ) {
+            self.localMachineId = localMachineId
             self.sessions = sessions
             self.tmuxSessions = tmuxSessions
             self.didScanTmux = didScanTmux
@@ -40,6 +46,22 @@ public enum CardReconciler {
             self.pullRequests = pullRequests
             self.connectedRemoteMachines = connectedRemoteMachines
         }
+    }
+
+    /// Cards of `existing` the reconciler merged into another card with the
+    /// same session (B3): duplicate id to keeper id.
+    public static func mergedDuplicates(existing: [Link], reconciled: [Link]) -> [String: String] {
+        var keeperBySession: [String: String] = [:]
+        for link in reconciled {
+            if let sid = link.sessionLink?.sessionId, keeperBySession[sid] == nil { keeperBySession[sid] = link.id }
+        }
+        let kept = Set(reconciled.map(\.id))
+        var out: [String: String] = [:]
+        for link in existing where !kept.contains(link.id) {
+            guard let sid = link.sessionLink?.sessionId, let keeper = keeperBySession[sid], keeper != link.id else { continue }
+            out[link.id] = keeper
+        }
+        return out
     }
 
     /// Reconcile existing cards with discovered resources.
@@ -341,6 +363,7 @@ public enum CardReconciler {
         var sessionIdToCards: [String: [String]] = [:]
         for (id, link) in linksById {
             guard let sid = link.sessionLink?.sessionId else { continue }
+            if let local = snapshot.localMachineId, let owner = link.ownerMachine, owner != local { continue }
             sessionIdToCards[sid, default: []].append(id)
         }
         for (sid, cardIds) in sessionIdToCards where cardIds.count > 1 {

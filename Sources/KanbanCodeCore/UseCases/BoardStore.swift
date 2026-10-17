@@ -859,6 +859,9 @@ public struct ReconciliationResult: Sendable {
     public let excludedPaths: [String]
     public let discoveredProjectPaths: [String]
     public let globalRemoteSettings: RemoteSettings?
+    /// Cards the reconciler merged into another card with the same
+    /// session: duplicate id to keeper id.
+    public let mergedDuplicates: [String: String]
 
     public init(
         links: [Link],
@@ -868,8 +871,10 @@ public struct ReconciliationResult: Sendable {
         configuredProjects: [Project] = [],
         excludedPaths: [String] = [],
         discoveredProjectPaths: [String] = [],
-        globalRemoteSettings: RemoteSettings? = nil
+        globalRemoteSettings: RemoteSettings? = nil,
+        mergedDuplicates: [String: String] = [:]
     ) {
+        self.mergedDuplicates = mergedDuplicates
         self.links = links
         self.sessions = sessions
         self.activityMap = activityMap
@@ -2627,6 +2632,15 @@ public enum Reducer {
                 KanbanCodeLog.info("store", "Dropped reconciler-removed orphan \(id.prefix(12))")
             }
 
+            // A card merged into another with the same session goes, or the
+            // next pass finds the pair again and merges it again.
+            for (id, keeperId) in result.mergedDuplicates.sorted(by: { $0.key < $1.key }) {
+                guard let link = mergedLinks[id], mergedLinks[keeperId] != nil,
+                      state.isOwnedLocally(link), link.isLaunching != true else { continue }
+                mergedLinks.removeValue(forKey: id)
+                KanbanCodeLog.info("store", "Dropped duplicate-session card \(id.prefix(12)), merged into \(keeperId.prefix(12))")
+            }
+
             if !preservedIds.isEmpty {
                 KanbanCodeLog.info("store", "Preserved \(preservedIds.count) card(s) modified during reconciliation")
             }
@@ -3577,7 +3591,8 @@ public final class BoardStore: @unchecked Sendable {
                 didScanTmux: tmuxAdapter != nil,
                 worktrees: worktreesByRepo,
                 pullRequests: pullRequests,
-                connectedRemoteMachines: connectedMachines
+                connectedRemoteMachines: connectedMachines,
+                localMachineId: state.localMachineId
             )
             // Pure work over every card and session: keep it off the main thread.
             let reconcileInput = existingLinks
@@ -3591,6 +3606,7 @@ public final class BoardStore: @unchecked Sendable {
                 mergedLinks = mergedLinks.map { migrating[$0.id] ?? $0 }
             }
             KanbanCodeLog.info("reconcile", "reconciler: \(t3.duration(to: .now)) (\(existingLinks.count) existing → \(mergedLinks.count) merged)")
+            let mergedDuplicates = CardReconciler.mergedDuplicates(existing: existingLinks, reconciled: mergedLinks)
 
             // Update existing PR statuses from the by-number results. A pull
             // request is matched by the repository its own URL names, so a
@@ -3646,7 +3662,8 @@ public final class BoardStore: @unchecked Sendable {
                 configuredProjects: configuredProjects,
                 excludedPaths: excludedPaths,
                 discoveredProjectPaths: discoveredProjectPaths,
-                globalRemoteSettings: globalRemoteSettings
+                globalRemoteSettings: globalRemoteSettings,
+                mergedDuplicates: mergedDuplicates
             )
             dispatch(.reconciled(result))
             KanbanCodeLog.info("reconcile", "dispatch: \(t5.duration(to: .now))")
