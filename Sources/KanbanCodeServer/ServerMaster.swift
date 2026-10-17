@@ -212,6 +212,7 @@ final class ServerMaster {
         _ = HookManager.refreshHookScript()
         if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") {
             _ = try? VaultHook.install()
+            _ = try? PermissionHook.install()
         }
         if FileManager.default.fileExists(atPath: VaultHook.codexHome) {
             _ = try? VaultHook.installCodex()
