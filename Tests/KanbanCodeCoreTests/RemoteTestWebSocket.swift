@@ -15,6 +15,7 @@ final class RawTestWebSocket: @unchecked Sendable {
 
     enum CloseCode {
         case normalClosure
+        case goingAway
     }
 
     struct Closed: Error {}

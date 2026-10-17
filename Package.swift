@@ -59,6 +59,7 @@ if linuxOnly {
     dependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"))
     coreDependencies.append(.product(name: "Crypto", package: "swift-crypto"))
     remoteKitDependencies.append(.product(name: "Crypto", package: "swift-crypto"))
+    targets.first { $0.name == "KanbanCodeCoreTests" }?.dependencies.append(.product(name: "Crypto", package: "swift-crypto"))
     coreDependencies.append("CZlib")
     targets.append(.systemLibrary(name: "CZlib", path: "Sources/CZlib"))
     coreDependencies.append("CMalloc")

@@ -603,7 +603,7 @@ public actor VaultStore {
 
     private func lastAuditLineHash() -> String {
         if let lastAuditHash { return lastAuditHash }
-        let hash = AuditChain.lines(of: FileManager.default.contents(atPath: auditPath) ?? Data()).last.map(AuditChain.hash) ?? ""
+        let hash = Self.tail(ofFileAt: auditPath).last.map(AuditChain.hash) ?? ""
         lastAuditHash = hash
         return hash
     }
@@ -615,6 +615,61 @@ public actor VaultStore {
     /// The audit log's raw lines, oldest first.
     public func auditLines() -> [Data] {
         AuditChain.lines(of: FileManager.default.contents(atPath: auditPath) ?? Data())
+    }
+
+    /// The audit lines after the one hashed `hash`, oldest first, or nil when
+    /// no line in the log has that hash.
+    public func auditLines(after hash: String) -> [Data]? {
+        Self.lines(after: hash, inFileAt: auditPath)
+    }
+
+    /// The lines of a JSON-lines file after the one hashed `hash`, read from
+    /// the end in blocks: a peer a few lines behind costs a few lines, not
+    /// the whole log (hundreds of MiB on a busy host). Nil when no line has
+    /// that hash.
+    static func lines(after hash: String, inFileAt path: String, blockSize: Int = 1 << 20) -> [Data]? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        guard var end = try? handle.seekToEnd() else { return nil }
+        var newestFirst: [Data] = []
+        // The start of the line cut by the previous block's lower edge.
+        var cut = Data()
+        while end > 0 {
+            let start = end > UInt64(blockSize) ? end - UInt64(blockSize) : 0
+            guard (try? handle.seek(toOffset: start)) != nil,
+                  let block = try? handle.read(upToCount: Int(end - start)) else { return nil }
+            var pieces = (block + cut).split(separator: 0x0A, omittingEmptySubsequences: false)
+            cut = start > 0 ? Data(pieces.removeFirst()) : Data()
+            for piece in pieces.reversed() where !piece.isEmpty {
+                let line = Data(piece)
+                if AuditChain.hash(line) == hash { return newestFirst.reversed() }
+                newestFirst.append(line)
+            }
+            end = start
+        }
+        return nil
+    }
+
+    /// The last line of a JSON-lines file and how many lines it has, read
+    /// in blocks so the file never sits in memory whole.
+    static func tail(ofFileAt path: String, blockSize: Int = 1 << 20) -> (count: Int, last: Data?) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return (0, nil) }
+        defer { try? handle.close() }
+        var count = 0
+        var current = Data()
+        var last: Data?
+        while let block = try? handle.read(upToCount: blockSize), !block.isEmpty {
+            var from = block.startIndex
+            while let newline = block[from...].firstIndex(of: 0x0A) {
+                current.append(block[from..<newline])
+                if !current.isEmpty { count += 1; last = current }
+                current = Data()
+                from = block.index(after: newline)
+            }
+            current.append(block[from...])
+        }
+        if !current.isEmpty { count += 1; last = current }
+        return (count, last)
     }
 
     // MARK: - Audit mirrors
@@ -641,8 +696,8 @@ public actor VaultStore {
 
     /// Where a peer's mirror stands: how many lines, and the hash of the last.
     public func mirrorTail(machine: String) -> VaultAuditMirrorTail {
-        let lines = mirrorLines(machine: machine)
-        return VaultAuditMirrorTail(count: lines.count, lastHash: lines.last.map(AuditChain.hash))
+        let tail = Self.tail(ofFileAt: mirrorPath(machine))
+        return VaultAuditMirrorTail(count: tail.count, lastHash: tail.last.map(AuditChain.hash))
     }
 
     /// Adds a peer's audit lines to its mirror here. Lines are only ever

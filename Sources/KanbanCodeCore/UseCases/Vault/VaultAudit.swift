@@ -154,9 +154,14 @@ public actor VaultAuditSync {
             let (data, status) = try await fetch(get)
             guard status == 200 else { return }
             var tail = try JSONDecoder().decode(VaultAuditMirrorTail.self, from: data)
-            let lines = await store.auditLines()
+            // Every audit line pokes a push: read only what the mirror lacks.
+            let lines: [Data]
+            if let last = tail.lastHash, let after = await store.auditLines(after: last) {
+                lines = after
+            } else {
+                lines = await store.auditLines()
+            }
             var start = 0
-            if let last = tail.lastHash, let at = lines.lastIndex(where: { AuditChain.hash($0) == last }) { start = at + 1 }
             while start < lines.count {
                 let chunk = lines[start..<min(start + batch, lines.count)].map { String(decoding: $0, as: UTF8.self) }
                 let body = try JSONEncoder().encode(VaultAuditMirrorPush(machine: machine, lines: chunk))

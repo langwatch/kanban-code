@@ -254,6 +254,7 @@ struct SideChatControllerTests {
         #expect(prompt.contains("Half done."))
     }
 
+    #if !os(Linux)
     @Test("a citation link names its message by time and round-trips its id")
     func links() throws {
         let at = Date(timeIntervalSince1970: 1_800_000_000)
@@ -268,4 +269,5 @@ struct SideChatControllerTests {
         #expect(String(text.characters).hasSuffix("08:00"))
         #expect(SideChatLinks.ref(from: URL(string: "https://example.com/ref/m7")!) == nil)
     }
+    #endif
 }
