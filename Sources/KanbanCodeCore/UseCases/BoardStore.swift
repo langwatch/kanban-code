@@ -3497,10 +3497,15 @@ public final class BoardStore: @unchecked Sendable {
                     detector: activityDetector
                 )
             }
+            let tBranches = ContinuousClock.now
             await autoDiscoverBranchesForRecentlyActiveCards(
                 links: &existingLinks,
                 activityMap: earlyActivityMap
             )
+            let branchScan = tBranches.duration(to: .now)
+            if branchScan > .seconds(1) {
+                KanbanCodeLog.info("reconcile", "auto branch discovery: \(branchScan)")
+            }
 
             // Collect branches + PR numbers that can still change. Finished
             // cards' merged PRs never move again, and looking them all up made
@@ -3822,6 +3827,11 @@ public final class BoardStore: @unchecked Sendable {
         KanbanCodeLog.info("reconcile", "PR lookup: \(t.duration(to: .now)) (\(pullRequests.count) by branch, \(totalByNumber) by number, \(allRepos.count) repos, background)")
     }
 
+    /// How far back from the end of a session the automatic branch scan
+    /// reads. A full read of a 150 MB session held the reconcile for 23 s on a
+    /// loaded host; the manual "Discover Branches and PRs" still reads it all.
+    static let autoBranchScanBytes = 8 * 1024 * 1024
+
     private func autoDiscoverBranchesForRecentlyActiveCards(
         links: inout [Link],
         activityMap: [String: ActivityState]
@@ -3860,7 +3870,9 @@ public final class BoardStore: @unchecked Sendable {
         do {
             switch link.effectiveAssistant {
             case .claude, .gemini:
-                if let latest = try await JsonlParser.extractLatestPushedBranch(from: sessionPath) {
+                if let latest = try await JsonlParser.extractLatestPushedBranch(
+                    from: sessionPath, maxBytes: Self.autoBranchScanBytes
+                ) {
                     scanned = [latest]
                 } else {
                     scanned = []

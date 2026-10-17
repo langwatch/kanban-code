@@ -94,6 +94,49 @@ struct SessionPRDiscoveryTests {
         #expect(latest?.repoPath == "/repos/langwatch")
     }
 
+    @Test("a push to main through a refspec is not a feature branch")
+    func refspecPushToMainIsSkipped() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = try write(dir, [
+            bash("git push origin feat/real", cwd: "/repos/langwatch"),
+            bash("git push origin HEAD:main", cwd: "/repos/langwatch"),
+        ])
+
+        let latest = try await JsonlParser.extractLatestPushedBranch(from: path)
+
+        #expect(latest?.branch == "feat/real")
+    }
+
+    @Test("a refspec push names the branch it lands on")
+    func refspecPushNamesTheRemoteBranch() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = try write(dir, [
+            bash("git push -u origin +HEAD:refs/heads/fix/remote-name", cwd: "/repos/langwatch"),
+        ])
+
+        let latest = try await JsonlParser.extractLatestPushedBranch(from: path)
+        let all = try await JsonlParser.extractPushedBranches(from: path)
+
+        #expect(latest?.branch == "fix/remote-name")
+        #expect(all.map(\.branch) == ["fix/remote-name"])
+    }
+
+    @Test("the capped scan does not read a push further back than its window")
+    func cappedScanStopsAtTheWindow() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let filler = (0..<200).map { i in bash("echo \(String(repeating: "x", count: 1000)) \(i)", cwd: "/repos/langwatch") }
+        let path = try write(dir, [bash("git push origin feat/old", cwd: "/repos/langwatch")] + filler)
+
+        let capped = try await JsonlParser.extractLatestPushedBranch(from: path, maxBytes: 64 * 1024)
+        let full = try await JsonlParser.extractLatestPushedBranch(from: path)
+
+        #expect(capped == nil)
+        #expect(full?.branch == "feat/old")
+    }
+
     // MARK: - Pull requests the session recorded
 
     @Test("a pull request the session worked on is found without any push")

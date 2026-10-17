@@ -365,8 +365,8 @@ public enum JsonlParser {
                     repoPath = resolveGitRoot(cwd)
                 }
 
-                func addBranch(_ branch: String) {
-                    if branch != "main" && branch != "master" && !branch.hasPrefix("-") {
+                func addBranch(_ ref: String) {
+                    if let branch = pushedBranchName(ref) {
                         branches.insert(DiscoveredBranch(branch: branch, repoPath: repoPath))
                     }
                 }
@@ -389,17 +389,34 @@ public enum JsonlParser {
         return Array(branches).sorted { $0.branch < $1.branch }
     }
 
+    /// The branch a pushed ref names on the remote, nil for the default
+    /// branches and flags. `HEAD:main` pushes to main, `+a:refs/heads/b` to b.
+    static func pushedBranchName(_ ref: String) -> String? {
+        var branch = Substring(ref)
+        if branch.hasPrefix("+") { branch = branch.dropFirst() }
+        if let colon = branch.lastIndex(of: ":") { branch = branch[branch.index(after: colon)...] }
+        if branch.hasPrefix("refs/heads/") { branch = branch.dropFirst("refs/heads/".count) }
+        guard !branch.isEmpty, branch != "main", branch != "master", branch != "HEAD", !branch.hasPrefix("-") else {
+            return nil
+        }
+        return String(branch)
+    }
+
     /// Scan a session JSONL bottom-up for the most recently pushed branch.
-    /// Reads in reverse chunks and stops at the first match — efficient for large files.
+    /// Reads in reverse chunks and stops at the first match.
     /// `stopAtOffset` is the lower bound (e.g. a watermark); bytes before it are not scanned.
+    /// `maxBytes` caps how far back from the end it reads: a long session can
+    /// be hundreds of megabytes with its last feature push far behind.
     public static func extractLatestPushedBranch(
         from filePath: String,
-        stopAtOffset: Int = 0
+        stopAtOffset: Int = 0,
+        maxBytes: Int? = nil
     ) async throws -> DiscoveredBranch? {
         guard FileManager.default.fileExists(atPath: filePath) else { return nil }
 
         let attrs = try FileManager.default.attributesOfItem(atPath: filePath)
         let fileSize = (attrs[.size] as? Int) ?? 0
+        let stopAtOffset = maxBytes.map { max(stopAtOffset, fileSize - $0) } ?? stopAtOffset
         guard fileSize > stopAtOffset else { return nil }
 
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: filePath))
@@ -459,11 +476,9 @@ public enum JsonlParser {
                         repoPath = resolveGitRoot(cwd)
                     }
 
-                    if let match = command.firstMatch(of: pushRegex) {
-                        let branch = String(match.output.1)
-                        if branch != "main" && branch != "master" && !branch.hasPrefix("-") {
-                            return DiscoveredBranch(branch: branch, repoPath: repoPath)
-                        }
+                    if let match = command.firstMatch(of: pushRegex),
+                       let branch = pushedBranchName(String(match.output.1)) {
+                        return DiscoveredBranch(branch: branch, repoPath: repoPath)
                     }
                 }
             }
