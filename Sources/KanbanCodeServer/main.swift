@@ -138,6 +138,10 @@ do {
 say("kanban-code-server \(KanbanCodeServerVersion.current) on \(server.listeningAddresses.joined(separator: ", ")) port \(server.port)")
 say("home \(options.home), devices \(devices.path), machine \(master.identity.name) (\(master.identity.id))")
 
+// The API serves the cached board while the first reconcile runs: that pass
+// can take half a minute on a loaded host, and clients read it as offline.
+Task { await master.run() }
+
 let stop: @Sendable (Int32) -> Void = { _ in
     server.stop()
     exit(0)
