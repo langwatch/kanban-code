@@ -105,3 +105,17 @@ struct RemoteClientRequestTests {
         #expect(RemoteClientError.from(status: 500, body: Data("boom".utf8)) == .server(status: 500, message: "boom"))
     }
 }
+
+@Suite("remote events reconnect")
+struct RemoteReconnectDelayTests {
+    @Test("the wait between reconnects doubles from 1 s and stops at 5 s")
+    func delaysCapAtFiveSeconds() {
+        var delay: TimeInterval = 1
+        var waits: [TimeInterval] = [delay]
+        for _ in 0..<5 {
+            delay = RemoteClient.nextReconnectDelay(after: delay)
+            waits.append(delay)
+        }
+        #expect(waits == [1, 2, 4, 5, 5, 5])
+    }
+}

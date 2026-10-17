@@ -120,6 +120,20 @@ final class BoardModel {
         }
     }
 
+    /// Connects again at once when the master is not live, instead of
+    /// waiting out the retry: the app coming back to the foreground is
+    /// when the board should be fresh.
+    func reconnectIfDown() {
+        switch link {
+        case .live, .refused, .offline: return
+        case .connecting, .reconnecting: break
+        }
+        guard client != nil else { return }
+        eventsTask?.cancel()
+        eventsTask = nil
+        start()
+    }
+
     func stop() {
         eventsTask?.cancel()
         eventsTask = nil

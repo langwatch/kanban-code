@@ -719,6 +719,25 @@ struct PeerSyncLoopTests {
         #expect(transport.lock.withLock { transport.notified } == ["peer_box"])
     }
 
+    @Test("a peer that was down is pulled again within seconds of coming back")
+    func offlinePeerRetriesSoon() async throws {
+        #expect(PeerSync.offlineRetry <= .seconds(5))
+        let transport = FakeTransport()
+        transport.pages["peer_box"] = LinksPage(machine: box, epoch: "e", seq: 1, full: true, links: [])
+        transport.failing = ["peer_box"]
+        let sync = PeerSync(identity: me, peers: [peer], transport: transport) { _ in }
+        let task = Task { await sync.run(interval: .seconds(60), offlineInterval: .milliseconds(200)) }
+        defer { task.cancel() }
+        for _ in 0..<40 where transport.lock.withLock({ transport.requests.count }) < 1 {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        transport.lock.withLock { transport.failing = [] }
+        for _ in 0..<40 where await sync.status(of: "peer_box")?.online != true {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(await sync.status(of: "peer_box")?.online == true)
+    }
+
     @Test("links URL is built from the peer base URL")
     func linksURL() {
         #expect(HTTPPeerLinksTransport.linksURL(base: "http://h:7780/", since: 5, epoch: "e1")?.absoluteString

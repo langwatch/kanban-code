@@ -3,6 +3,7 @@ import KanbanCodeRemoteKit
 
 struct BoardScreen: View {
     let fleet: FleetModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var path: [String] = []
     /// The board's rows while a card is open on top of it. A list that
     /// changes while covered reloads when focus comes back to one of its
@@ -48,6 +49,9 @@ struct BoardScreen: View {
                 .cardActions(actions)
         }
         .task { fleet.start() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { fleet.reconnectDown() }
+        }
         .onChange(of: search) { _, text in older.update(text) }
         .onChange(of: path.isEmpty) { _, isEmpty in
             covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters, olderRows)

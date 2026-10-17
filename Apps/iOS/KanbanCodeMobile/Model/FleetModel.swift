@@ -66,6 +66,11 @@ final class FleetModel {
         masters.forEach { $0.start() }
     }
 
+    /// Masters that dropped while the app was away connect again now.
+    func reconnectDown() {
+        masters.forEach { $0.reconnectIfDown() }
+    }
+
     var primary: BoardModel? {
         masters.first { $0.server.id == store.primaryID } ?? masters.first
     }

@@ -212,9 +212,14 @@ public actor PeerSync {
         }
     }
 
+    /// How often an offline peer is tried again. A master restarting for a
+    /// deploy is back within seconds, and a longer wait shows it offline for
+    /// that long; a failed pull to a refusing host costs next to nothing.
+    public static let offlineRetry: Duration = .seconds(5)
+
     /// Runs until the task is cancelled: online peers every `interval`,
     /// offline ones every `offlineInterval`, poked ones at once.
-    public func run(interval: Duration = .seconds(5), offlineInterval: Duration = .seconds(30)) async {
+    public func run(interval: Duration = .seconds(5), offlineInterval: Duration = PeerSync.offlineRetry) async {
         var nextPull: [String: ContinuousClock.Instant] = [:]
         let clock = ContinuousClock()
         while !Task.isCancelled {

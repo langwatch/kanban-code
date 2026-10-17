@@ -428,7 +428,7 @@ public struct RemoteClient: Sendable {
     /// (re)connect, then `cards` deltas to fold in with `RemoteEvent.apply(to:)`.
     /// A delta that arrives before the connection's first board is dropped and
     /// a resync asked for, so every delta applies to a whole board. Reconnects
-    /// with exponential backoff (1 s doubling to 30 s) on any drop, and
+    /// with backoff (1 s doubling to `maxReconnectDelay`) on any drop, and
     /// finishes with an error only when the token is refused. `onState`
     /// reports the connection.
     public func events(all: Bool = false,
@@ -483,12 +483,20 @@ public struct RemoteClient: Sendable {
                     if Task.isCancelled { break }
                     onState?(.reconnecting(retryIn: delay, reason: reason))
                     try? await Task.sleep(for: .seconds(delay))
-                    delay = min(delay * 2, 30)
+                    delay = Self.nextReconnectDelay(after: delay)
                 }
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// The longest wait between reconnects. A master restarting for a deploy
+    /// is back within seconds, and a longer wait shows it offline for that long.
+    public static let maxReconnectDelay: TimeInterval = 5
+
+    public static func nextReconnectDelay(after delay: TimeInterval) -> TimeInterval {
+        min(delay * 2, maxReconnectDelay)
     }
 
     static let resyncFrame: String = {
