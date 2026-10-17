@@ -108,16 +108,22 @@ public actor PeerSync {
     /// Last repository slugs each peer sent, to dispatch only changes.
     private var repoSlugs: [String: [String: String]] = [:]
     private var pokedAll = false
+    /// Failed pulls since each peer last answered: an online peer turns
+    /// offline only once they span `offlineGrace`.
+    private var reachability: [String: RemoteReachability] = [:]
+    private let offlineGrace: TimeInterval
 
     public init(
         identity: MachineIdentity,
         peers: [PeerConfig] = [],
         transport: any PeerLinksTransport = HTTPPeerLinksTransport(),
+        offlineGrace: TimeInterval = RemoteReachability.defaultGrace,
         dispatch: @escaping Dispatch
     ) {
         self.identity = identity
         self.peers = peers
         self.transport = transport
+        self.offlineGrace = offlineGrace
         self.dispatch = dispatch
     }
 
@@ -133,6 +139,7 @@ public actor PeerSync {
         let ids = Set(newPeers.map(\.id))
         for id in cursors.keys where !ids.contains(id) { cursors[id] = nil }
         for id in statuses.keys where !ids.contains(id) { statuses[id] = nil }
+        for id in reachability.keys where !ids.contains(id) { reachability[id] = nil }
         peers = newPeers
         pokedAll = true
     }
@@ -152,7 +159,9 @@ public actor PeerSync {
 
     // MARK: - Pulling
 
-    /// Pulls one peer now. Returns whether it answered.
+    /// Pulls one peer now. Returns whether it answered. A peer that was
+    /// online stays online through failed pulls until they span
+    /// `offlineGrace`: a loaded host that answers late is not offline.
     @discardableResult
     public func pull(peerId: String) async -> Bool {
         guard let peer = peers.first(where: { $0.id == peerId }), peer.enabled else { return false }
@@ -168,11 +177,15 @@ public actor PeerSync {
                 await dispatch(.peerRepoSlugsLoaded(peer: page.machine.id, slugs: slugs))
             }
             cursors[peer.id] = Cursor(epoch: page.epoch, seq: page.seq)
+            reachability[peer.id] = nil
             await report(PeerStatus(peerId: peer.id, machine: page.machine, online: true, lastSeen: .now, url: peer.url))
             return true
         } catch {
+            var reach = reachability[peer.id] ?? RemoteReachability(grace: offlineGrace)
+            reach.failed()
+            reachability[peer.id] = reach
             var status = statuses[peer.id] ?? PeerStatus(peerId: peer.id)
-            status.online = false
+            status.online = status.online && !reach.isOffline()
             status.lastError = error.localizedDescription
             status.url = peer.url
             await report(status)

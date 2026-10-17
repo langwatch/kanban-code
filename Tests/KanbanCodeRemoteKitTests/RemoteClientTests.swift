@@ -119,3 +119,40 @@ struct RemoteReconnectDelayTests {
         #expect(waits == [1, 2, 4, 5, 5, 5])
     }
 }
+
+@Suite("remote reachability")
+struct RemoteReachabilityTests {
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test("one failure does not make a master offline; failures spanning the grace do")
+    func offlineOnlyAfterGrace() {
+        var reach = RemoteReachability(grace: 45)
+        #expect(!reach.isOffline(at: t0))
+        reach.failed(at: t0)
+        #expect(!reach.isOffline(at: t0))
+        reach.failed(at: t0.addingTimeInterval(30))
+        #expect(!reach.isOffline(at: t0.addingTimeInterval(44)))
+        #expect(reach.isOffline(at: t0.addingTimeInterval(45)))
+        #expect(reach.offlineAt == t0.addingTimeInterval(45))
+    }
+
+    @Test("an answer starts the grace over")
+    func answerResets() {
+        var reach = RemoteReachability(grace: 45)
+        reach.failed(at: t0)
+        reach.answered()
+        #expect(reach.failingSince == nil && reach.offlineAt == nil)
+        reach.failed(at: t0.addingTimeInterval(40))
+        #expect(!reach.isOffline(at: t0.addingTimeInterval(60)))
+        #expect(reach.isOffline(at: t0.addingTimeInterval(85)))
+    }
+
+    @Test("the events socket outlasts a late ping, and the grace outlasts a reconnect round")
+    func timingsLeaveRoom() {
+        let masterPingInterval: TimeInterval = 20
+        #expect(RemoteClient.eventsIdleTimeout >= masterPingInterval * 2)
+        #expect(RemoteReachability.defaultGrace > RemoteClient.maxReconnectDelay * 4)
+        #expect(RemoteClient(baseURL: URL(string: "http://h:7780")!, token: "t")
+            .webSocketRequest(URL(string: "ws://h:7780/v1/cards/c/terminal")!).timeoutInterval == 30)
+    }
+}

@@ -672,6 +672,32 @@ struct PeerSyncLoopTests {
         #expect(statuses.map(\.online) == [false, true])
     }
 
+    @Test("an online peer that fails to answer stays online until the failures span the grace")
+    func slowPeerStaysOnline() async throws {
+        let transport = FakeTransport()
+        transport.pages["peer_box"] = LinksPage(machine: box, epoch: "e", seq: 1, full: true, links: [])
+        let dispatched = Dispatched()
+        let sync = PeerSync(identity: me, peers: [peer], transport: transport, offlineGrace: 0.3) { await dispatched.append($0) }
+        #expect(await sync.pull(peerId: "peer_box"))
+
+        transport.lock.withLock { transport.failing = ["peer_box"] }
+        #expect(await sync.pull(peerId: "peer_box") == false)
+        #expect(await sync.status(of: "peer_box")?.online == true)
+        #expect(await sync.status(of: "peer_box")?.lastError?.contains("502") == true)
+
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(await sync.pull(peerId: "peer_box") == false)
+        #expect(await sync.status(of: "peer_box")?.online == false)
+
+        transport.lock.withLock { transport.failing = [] }
+        #expect(await sync.pull(peerId: "peer_box"))
+        transport.lock.withLock { transport.failing = ["peer_box"] }
+        #expect(await sync.pull(peerId: "peer_box") == false)
+        #expect(await sync.status(of: "peer_box")?.online == true)
+        let flips = await dispatched.actions.compactMap { if case .peerStatusChanged(let s) = $0 { s.online } else { nil } }
+        #expect(flips.filter { !$0 }.count == 1)
+    }
+
     @Test("a peer that turns out to be this machine is refused")
     func selfPeer() async {
         let transport = FakeTransport()

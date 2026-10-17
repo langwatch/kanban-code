@@ -433,7 +433,8 @@ public struct RemoteClient: Sendable {
     /// reports the connection.
     public func events(all: Bool = false,
                        onState: (@Sendable (RemoteConnectionState) -> Void)? = nil) -> AsyncThrowingStream<RemoteEvent, Error> {
-        let request = webSocketRequest(webSocketURL("v1/events", query: all ? [URLQueryItem(name: "all", value: "1")] : []))
+        let request = webSocketRequest(webSocketURL("v1/events", query: all ? [URLQueryItem(name: "all", value: "1")] : []),
+                                       timeout: Self.eventsIdleTimeout)
         let session = self.session
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -516,10 +517,15 @@ public struct RemoteClient: Sendable {
         return RemoteTerminalConnection(task: session.webSocketTask(with: request))
     }
 
-    public func webSocketRequest(_ url: URL) -> URLRequest {
+    /// How long the events socket waits for a frame before it gives up on
+    /// the connection. The master pings every 20 s; a loaded master sends
+    /// that ping late, and a socket dropped for it shows the master offline.
+    public static let eventsIdleTimeout: TimeInterval = 60
+
+    public func webSocketRequest(_ url: URL, timeout: TimeInterval = 30) -> URLRequest {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
+        request.timeoutInterval = timeout
         return request
     }
 

@@ -27,7 +27,8 @@ final class BoardModel {
     private(set) var loadError: String?
     /// The master's identity, from its board. Older servers do not name one.
     private(set) var machine: RemoteMachine?
-    /// When the master was last reachable, while it is not. Nil while live.
+    /// When the master was last reachable, once it has been unreachable
+    /// for the whole grace (`RemoteReachability`). Nil while live.
     private(set) var offlineSince: Date?
     /// The board shown comes from the cache, not from the master.
     private(set) var isCached = false
@@ -41,6 +42,16 @@ final class BoardModel {
     @ObservationIgnored private var lastSaved = Date.distantPast
     @ObservationIgnored private var lastReceived: Date?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// Any frame, pings included: a socket silent for longer than the
+    /// master's ping interval is dead even if it has not failed yet.
+    @ObservationIgnored private var lastFrame: Date?
+    /// When the cached board was saved, shown as the last sighting.
+    @ObservationIgnored private var cachedAt: Date?
+    /// Failed attempts since the master last answered. It shows offline
+    /// only once they span the grace; until then the board stays as it was.
+    @ObservationIgnored private var reachability = RemoteReachability()
+    @ObservationIgnored private var graceTask: Task<Void, Never>?
+    @ObservationIgnored private var lastRetryIn: TimeInterval = 1
 
     init(server: SavedServer, client: RemoteClient?) {
         self.server = server
@@ -48,7 +59,7 @@ final class BoardModel {
         if let cached = BoardCache.load(server.id) {
             board = cached.board
             machine = cached.board.machine
-            offlineSince = cached.savedAt
+            cachedAt = cached.savedAt
             isCached = true
         }
     }
@@ -99,6 +110,9 @@ final class BoardModel {
 
     func start() {
         guard let client, eventsTask == nil else { return }
+        // Not answering yet: the grace runs from the first attempt, so a
+        // master that never answers still shows offline once it is over.
+        if link != .live { noteFailure() }
         eventsTask = Task { [weak self] in
             guard let model = self else { return }
             await model.refresh()
@@ -108,6 +122,7 @@ final class BoardModel {
             }
             do {
                 for try await event in stream {
+                    model.lastFrame = .now
                     guard event.type != .ping else { continue }
                     if let attention = event.attention { model.attention = attention }
                     if model.isCached { model.board = nil }
@@ -125,7 +140,11 @@ final class BoardModel {
     /// when the board should be fresh.
     func reconnectIfDown() {
         switch link {
-        case .live, .refused, .offline: return
+        case .refused, .offline: return
+        case .live:
+            // Live on screen, but a socket the phone slept through can be
+            // silent without having failed yet.
+            guard let lastFrame, Date.now.timeIntervalSince(lastFrame) > Self.silentAfter else { return }
         case .connecting, .reconnecting: break
         }
         guard client != nil else { return }
@@ -134,9 +153,14 @@ final class BoardModel {
         start()
     }
 
+    /// Longer than the master's 20 s ping interval, with room for a late one.
+    static let silentAfter: TimeInterval = 45
+
     func stop() {
         eventsTask?.cancel()
         eventsTask = nil
+        graceTask?.cancel()
+        graceTask = nil
         saveTask?.cancel()
         saveTask = nil
         if let board, let lastReceived { BoardCache.save(board, seenAt: lastReceived, for: server.id) }
@@ -153,7 +177,7 @@ final class BoardModel {
             link = .refused(error.localizedDescription)
         } catch {
             loadError = error.localizedDescription
-            if offlineSince == nil { offlineSince = .now }
+            noteFailure()
         }
     }
 
@@ -207,9 +231,8 @@ final class BoardModel {
     private func received() {
         isCached = false
         loadError = nil
-        offlineSince = nil
         lastReceived = .now
-        if case .refused = link {} else { link = .live }
+        answered()
         if let found = board?.machine { machine = found }
         scheduleSave()
     }
@@ -233,15 +256,46 @@ final class BoardModel {
         if case .refused = link { return }
         switch state {
         case .connecting:
-            if link != .live { link = .connecting }
+            if link != .live, offlineSince == nil { link = .connecting }
         case .connected:
-            link = .live
-            offlineSince = nil
+            answered()
             Task { await loadDevice() }
         case .reconnecting(let retryIn, _):
-            if link == .live || offlineSince == nil { offlineSince = lastReceived ?? .now }
-            link = .reconnecting(retryIn: retryIn)
+            lastRetryIn = retryIn
+            noteFailure()
+            if offlineSince != nil { link = .reconnecting(retryIn: retryIn) }
         }
+    }
+
+    /// The master answered: live again, and the grace starts over.
+    private func answered() {
+        reachability.answered()
+        graceTask?.cancel()
+        graceTask = nil
+        offlineSince = nil
+        if case .refused = link {} else { link = .live }
+    }
+
+    /// An attempt failed. The board keeps showing as it was until the
+    /// failures span the grace, then the master shows offline.
+    private func noteFailure() {
+        reachability.failed()
+        if reachability.isOffline() {
+            declareOffline()
+        } else if graceTask == nil, let at = reachability.offlineAt {
+            graceTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, at.timeIntervalSinceNow) + 0.1))
+                guard let self, !Task.isCancelled else { return }
+                self.graceTask = nil
+                if self.reachability.isOffline() { self.declareOffline() }
+            }
+        }
+    }
+
+    private func declareOffline() {
+        if case .refused = link { return }
+        if offlineSince == nil { offlineSince = lastReceived ?? cachedAt ?? reachability.failingSince ?? .now }
+        link = .reconnecting(retryIn: lastRetryIn)
     }
 }
 
