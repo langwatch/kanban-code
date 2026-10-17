@@ -36,8 +36,12 @@ install -m 0755 .build/release/kanban-code-export /usr/local/bin/kanban-code-exp
 install -m 0644 Scripts/kanban-code-server/kanban-code-server.service /etc/systemd/system/kanban-code-server.service
 systemctl daemon-reload
 systemctl enable kanban-code-server >/dev/null
+# Everything is built and installed before this point, so the API is down
+# only for the restart itself.
+RESTART_AT=\$(date +%s.%N)
 systemctl restart kanban-code-server
-for i in \$(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:7780/v1/health && break; sleep 1; done
+for i in \$(seq 1 600); do curl -fsS -m 1 -o /dev/null http://127.0.0.1:7780/v1/health && break; sleep 0.1; done
+awk -v a=\$RESTART_AT -v b=\$(date +%s.%N) 'BEGIN { printf "remote API back %.2f s after the restart\\n", b - a }'
 systemctl --no-pager --lines=5 status kanban-code-server
 curl -fsS http://127.0.0.1:7780/v1/health
 echo
