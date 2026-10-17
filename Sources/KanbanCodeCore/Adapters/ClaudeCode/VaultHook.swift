@@ -16,22 +16,54 @@ public enum VaultHook {
         (NSHomeDirectory() as NSString).appendingPathComponent(marker)
     }
 
-    public static let scriptContent = """
+    public static let scriptContent = #"""
     #!/bin/sh
     # Installed by Kanban Code: Claude Code and Codex PreToolUse hook for Bash.
-    # In a project with a .env.vault, `kv hook` rewrites the command to load
-    # the vault env first; anywhere else this exits without output.
+    # Every command first passes the secret guard (below). Then, in a project
+    # with a .env.vault, `kv hook` rewrites the command to load the vault env
+    # first; anywhere else this exits without output.
     # A linked worktree without its own falls back to the main checkout's.
+    input=$(cat)
+
+    # The secret guard refuses commands that print the values of a *.env
+    # under /etc or a whole environment: a multi-line value (a PEM key) has
+    # lines without "=", so even `env | cut -d= -f1` prints them.
+    cmd=$(printf '%s\n' "$input" | sed -nE 's/.*"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' |
+      sed -e 's/\\n/; /g' -e 's/\\t/ /g' -e 's/\\"/"/g' -e 's#\\/#/#g' -e 's/\\\\/\\/g')
+    q="'"
+    start="(^|[;&|({\`\"$q])[[:space:]]*((sudo|xargs|exec|nice|nohup|setsid|time|command|env)([[:space:]]+-[a-zA-Z]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+)*"
+    end="([[:space:]]*($|[;&|)><\`\"$q]))"
+    etc="/etc/([^[:space:];&|<>\"$q]*/)?[^/[:space:];&|<>\"$q]*\.env($|[[:space:];&|<>)\"$q])"
+    readers="(cat|tac|nl|bat|grep|egrep|fgrep|rg|ag|sed|awk|gawk|mawk|less|more|most|head|tail|cut|sort|uniq|strings|xxd|od|hexdump|base64|cp|scp|rsync|install|dd|tee|source|\.|diff|cmp|vi|vim|nvim|view|nano|emacs|jq|yq|python|python3|perl|ruby|node|php|openssl|gpg|curl|wget|nc)"
+    refuse() {
+      reason="Refused by the Kanban Code vault guard: $1 would print secret values, multi-line ones (PEM keys) included. To see which variables a file holds, run kv env --names <file>; to run a command with them, use kv env <file> -- <command>, which never prints them."
+      printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
+      exit 0
+    }
+    if [ -n "$cmd" ]; then
+      has() { printf '%s\n' "$cmd" | grep -Eq -- "$1"; }
+      has "$start$readers[[:space:]]([^;&|]*[[:space:]=\"$q])?$etc" && refuse "reading a .env file under /etc"
+      has "<[[:space:]]*[\"$q]?$etc" && refuse "reading a .env file under /etc"
+      has "(EnvironmentFile=|env-file[=[:space:]]+)[\"$q]?-?$etc" &&
+        has "(^|[^a-zA-Z0-9_./-])(env|printenv|set|export|declare|typeset)([^a-zA-Z0-9_.=-]|$)" &&
+        refuse "loading a .env file under /etc and listing the environment"
+      has "$start(env|printenv)([[:space:]]+(-0|--null|-i))*$end" && refuse "printing the whole environment"
+      has "$start(export|declare|typeset)[[:space:]]+-[a-zA-Z]*[px]" && refuse "printing the whole environment"
+      has "$start(export|set)$end" && refuse "printing the whole environment"
+      has "/proc/[^[:space:]]*/environ" && refuse "reading a process environment"
+    fi
+
     hook() {
       kv="$HOME/.local/bin/kv"
       [ -x "$kv" ] || kv="$(command -v kv)" || exit 0
-      exec "$kv" hook "$@"
+      printf '%s\n' "$input" | "$kv" hook "$@"
+      exit $?
     }
     d="$PWD"
     while [ -n "$d" ]; do
       [ -f "$d/.env.vault" ] && hook "$@"
       if [ -f "$d/.git" ]; then
-        main=$(sed -n 's#^gitdir: *\\(.*\\)/\\.git/worktrees/[^/]*$#\\1#p' "$d/.git")
+        main=$(sed -n 's#^gitdir: *\(.*\)/\.git/worktrees/[^/]*$#\1#p' "$d/.git")
         [ -n "$main" ] && [ -f "$main/.env.vault" ] && hook "$@"
         [ -n "$main" ] && [ -f "$main${PWD#"$d"}/.env.vault" ] && hook "$@"
         exit 0
@@ -41,7 +73,7 @@ public enum VaultHook {
     done
     exit 0
 
-    """
+    """#
 
     /// Installs it when the Kanban Code hooks of Claude Code are installed,
     /// and for Codex when Codex is set up on this machine.
