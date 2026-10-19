@@ -14,6 +14,7 @@ import { writeActivePill, readActivePill, clearActivePill } from "./active-pill.
 import { writeEyesAnchor, readEyesAnchor, clearEyesAnchor, PersistedEyesAnchor } from "./eyes-anchor.js";
 import { downloadSlackFile, formatPromptWithAttachments, DownloadedFile, sweepInbox, DEFAULT_RETENTION_DAYS } from "./inbox.js";
 import { parsePicker, Picker } from "./picker.js";
+import { TailCursor, newTailCursor, switchTail, capPosts } from "./tail.js";
 import { findSessionJsonl, findCodexRollout, captureTmuxPane, sendTmuxKey, readLinks, rushIdFromSessionName } from "../data.js";
 import { agentSessionName, deliverAgentMessage } from "../agents/session-name.js";
 import { Link } from "../types.js";
@@ -27,15 +28,13 @@ export interface BridgeOptions {
   pollMs?: number;
 }
 
-interface TailState {
+interface TailState extends TailCursor {
   slug: string;
   runtime: Runtime;
   sessionId: string;
   /// For Codex, the per-agent workspace used to locate its rollout by cwd.
   cwd?: string;
   channelId: string;
-  path?: string;
-  offset: number;
 }
 
 /// Per-claude-agent picker state. Tracks the hash of the most recently posted
@@ -239,7 +238,7 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     const cwd = join(file.workspacesDir, a.slug);
     const path = runtime === "codex" ? findCodexRollout(cwd) : findSessionJsonl(sessionId);
     // Start at EOF so we mirror only new activity, not the whole backlog.
-    tails.push({ slug: a.slug, runtime, sessionId, cwd, channelId, path, offset: path ? statSync(path).size : 0 });
+    tails.push({ slug: a.slug, runtime, sessionId, cwd, channelId, ...newTailCursor({ path }) });
   }
 
   // Per-agent active "working…" pill. Set on each tool/thinking post, cleared
@@ -374,23 +373,21 @@ export async function runSlackBridge(opts: BridgeOptions): Promise<void> {
     for (const t of tails) {
       if (!t.path) {
         t.path = t.runtime === "codex" ? findCodexRollout(t.cwd!) : findSessionJsonl(t.sessionId);
-        if (t.path) t.offset = statSync(t.path).size; // skip backlog on first discovery
+        if (t.path) {
+          t.offset = statSync(t.path).size; // skip backlog on first discovery
+          t.followedSinceMs = Date.now();
+        }
         continue;
       }
-      // Codex writes a fresh rollout file per session, so a restart (or its own
-      // auto-compaction) rotates the file. Follow the newest one from its start
-      // so a relaunched agent keeps mirroring without restarting the bridge.
-      if (t.runtime === "codex") {
-        const latest = findCodexRollout(t.cwd!);
-        if (latest && latest !== t.path) {
-          t.path = latest;
-          t.offset = 0;
-        }
-      }
+      // Codex rotates the rollout file on restart or compaction, and a resumed
+      // session appends to an old one; switchTail picks the read position.
+      if (t.runtime === "codex") switchTail({ cursor: t, latest: findCodexRollout(t.cwd!) });
       if (!existsSync(t.path)) continue;
       const { objs, newOffset } = readAppendedLines(t.path, t.offset);
       t.offset = newOffset;
-      const posts = t.runtime === "codex" ? formatCodexRolloutLines(objs) : formatTranscriptLines(objs);
+      const formatted = t.runtime === "codex" ? formatCodexRolloutLines(objs) : formatTranscriptLines(objs);
+      const posts = capPosts(formatted, (text) => ({ role: "assistant" as const, kind: "text" as const, text, terminal: true }));
+      if (posts !== formatted) console.error(`${t.slug}: skipped a backlog of ${formatted.length} posts from ${t.path}`);
       // Cross-batch turn-end safety net. The same-batch case is handled by
       // format.ts marking the final agent_message terminal, but if the rollout
       // tail picks up the agent_message in one poll and the task_complete in
