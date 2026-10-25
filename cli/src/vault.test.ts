@@ -143,7 +143,13 @@ async function fakeMaster(handler: (method: string, path: string, body: any) => 
 }
 
 function io(url: string, notes: string[]): VaultIO {
-  return { env: { KANBAN_VAULT_URL: url, KANBAN_CARD_ID: "card_x" }, fetch, stderr: (t) => notes.push(t), sleep: async () => {} };
+  return {
+    env: { KANBAN_VAULT_URL: url, KANBAN_CARD_ID: "card_x" },
+    fetch,
+    stderr: (t) => notes.push(t),
+    sleep: async () => {},
+    moved: { names: {} },
+  };
 }
 
 test("a pending release waits for the approval and says so", async () => {

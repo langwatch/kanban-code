@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { kanbanHome } from "./paths.js";
 import { auditLines, auditProblems, ownerLines, type AuditReport, type OwnerStatus } from "./vault-owner.js";
+import { EXIT_MOVED, logMovedHits, movedAmong, movedMessage, readMoved } from "./vault-moved.js";
 
 export const EXIT_DENIED = 77;
 
@@ -126,6 +127,8 @@ export interface VaultIO {
   stdin?: () => Promise<string>;
   /** Where results go, when it is not the process's own stdout. */
   stdout?: (text: string) => void;
+  /** The names that moved to the Laze vault, when not `vault/moved.json`; and where hits are logged. */
+  moved?: { names: Record<string, string>; hitsLog?: string };
 }
 
 export function defaultIO(): VaultIO {
@@ -867,6 +870,56 @@ credential_process and cannot pass --reason:
 
 Exit code ${EXIT_DENIED} means the vault denied the request; 2 means kv refused the reason.`;
 
+function movedNames(io: VaultIO): Record<string, string> {
+  return io.moved?.names ?? readMoved();
+}
+
+/** kv serves no secret that moved to the Laze vault: it names the connection instead. */
+function refuseMoved(io: VaultIO, names: string[], mode: string, ctx: { cardId?: string; cwd: string }): void {
+  const hits = movedAmong(names, movedNames(io));
+  if (hits.length === 0) return;
+  logMovedHits(hits, { mode, cwd: ctx.cwd, cardId: ctx.cardId }, io.moved?.hitsLog);
+  throw new VaultCliError(movedMessage(hits), EXIT_MOVED);
+}
+
+/**
+ * The release body of a manifest without the secrets that moved to Laze, or
+ * undefined when nothing is left to ask the master for. A plain `kv env`
+ * refuses moved names; the Bash hook leaves them out and says so only when
+ * the command names one of them.
+ */
+async function withoutMoved(options: {
+  client: VaultClient;
+  io: VaultIO;
+  ctx: { cardId?: string; cwd: string };
+  body: Record<string, unknown>;
+  exportMode: boolean;
+  command: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const { client, io, ctx, body, exportMode, command } = options;
+  const moved = movedNames(io);
+  if (Object.keys(moved).length === 0) return body;
+  const { body: r } = await client.call<VaultResponse>("POST", "resolve", { mode: "env", ...body, cwd: ctx.cwd });
+  if (r.status !== "granted" || !r.resolved) return body;
+  const hits = movedAmong(Object.keys(r.resolved), moved, r.resolved);
+  if (hits.length === 0) return body;
+  const named = new Set((body.names as string[] | undefined) ?? []);
+  if (!exportMode) {
+    logMovedHits(hits, { mode: "env", cwd: ctx.cwd, cardId: ctx.cardId }, io.moved?.hitsLog);
+    throw new VaultCliError(movedMessage(hits), EXIT_MOVED);
+  }
+  const mentioned = hits.filter((h) => command.includes(h.asked) || command.includes(r.resolved![h.asked] ?? h.asked));
+  if (mentioned.length) {
+    logMovedHits(mentioned, { mode: "hook", cwd: ctx.cwd, cardId: ctx.cardId }, io.moved?.hitsLog);
+    io.stderr(movedMessage(mentioned) + "\n");
+  }
+  const gone = new Set(hits.map((h) => h.asked));
+  const names = Object.keys(r.resolved).filter((asked) => named.has(asked) && !gone.has(asked));
+  const keys = Object.keys(r.resolved).filter((asked) => !named.has(asked) && !gone.has(asked));
+  if (names.length === 0 && keys.length === 0) return undefined;
+  return { ...body, names, keys, group: false, nearest: false };
+}
+
 export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<number> {
   const [cmd, ...rest] = argv;
   const args = [...rest];
@@ -886,6 +939,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const { before, after } = splitAtDashes(args);
       const reason = checkedReason(takeOption(before, "--reason"), io.env, false);
       if (before.length === 0) throw new VaultCliError("kv run NAME [NAME..] -- <cmd>");
+      refuseMoved(io, before, "run", ctx);
       const r = await client.decide("release", { mode: "run", names: before, command: commandLine(after), reason, ...ctx });
       if (r.status !== "granted") throw deniedError(r);
       return runChild(after, r.values ?? {});
@@ -923,7 +977,10 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const command = b64 ? Buffer.from(b64, "base64").toString("utf8") : commandLine(after);
       let r: VaultResponse;
       try {
-        r = await client.decide("release", { mode: exportMode ? "hook" : "env", ...body, command, reason, ...ctx });
+        const local = await withoutMoved({ client, io, ctx, body, exportMode, command });
+        r = local
+          ? await client.decide("release", { mode: exportMode ? "hook" : "env", ...local, command, reason, ...ctx })
+          : { status: "granted", message: "", values: {}, env: {} };
       } catch (error) {
         // A wrapped command still runs when the master is down: it just gets no vault env.
         if (!exportMode) throw error;
@@ -951,6 +1008,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const reason = checkedReason(takeOption(args, "--reason"), io.env, false);
       const name = args[0];
       if (!name) throw new VaultCliError("kv get NAME");
+      refuseMoved(io, [name], "get", ctx);
       const r = await client.decide("release", { mode: "get", names: [name], command: invokingCommand(), reason, ...ctx });
       if (r.status !== "granted") throw deniedError(r);
       out((r.values ?? {})[name] ?? "");

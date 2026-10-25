@@ -256,6 +256,19 @@ The response has the note as `ownerNote`, and `message` reads "Rogerio denied it
 
 A refusal without a note, a timeout and a denial by Jev or a tier rule read as before and carry no `ownerNote`.
 
+## Moved to Laze
+
+Secrets that agents use day to day move to the Laze vault (`laze vault run`, `laze vault env`); the Kanban vault keeps the keys that repair Laze and the top-risk ones. `~/.kanban-code/vault/moved.json` maps each moved kv name (and its aliases) to its Laze connection:
+
+```json
+{ "SLACK_USER_TOKEN": "slack-user-token" }
+```
+
+- `kv run` and `kv get` of a moved name exit 78 before asking the master, printing `kv: moved to laze vault: NAME (connection C)` and the `laze vault run` line to use.
+- `kv env` resolves the manifest first and refuses the same way when a line or the project's group resolves to a moved secret.
+- The Bash hook leaves moved secrets out of the command's environment and loads the rest. It prints the moved line only when the command names the variable or the secret.
+- Every refusal (and every hook line printed) is a line in `vault/moved-hits.jsonl`: time, name, connection, mode, folder, card. The Kanban copies of the moved secrets are deleted after a week with no hits.
+
 ## kv
 
 `kv` talks to `http://127.0.0.1:<remote control port>` (`KANBAN_VAULT_URL` overrides it). It needs no token. Exit code 77 means denied.
