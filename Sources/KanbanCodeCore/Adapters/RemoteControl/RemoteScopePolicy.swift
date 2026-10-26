@@ -13,7 +13,7 @@ enum RemoteScopePolicy {
         case "cards":
             if rest == ["cards", "search"] { return "cards/search" }
             return rest.enumerated().map { item in
-                item.offset == 1 || (item.offset == 3 && (rest[2] == "queue" || rest[2] == "side-chat")) ? "*" : item.element
+                item.offset == 1 || (item.offset == 3 && (rest[2] == "queue" || rest[2] == "side-chat" || rest[2] == "conversations")) ? "*" : item.element
             }.joined(separator: "/")
         case "attention":
             if rest.count == 3 { return "attention/*/\(rest[2])" }
@@ -44,6 +44,8 @@ enum RemoteScopePolicy {
         "POST cards/*/queue/*", "PATCH cards/*/queue/*", "DELETE cards/*/queue/*",
         "POST cards/*/side-chat", "GET cards/*/side-chat/*", "DELETE cards/*/side-chat/*",
         "GET cards/*/slash-commands", "POST cards/*/pasted-image",
+        "GET cards/*/conversations", "POST cards/*/conversations", "GET cards/*/conversations/*",
+        "PATCH cards/*/conversations/*", "GET cards/*/conversations-raw",
     ]
 
     /// What `kanban remote attach` calls to show a terminal.

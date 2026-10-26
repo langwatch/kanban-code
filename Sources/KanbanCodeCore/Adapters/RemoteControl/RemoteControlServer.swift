@@ -536,6 +536,33 @@ public final class RemoteControlServer: Sendable {
             case ("GET", "cards/*/side-chat/*"):
                 return .response(.json(try await host.sideChatRun(cardId: id, runId: rest[3])))
 
+            case ("GET", "cards/*/conversations"):
+                return .response(.json(try await host.conversations(cardId: id)))
+
+            case ("POST", "cards/*/conversations"):
+                let body = request.body.isEmpty ? RemoteConversationCreate()
+                    : (try? JSONDecoder.remote.decode(RemoteConversationCreate.self, from: request.body))
+                guard let body else { return .response(.error(400, "body must be {\"title\", \"quote\"}, each optional")) }
+                return .response(.json(try await host.createConversation(cardId: id, body), status: 201))
+
+            case ("GET", "cards/*/conversations/*"):
+                return .response(.json(try await host.conversation(cardId: id, conversationId: rest[3])))
+
+            case ("PATCH", "cards/*/conversations/*"):
+                guard let body = try? JSONDecoder.remote.decode(RemoteConversationUpdate.self, from: request.body) else {
+                    return .response(.error(400, "body must be {\"title\", \"read\", \"archived\"}, each optional"))
+                }
+                return .response(.json(try await host.updateConversation(cardId: id, conversationId: rest[3], body)))
+
+            case ("GET", "cards/*/conversations-raw"):
+                let offset = max(Int(request.query["offset"] ?? "") ?? 0, 0)
+                let raw = try await host.rawConversations(cardId: id, offset: offset)
+                return .response(RemoteHTTPResponse(
+                    status: 200,
+                    headers: [("Content-Type", "application/octet-stream"),
+                              (RemoteRawTranscript.conversationLogSizeHeader, String(raw.size))],
+                    body: raw.data))
+
             case ("GET", "cards/*/slash-commands"):
                 return .response(.json(try await host.slashCommands(cardId: id)))
 
@@ -691,6 +718,7 @@ public final class RemoteControlServer: Sendable {
         "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
         "cards/*/slash-commands", "cards/*/pasted-image",
+        "cards/*/conversations", "cards/*/conversations/*", "cards/*/conversations-raw",
     ]
 
     static func response(for error: Error) -> RemoteHTTPResponse {

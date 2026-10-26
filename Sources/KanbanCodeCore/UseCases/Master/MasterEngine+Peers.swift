@@ -178,7 +178,8 @@ extension MasterEngine {
             }
             do {
                 try await client.sendPrompt(cardId: cardId, text: prompt.body, mode: .queue, images: images,
-                                            human: prompt.isHuman)
+                                            human: prompt.isHuman, conversation: prompt.conversation)
+                if prompt.conversation != nil { await self.mirrorConversations(cardId: cardId) }
                 if let card = try? await client.card(id: cardId) {
                     store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
                 }

@@ -182,6 +182,7 @@ final class AppComposition {
         Task { await engine.runOwnershipLoop() }
         let mirror = PeerTranscriptMirror(engine: engine)
         Task { await mirror.run() }
+        Task { await engine.runConversationWatcher() }
         // Channels live on the channels home when it is another master.
         Task { await effectHandler.setChannelsHome { [weak engine] in await engine?.channelsHomeRoute() } }
         Task { await engine.runChannelsMirror() }

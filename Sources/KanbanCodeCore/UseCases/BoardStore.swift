@@ -43,12 +43,16 @@ public struct PeerCardState: Sendable, Equatable {
     public var queue: [QueuedPrompt]
     /// A start in flight or failed there, or a move away from there.
     public var status: RemoteSessionStatus?
+    /// Its conversations as the owner has them, most recent first.
+    public var conversations: [RemoteConversation]
 
-    public init(isLive: Bool, isBusy: Bool, queue: [QueuedPrompt] = [], status: RemoteSessionStatus? = nil) {
+    public init(isLive: Bool, isBusy: Bool, queue: [QueuedPrompt] = [], status: RemoteSessionStatus? = nil,
+                conversations: [RemoteConversation] = []) {
         self.isLive = isLive
         self.isBusy = isBusy
         self.queue = queue
         self.status = status
+        self.conversations = conversations
     }
 }
 
@@ -119,6 +123,10 @@ public final class AppState: @unchecked Sendable {
     /// Prompts sent from a card's chat that never reached its session, by
     /// card, oldest first.
     public var failedPrompts: [String: [FailedPrompt]] = [:]
+    /// Each card's conversations (docs/conversations.md), most recent
+    /// first, archived ones included: from the card's log here, or from the
+    /// copy of its owner's.
+    public var conversations: [String: [RemoteConversation]] = [:]
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
     /// `selectedCardId` / `selectedChannelName` / `selectedDMParticipant`
@@ -772,6 +780,8 @@ public enum Action: Sendable {
     case peerActivityScanned(cards: [String: PeerCardState])
     /// One card another master owns, as its owner just reported it.
     case peerCardRead(cardId: String, state: PeerCardState?)
+    /// A card's conversation log was read again.
+    case conversationsLoaded(cardId: String, conversations: [RemoteConversation])
 
     // Settings / misc
     case settingsLoaded(projects: [Project], excludedPaths: [String], remote: RemoteSettings?, remoteMode: RemoteMode = .boxd, boxd: BoxdSettings? = nil)
@@ -913,6 +923,8 @@ public enum Effect: Sendable {
     /// Writes a prompt the human wrote himself to the card's record of them.
     case recordHumanMessage(cardId: String, text: String, at: Date, sessionId: String?)
     case journalQueuedPrompt(cardId: String, prompt: QueuedPrompt, reason: QueuedPromptJournalReason)
+    /// Appends to the conversation log of a card this master owns.
+    case appendConversationEvents(cardId: String, events: [ConversationEvent])
     case deleteFiles([String])
 
     // Attention
@@ -1999,7 +2011,14 @@ public enum Reducer {
             link.queuedPrompts = prompts
             link.updatedAt = .now
             state.links[cardId] = link
-            return [.upsertLink(link), .journalQueuedPrompt(cardId: cardId, prompt: prompt, reason: .queued)]
+            var effects: [Effect] = [.upsertLink(link), .journalQueuedPrompt(cardId: cardId, prompt: prompt, reason: .queued)]
+            if let conversation = prompt.conversation {
+                // The conversation shows the message from when it was written.
+                effects.append(.appendConversationEvents(cardId: cardId, events: [
+                    .message(conversation, id: prompt.id, role: .human, text: prompt.body, at: prompt.humanWrittenAt ?? .now)
+                ]))
+            }
+            return effects
 
         case .updateQueuedPrompt(let cardId, let promptId, let body, let sendAutomatically):
             guard var link = state.links[cardId] else { return [] }
@@ -2010,10 +2029,16 @@ public enum Reducer {
             link.queuedPrompts = prompts
             link.updatedAt = .now
             state.links[cardId] = link
-            return [
+            var effects: [Effect] = [
                 .upsertLink(link),
                 .journalQueuedPrompt(cardId: cardId, prompt: prompts[idx], reason: .edited),
             ]
+            if let conversation = prompts[idx].conversation {
+                effects.append(.appendConversationEvents(cardId: cardId, events: [
+                    .message(conversation, id: promptId, role: .human, text: body)
+                ]))
+            }
+            return effects
 
         case .removeQueuedPrompt(let cardId, let promptId):
             guard var link = state.links[cardId] else { return [] }
@@ -2026,18 +2051,28 @@ public enum Reducer {
             if let removed {
                 effects.append(
                     .journalQueuedPrompt(cardId: cardId, prompt: removed, reason: .removed))
+                if let conversation = removed.conversation {
+                    effects.append(.appendConversationEvents(cardId: cardId, events: [.retracted(conversation, id: promptId)]))
+                }
             }
             return effects
 
         case .sendQueuedPrompt(let cardId, let promptId):
             guard var link = state.links[cardId] else { return [] }
             guard let prompts = link.queuedPrompts,
-                  let prompt = prompts.first(where: { $0.id == promptId }),
+                  let queued = prompts.first(where: { $0.id == promptId }),
                   let sessionName = link.tmuxLink?.sessionName else { return [] }
             link.queuedPrompts?.removeAll { $0.id == promptId }
             if link.queuedPrompts?.isEmpty == true { link.queuedPrompts = nil }
             link.updatedAt = .now
             state.links[cardId] = link
+            var prompt = queued
+            if let id = prompt.conversation {
+                // The session gets the conversation's header and reply line.
+                let conversation = state.conversations[cardId]?.first { $0.id == id }
+                prompt.body = conversation.map { ConversationPrompt.wrap(prompt.body, conversation: $0) }
+                    ?? ConversationPrompt.wrap(prompt.body, id: id, title: nil)
+            }
             let sendEffect: Effect
             if let imagePaths = prompt.imagePaths, !imagePaths.isEmpty {
                 sendEffect = .sendPromptWithImagesToTmux(sessionName: sessionName, promptBody: prompt.body, imagePaths: imagePaths, assistant: link.effectiveAssistant, human: prompt.isHuman)
@@ -2900,6 +2935,14 @@ public enum Reducer {
 
         case .peerCardRead(let cardId, let card):
             if state.peerCards[cardId] != card { state.peerCards[cardId] = card }
+            return []
+
+        case .conversationsLoaded(let cardId, let conversations):
+            if conversations.isEmpty {
+                if state.conversations[cardId] != nil { state.conversations[cardId] = nil }
+            } else if state.conversations[cardId] != conversations {
+                state.conversations[cardId] = conversations
+            }
             return []
 
         case .releaseCardOwnership(let cardId, let machine):

@@ -39,6 +39,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 - `sideChat`: the `/v1/cards/{id}/side-chat` routes, and `human` on prompts and tasks.
 - `slashCommands`: `GET /v1/cards/{id}/slash-commands`.
 - `cardSearch`: `GET /v1/cards/search`.
+- `conversations`: the `/v1/cards/{id}/conversations` routes, `conversation` on prompts and `conversations` on cards (see [`conversations.md`](conversations.md)).
 
 | Method and path | Scope | Returns |
 |---|---|---|

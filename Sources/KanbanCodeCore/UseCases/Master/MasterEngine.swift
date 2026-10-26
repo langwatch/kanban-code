@@ -73,6 +73,8 @@ public final class MasterEngine {
     public lazy var humanMessages = HumanMessageLog(kanbanHome: platform.kanbanHome)
     /// Every prompt that passed through a card's queue or left for a peer.
     public lazy var promptJournal = QueuedPromptJournal(basePath: platform.kanbanHome)
+    /// The conversation logs of the cards (docs/conversations.md).
+    public lazy var conversationStore = ConversationStore(kanbanHome: platform.kanbanHome)
     /// Each card's last catch-up, shown again while the session has nothing new.
     public lazy var catchUps = CatchUpKeep(kanbanHome: platform.kanbanHome)
 

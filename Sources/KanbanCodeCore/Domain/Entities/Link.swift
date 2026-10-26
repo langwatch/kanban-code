@@ -150,6 +150,9 @@ public struct QueuedPrompt: Codable, Sendable, Equatable, Identifiable {
     /// When the human wrote this prompt himself in a chat composer. Nil for
     /// a prompt an agent, a channel or the app queued.
     public var humanWrittenAt: Date?
+    /// The card's conversation the prompt belongs to (docs/conversations.md).
+    /// `body` is the text as written; the header goes on when it is sent.
+    public var conversation: String?
 
     public init(
         id: String = KSUID.generate(prefix: "prompt"),
@@ -157,7 +160,8 @@ public struct QueuedPrompt: Codable, Sendable, Equatable, Identifiable {
         sendAutomatically: Bool = true,
         imagePaths: [String]? = nil,
         selfCompactThresholdTokens: Int? = nil,
-        humanWrittenAt: Date? = nil
+        humanWrittenAt: Date? = nil,
+        conversation: String? = nil
     ) {
         self.id = id
         self.body = body
@@ -165,6 +169,7 @@ public struct QueuedPrompt: Codable, Sendable, Equatable, Identifiable {
         self.imagePaths = imagePaths
         self.selfCompactThresholdTokens = selfCompactThresholdTokens
         self.humanWrittenAt = humanWrittenAt
+        self.conversation = conversation
     }
 
     /// Whether the human wrote it himself.

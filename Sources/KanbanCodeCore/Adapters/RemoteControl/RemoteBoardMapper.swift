@@ -11,11 +11,13 @@ public enum RemoteBoardMapper {
         rushQueues: [String: [String]] = [:],
         machine: MachineIdentity? = nil,
         machineNames: [String: String] = [:],
+        conversations: [String: [RemoteConversation]] = [:],
         generatedAt: Date = Date()
     ) -> RemoteBoard {
         RemoteBoard(
             cards: cards.map {
-                card($0, liveSessions: liveSessions, rushQueues: rushQueues, machine: machine, machineNames: machineNames)
+                card($0, liveSessions: liveSessions, rushQueues: rushQueues, machine: machine, machineNames: machineNames,
+                     conversations: conversations[$0.id] ?? [])
             }.sorted(by: order),
             projects: projects.map { RemoteProject(path: $0.path, name: $0.name) },
             generatedAt: generatedAt,
@@ -40,7 +42,8 @@ public enum RemoteBoardMapper {
     public static func card(_ card: KanbanCodeCard, liveSessions: Set<String>,
                             rushQueues: [String: [String]] = [:],
                             machine: MachineIdentity? = nil,
-                            machineNames: [String: String] = [:]) -> RemoteCard {
+                            machineNames: [String: String] = [:],
+                            conversations: [RemoteConversation] = []) -> RemoteCard {
         let link = card.link
         let hostQueue = link.tmuxLink.flatMap { rushQueues[$0.sessionName] } ?? []
         let queued = hostQueue.enumerated().map { RemoteQueuedPrompt(id: rushPromptId(index: $0.offset, text: $0.element), text: $0.element) }
@@ -72,7 +75,8 @@ public enum RemoteBoardMapper {
             updatedAt: link.updatedAt,
             machineId: owner,
             machineName: owner.flatMap { $0 == machine?.id ? machine?.name : machineNames[$0] },
-            sessionStatus: card.sessionStatus.remote(for: link)
+            sessionStatus: card.sessionStatus.remote(for: link),
+            conversations: conversations.filter { !$0.archived }
         )
     }
 

@@ -33,9 +33,12 @@ public enum RemoteAPI {
         public static let cardSearch = "cardSearch"
         /// `POST /v1/cards/{id}/fork`.
         public static let fork = "fork"
+        /// `/v1/cards/{id}/conversations`, `conversation` on prompts and
+        /// `conversations` on cards (docs/conversations.md).
+        public static let conversations = "conversations"
     }
 
-    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork]
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork, Feature.conversations]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.
@@ -251,6 +254,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     /// master, or a machine that is not connected: what the card shows in
     /// place of its resume button. Nil when the session runs or ended.
     public var sessionStatus: RemoteSessionStatus?
+    /// The card's conversations that are not archived, most recent first.
+    public var conversations: [RemoteConversation]
 
     public init(
         id: String, title: String, column: RemoteColumn, projectPath: String? = nil, projectName: String? = nil,
@@ -259,7 +264,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         prs: [RemotePR] = [], queuedPromptCount: Int = 0, queuedPrompts: [RemoteQueuedPrompt] = [],
         parentCardId: String? = nil, archived: Bool = false, pinned: Bool = false,
         lastActivity: Date? = nil, updatedAt: Date, machineId: String? = nil, machineName: String? = nil,
-        sessionStatus: RemoteSessionStatus? = nil
+        sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = []
     ) {
         self.id = id
         self.title = title
@@ -285,6 +290,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.machineId = machineId
         self.machineName = machineName
         self.sessionStatus = sessionStatus
+        self.conversations = conversations
     }
 }
 
@@ -322,7 +328,7 @@ extension RemoteCard {
     private enum CodingKeys: String, CodingKey {
         case id, title, column, projectPath, projectName, branch, worktreePath, assistant, runtime
         case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived, pinned
-        case lastActivity, updatedAt, machineId, machineName, sessionStatus
+        case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations
     }
 
     public init(from decoder: Decoder) throws {
@@ -352,7 +358,8 @@ extension RemoteCard {
             machineId: try c.decodeIfPresent(String.self, forKey: .machineId),
             machineName: try c.decodeIfPresent(String.self, forKey: .machineName),
             // A kind this client does not know yet reads as no status.
-            sessionStatus: (try? c.decodeIfPresent(RemoteSessionStatus.self, forKey: .sessionStatus)) ?? nil
+            sessionStatus: (try? c.decodeIfPresent(RemoteSessionStatus.self, forKey: .sessionStatus)) ?? nil,
+            conversations: (try? c.decodeIfPresent([RemoteConversation].self, forKey: .conversations)) ?? []
         )
     }
 
@@ -382,6 +389,7 @@ extension RemoteCard {
         try c.encodeIfPresent(machineId, forKey: .machineId)
         try c.encodeIfPresent(machineName, forKey: .machineName)
         try c.encodeIfPresent(sessionStatus, forKey: .sessionStatus)
+        if !conversations.isEmpty { try c.encode(conversations, forKey: .conversations) }
     }
 }
 
@@ -560,12 +568,16 @@ public struct RemotePromptRequest: Codable, Sendable, Equatable {
     /// True when the human typed and sent this himself in a chat composer.
     /// Prompts from agents, scripts and other cards leave it out.
     public var human: Bool?
+    /// The conversation of the card the prompt belongs to; the master that
+    /// owns the card adds its header (docs/conversations.md).
+    public var conversation: String?
 
-    public init(text: String, mode: Mode? = nil, images: [RemoteImage]? = nil, human: Bool? = nil) {
+    public init(text: String, mode: Mode? = nil, images: [RemoteImage]? = nil, human: Bool? = nil, conversation: String? = nil) {
         self.text = text
         self.mode = mode
         self.images = images
         self.human = human
+        self.conversation = conversation
     }
 }
 

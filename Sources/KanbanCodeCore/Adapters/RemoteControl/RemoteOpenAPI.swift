@@ -65,6 +65,20 @@ enum RemoteOpenAPI {
         "responses": {"204": {"description": "accepted"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}
       }
     },
+    "/v1/cards/{id}/conversations": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}],
+      "get": {"summary": "The card's conversations, most recent first (docs/conversations.md)", "responses": {"200": {"description": "conversations"}}},
+      "post": {"summary": "Start a conversation: {title?, quote?}; quote is the agent message it continues from", "responses": {"201": {"description": "the conversation"}, "400": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/v1/cards/{id}/conversations/{conv}": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}, {"name": "conv", "in": "path", "required": true, "schema": {"type": "string"}}],
+      "get": {"summary": "The conversation and its messages, oldest first", "responses": {"200": {"description": "the conversation"}, "404": {"$ref": "#/components/responses/Error"}}},
+      "patch": {"summary": "Rename, mark read or archive: {title?, read?, archived?}", "responses": {"200": {"description": "the conversation"}, "404": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/v1/cards/{id}/conversations-raw": {
+      "parameters": [{"$ref": "#/components/parameters/CardId"}, {"name": "offset", "in": "query", "schema": {"type": "integer"}}],
+      "get": {"summary": "Bytes of the conversation log from offset; X-Log-Size has the log size", "responses": {"200": {"description": "application/octet-stream"}}}
+    },
     "/v1/cards/{id}/side-chat": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {
@@ -219,7 +233,7 @@ enum RemoteOpenAPI {
           "machine": {"type": "string", "description": "where the card runs: a name from GET /v1/machines, or mac/local/here for this master; omit for the project default"}
         }
       },
-      "PromptRequest": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "description": "may be empty when images has some"}, "mode": {"type": "string", "enum": ["queue", "now"], "default": "queue"}, "images": {"type": "array", "maxItems": 6, "items": {"$ref": "#/components/schemas/Image"}}, "human": {"type": "boolean", "description": "true only when the human typed and sent this himself in a chat composer; ignored for scope agent"}}},
+      "PromptRequest": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string", "description": "may be empty when images has some"}, "mode": {"type": "string", "enum": ["queue", "now"], "default": "queue"}, "images": {"type": "array", "maxItems": 6, "items": {"$ref": "#/components/schemas/Image"}}, "human": {"type": "boolean", "description": "true only when the human typed and sent this himself in a chat composer; ignored for scope agent"}, "conversation": {"type": "string", "description": "the id of the card's conversation the prompt belongs to; the owner adds its header"}}},
       "SlashCommand": {"type": "object", "required": ["name", "description", "source"], "properties": {"name": {"type": "string", "description": "without the leading slash; a plugin's is plugin:name"}, "description": {"type": "string", "description": "one line"}, "source": {"type": "string", "enum": ["kanban", "agent", "project", "user", "plugin"]}}},
       "SideChatRequest": {"type": "object", "required": ["kind"], "properties": {"kind": {"type": "string", "enum": ["btw", "catchup"]}, "question": {"type": "string", "description": "required for btw"}, "fresh": {"type": "boolean", "description": "catchup: run a new one even when the card's last catch-up still covers the session"}, "catchUpId": {"type": "string", "description": "btw: the run id of the catch-up this follows up on, so the exchange is kept with it"}, "history": {"type": "array", "description": "earlier exchanges of the same side chat, oldest first", "items": {"type": "object", "required": ["question", "answer"], "properties": {"question": {"type": "string"}, "answer": {"type": "string"}}}}}},
       "SideChatRun": {"type": "object", "properties": {"finishedAt": {"type": ["string", "null"], "format": "date-time"}, "reopened": {"type": ["boolean", "null"], "description": "true for the card's last catch-up returned again, finished, because the session has no message after the last one it covers"}, "followUps": {"type": ["array", "null"], "description": "the follow-ups asked in the side chat of a reopened catch-up", "items": {"type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}}}}, "id": {"type": "string"}, "cardId": {"type": "string"}, "kind": {"type": "string", "enum": ["btw", "catchup"]}, "state": {"type": "string", "enum": ["running", "done", "failed"]}, "text": {"type": "string", "description": "the answer so far. A catchup answers in JSON Lines: {\"section\": \"asked|status|report|facts|waiting|blocked|other\", \"text\", \"refs\": [\"m7\"]}"}, "error": {"type": ["string", "null"]}, "since": {"type": ["object", "null"], "description": "the human's last message, where a catchup starts", "properties": {"text": {"type": "string"}, "at": {"type": ["string", "null"], "format": "date-time"}, "offset": {"type": ["integer", "null"]}}}, "refs": {"type": ["array", "null"], "description": "the messages a catchup can cite", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "offset": {"type": "integer", "description": "byte offset in the transcript; a transcript message id starts with it"}, "role": {"type": "string"}, "at": {"type": ["string", "null"], "format": "date-time"}, "preview": {"type": "string"}}}}}},

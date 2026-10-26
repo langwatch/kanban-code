@@ -195,13 +195,53 @@ public struct RemoteClient: Sendable {
     }
 
     /// `human` marks a prompt the human typed and sent himself.
+    /// `conversation` names the conversation of the card it belongs to.
     public func sendPrompt(cardId: String, text: String, mode: RemotePromptRequest.Mode = .queue,
-                           images: [RemoteImage] = [], human: Bool = false) async throws {
+                           images: [RemoteImage] = [], human: Bool = false, conversation: String? = nil) async throws {
         var request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/prompt",
                                   body: RemotePromptRequest(text: text, mode: mode, images: images.isEmpty ? nil : images,
-                                                            human: human ? true : nil))
+                                                            human: human ? true : nil, conversation: conversation))
         if !images.isEmpty { request.timeoutInterval = 120 }
         try await sendEmpty(request)
+    }
+
+    // MARK: Conversations
+
+    /// The card's conversations, most recent first.
+    public func conversations(cardId: String) async throws -> [RemoteConversation] {
+        try await send(makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations"))
+    }
+
+    public func createConversation(cardId: String, _ body: RemoteConversationCreate) async throws -> RemoteConversation {
+        try await send(makeRequest("POST", "v1/cards/\(Self.escape(cardId))/conversations", body: body))
+    }
+
+    public func conversation(cardId: String, id: String) async throws -> RemoteConversationDetail {
+        try await send(makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))"))
+    }
+
+    public func updateConversation(cardId: String, id: String, _ body: RemoteConversationUpdate) async throws -> RemoteConversation {
+        try await send(makeRequest("PATCH", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))", body: body))
+    }
+
+    /// GET /v1/cards/{id}/conversations-raw?offset=: the conversation log's
+    /// bytes from `offset`, for a master that mirrors it.
+    public func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript {
+        var request = makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations-raw",
+                                  query: [URLQueryItem(name: "offset", value: String(offset))])
+        request.timeoutInterval = 30
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw RemoteClientError.transport(error.localizedDescription)
+        }
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw RemoteClientError.from(status: status, body: data) }
+        let size = (http?.value(forHTTPHeaderField: RemoteRawTranscript.conversationLogSizeHeader)).flatMap(Int.init) ?? offset + data.count
+        return RemoteRawTranscript(data: data, offset: offset, size: size)
     }
 
     // MARK: Side chat

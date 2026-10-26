@@ -111,6 +111,8 @@ public struct RemoteRawTranscript: Sendable, Equatable {
 
     /// Header with the file size on `GET /v1/cards/{id}/transcript/raw`.
     public static let sizeHeader = "X-Transcript-Size"
+    /// Header with the log size on `GET /v1/cards/{id}/conversations-raw`.
+    public static let conversationLogSizeHeader = "X-Log-Size"
 }
 
 /// Answer of `POST /v1/cards/{id}/worktree/remove`.

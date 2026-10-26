@@ -62,6 +62,20 @@ public final class PeerTranscriptMirror {
             defer { inFlight.remove(link.id) }
             await copy(cardId: link.id, owner: owner, sessionId: sessionId, path: path)
         }
+        await mirrorConversations(state: state, local: local, online: online)
+    }
+
+    /// Copies the conversation logs of other masters' cards whose
+    /// conversations differ from the copy here: the owner's board says so.
+    private func mirrorConversations(state: AppState, local: String, online: Set<String>) async {
+        for (cardId, peer) in state.peerCards {
+            guard let owner = state.links[cardId]?.ownerMachine, owner != local, online.contains(owner) else { continue }
+            let here = (state.conversations[cardId] ?? []).filter { !$0.archived }
+            guard here != peer.conversations, !inFlight.contains("conv-" + cardId) else { continue }
+            inFlight.insert("conv-" + cardId)
+            defer { inFlight.remove("conv-" + cardId) }
+            await engine.mirrorConversations(cardId: cardId)
+        }
     }
 
     private func copy(cardId: String, owner: String, sessionId: String, path: String) async {
@@ -121,6 +135,7 @@ public final class PeerTranscriptMirror {
             isLive: card.isLive,
             isBusy: card.isBusy,
             queue: card.queuedPrompts.map { QueuedPrompt(id: $0.id, body: $0.text, sendAutomatically: true) },
-            status: card.sessionStatus)
+            status: card.sessionStatus,
+            conversations: card.conversations)
     }
 }

@@ -120,6 +120,14 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// What the card's chat composer offers after `/`.
     func slashCommands(cardId: String) async throws -> [RemoteSlashCommand]
 
+    /// The card's conversations (docs/conversations.md), most recent first.
+    func conversations(cardId: String) async throws -> [RemoteConversation]
+    func createConversation(cardId: String, _ request: RemoteConversationCreate) async throws -> RemoteConversation
+    func conversation(cardId: String, conversationId: String) async throws -> RemoteConversationDetail
+    func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation
+    /// The card's conversation log from `offset`, for a master that mirrors it.
+    func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript
+
     /// Keeps an image pasted into the card's terminal as a file on the
     /// master that owns the card, and returns where it is there.
     func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage
@@ -218,6 +226,24 @@ extension RemoteControlHost {
     }
 
     public func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] { [] }
+
+    public func conversations(cardId: String) async throws -> [RemoteConversation] { [] }
+
+    public func createConversation(cardId: String, _ request: RemoteConversationCreate) async throws -> RemoteConversation {
+        throw RemoteHostError.notFound("this host has no conversations")
+    }
+
+    public func conversation(cardId: String, conversationId: String) async throws -> RemoteConversationDetail {
+        throw RemoteHostError.notFound("this host has no conversations")
+    }
+
+    public func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
+        throw RemoteHostError.notFound("this host has no conversations")
+    }
+
+    public func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript {
+        throw RemoteHostError.notFound("this host has no conversations")
+    }
 
     public func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage {
         throw RemoteHostError.notFound("this host does not keep pasted images")

@@ -16,6 +16,7 @@ public actor EffectHandler {
     private let notifier: NotifierPort?
     private let queuedPromptJournal: QueuedPromptJournal
     private let humanMessageLog: HumanMessageLog
+    private let conversationStore: ConversationStore
     private let remoteMachines: (any RemoteMachineControl)?
     /// The channels home when it is another master: channel writes go there.
     private var channelsHome: (@Sendable () async -> ChannelsHomeRoute?)?
@@ -77,7 +78,8 @@ public actor EffectHandler {
         notifier: NotifierPort? = nil,
         queuedPromptJournal: QueuedPromptJournal? = nil,
         remoteMachines: (any RemoteMachineControl)? = nil,
-        humanMessageLog: HumanMessageLog? = nil
+        humanMessageLog: HumanMessageLog? = nil,
+        conversationStore: ConversationStore? = nil
     ) {
         self.coordinationStore = coordinationStore
         self.tmuxAdapter = tmuxAdapter
@@ -86,6 +88,7 @@ public actor EffectHandler {
         self.notifier = notifier
         self.queuedPromptJournal = queuedPromptJournal ?? QueuedPromptJournal()
         self.humanMessageLog = humanMessageLog ?? HumanMessageLog()
+        self.conversationStore = conversationStore ?? ConversationStore()
         self.remoteMachines = remoteMachines
     }
 
@@ -214,6 +217,15 @@ public actor EffectHandler {
                     sendAutomatically: prompt.sendAutomatically
                 )
             )
+
+        case .appendConversationEvents(let cardId, let events):
+            do {
+                try conversationStore.append(cardId: cardId, events)
+                let summaries = conversationStore.threads(cardId: cardId).map(\.summary)
+                await dispatch(.conversationsLoaded(cardId: cardId, conversations: summaries))
+            } catch {
+                KanbanCodeLog.warn("conversations", "card \(cardId.prefix(12)): append failed: \(error)")
+            }
 
         case .recordHumanMessage(let cardId, let text, let at, let sessionId):
             humanMessageLog.append(cardId: cardId, HumanMessageRecord(at: at, text: text, sessionId: sessionId))

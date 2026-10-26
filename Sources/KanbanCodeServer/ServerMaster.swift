@@ -49,7 +49,8 @@ final class ServerMaster {
         let tmux = RoutingTmuxAdapter()
         let effectHandler = EffectHandler(
             coordinationStore: coordination,
-            tmuxAdapter: tmux
+            tmuxAdapter: tmux,
+            conversationStore: ConversationStore(kanbanHome: home)
         )
         self.effectHandler = effectHandler
         let store = BoardStore(
@@ -204,6 +205,7 @@ final class ServerMaster {
         Task { await engine.runRushTokenMonitor() }
         Task { await engine.runOwnershipLoop() }
         Task { await engine.monitorSubagentCommands() }
+        Task { await engine.runConversationWatcher() }
     }
 
     /// The assistants' hooks drive the busy state, the queue and the
