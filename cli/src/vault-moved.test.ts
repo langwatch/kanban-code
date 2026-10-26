@@ -54,6 +54,16 @@ test("a moved name is matched by what was asked or by the secret it resolved to"
   assert.match(movedMessage([{ asked: "A", connection: "a" }]), /kv: moved to laze vault: A \(connection a\)\nkv: Use the Laze vault instead: laze vault run a/);
 });
 
+test("a deleted name says where it lives now and points at no Laze connection", () => {
+  const message = movedMessage([{ asked: "laze/prod/AUTH_SECRET", connection: "deleted:prod reads it from Scaleway Secret Manager" }]);
+  assert.equal(message, "kv: deleted from the Kanban vault: laze/prod/AUTH_SECRET (prod reads it from Scaleway Secret Manager)");
+  const mixed = movedMessage([
+    { asked: "A", connection: "a" },
+    { asked: "B", connection: "deleted:gone" },
+  ]);
+  assert.match(mixed, /kv: deleted from the Kanban vault: B \(gone\)\nkv: moved to laze vault: A \(connection a\)\nkv: Use the Laze vault instead: laze vault run a /);
+});
+
 test("kv run and kv get refuse a moved name before asking the master, and log the hit", async () => {
   const m = await fakeMaster(() => ({ status: "granted", message: "", values: { A: "1" } }));
   const notes: string[] = [];

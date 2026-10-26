@@ -267,6 +267,7 @@ Secrets that agents use day to day move to the Laze vault (`laze vault run`, `la
 - `kv run` and `kv get` of a moved name exit 78 before asking the master, printing `kv: moved to laze vault: NAME (connection C)` and the `laze vault run` line to use.
 - `kv env` resolves the manifest first and refuses the same way when a line or the project's group resolves to a moved secret.
 - The Bash hook leaves moved secrets out of the command's environment and loads the rest. It prints the moved line only when the command names the variable or the secret.
+- A value `deleted:<where it lives now>` marks a name deleted from kv rather than moved: kv exits 78 the same way and prints `kv: deleted from the Kanban vault: NAME (<where it lives now>)`, with no `laze vault` line.
 - Every refusal (and every hook line printed) is a line in `vault/moved-hits.jsonl`: time, name, connection, mode, folder, card. The Kanban copies of the moved secrets are deleted after a week with no hits.
 
 ## kv

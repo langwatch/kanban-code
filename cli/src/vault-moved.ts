@@ -1,7 +1,8 @@
 /**
  * Secrets that moved to the Laze vault (docs/vault.md, "Moved to Laze").
  *
- * `vault/moved.json` maps a kv name to the Laze connection it became. kv
+ * `vault/moved.json` maps a kv name to the Laze connection it became, or to
+ * `deleted:<where it lives now>` for a name deleted outright. kv
  * serves none of them: it names the connection and the `laze vault` command
  * instead, and logs the hit to `vault/moved-hits.jsonl`, so the Kanban
  * copies are deleted only after a week in which nothing asked kv for them.
@@ -51,14 +52,22 @@ export function movedAmong(
   return out;
 }
 
-/** What kv prints for moved names: one line each, then how to ask Laze. */
+/** A `deleted:<where it lives now>` value marks a name deleted from kv, not moved to a connection. */
+export const DELETED_PREFIX = "deleted:";
+
+/** What kv prints for moved names: one line each, then how to ask Laze; deleted names say where they went. */
 export function movedMessage(hits: Array<{ asked: string; connection: string }>): string {
-  const lines = hits.map((h) => `moved to laze vault: ${h.asked} (connection ${h.connection})`);
-  const connections = [...new Set(hits.map((h) => h.connection))];
-  lines.push(
-    `Use the Laze vault instead: laze vault run ${connections.join(" ")} --reason "<one plain sentence>" -- <cmd>` +
-      ` (or laze vault env in a folder whose .env.vault names them)`
-  );
+  const deleted = hits.filter((h) => h.connection.startsWith(DELETED_PREFIX));
+  const moved = hits.filter((h) => !h.connection.startsWith(DELETED_PREFIX));
+  const lines = deleted.map((h) => `deleted from the Kanban vault: ${h.asked} (${h.connection.slice(DELETED_PREFIX.length)})`);
+  lines.push(...moved.map((h) => `moved to laze vault: ${h.asked} (connection ${h.connection})`));
+  const connections = [...new Set(moved.map((h) => h.connection))];
+  if (connections.length > 0) {
+    lines.push(
+      `Use the Laze vault instead: laze vault run ${connections.join(" ")} --reason "<one plain sentence>" -- <cmd>` +
+        ` (or laze vault env in a folder whose .env.vault names them)`
+    );
+  }
   return lines.map((l) => `kv: ${l}`).join("\n");
 }
 
