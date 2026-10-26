@@ -60,10 +60,8 @@ struct ConversationScreen: View {
                         QuotedMessage(text: quote)
                     }
                     ForEach(model.shown) { message in
-                        MessageView(message: RemoteMessage(id: message.id, role: message.role == .human ? .user : .assistant,
-                                                           text: message.text, at: message.at))
+                        ConversationMessageView(message: message, pendingImages: model.pendingImages[message.id] ?? [])
                             .id(message.id)
-                            .accessibilityIdentifier(message.role == .human ? "conversationHuman" : "conversationAgent")
                     }
                     if model.isWorking(cardBusy: card?.isBusy == true) {
                         WorkingIndicator()
@@ -168,7 +166,14 @@ struct ConversationScreen: View {
                     .accessibilityIdentifier("conversationSendError")
             }
             if let card, card.isLive, card.sessionStatus?.kind != .machine {
-                composer
+                PromptComposer(card: card, board: board, draft: draft, conversation: model.id, sendError: $sendError,
+                               focused: $composerFocused, maxLines: 6, onInterrupt: interrupt, onSent: { text, images in
+                                   sentCount += 1
+                                   model.appendPending(text, images: images)
+                                   Task { await model.refresh() }
+                               }) {
+                    EmptyView()
+                }
             } else {
                 HStack {
                     Text(card?.sessionStatus?.text ?? "Session not running")
@@ -187,60 +192,14 @@ struct ConversationScreen: View {
         .padding(.vertical, 8)
     }
 
-    private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: Binding(get: { draft.text }, set: { draft.text = $0 }), axis: .vertical)
-                .lineLimit(1...6)
-                .focused($composerFocused)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 7)
-                .accessibilityIdentifier("conversationComposer")
-            let enabled = !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(enabled ? Color(.systemBackground) : Color(.tertiaryLabel))
-                    .frame(width: 34, height: 34)
-                    .background(enabled ? Color(.label) : Color(.tertiarySystemFill), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!enabled)
-            .accessibilityLabel("Send")
-            .accessibilityHint(card?.isBusy == true ? "Sends when this turn ends." : "")
-            .accessibilityIdentifier("conversationSend")
-        }
-        .padding(8)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .onTapGesture { composerFocused = true }
-    }
-
-    /// Sends what is typed to the card's session, in this conversation. It
-    /// shows at once as a pending message and the composer is free while
-    /// the machine takes it. A send that fails takes the message away and
-    /// puts its text back in the composer, with what was typed since stashed.
-    private func send() {
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let client = board.client else { return }
-        sendError = nil
-        draft.clear()
-        let pending = model.appendPending(text)
+    private func interrupt() {
+        guard let client = board.client else { return }
         Task {
             do {
-                try await client.sendPrompt(cardId: model.cardId, text: text, mode: .queue, human: true,
-                                            conversation: model.id)
-                sentCount += 1
-                await model.refresh()
+                try await client.interrupt(cardId: model.cardId)
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
             } catch {
-                model.removePending(pending)
-                if !draft.isEmpty { draft.stash() }
-                draft.load(text: text, images: [])
-                sendError = error.localizedDescription
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                actionError = error.localizedDescription
             }
         }
     }
@@ -283,6 +242,66 @@ struct ConversationScreen: View {
     }
 }
 
+/// A message of a conversation, drawn as Main draws its messages. The
+/// human's images show over the bubble: the ones attached here while the
+/// message is pending, then a chip per image, since the master keeps them
+/// where the phone cannot read them.
+struct ConversationMessageView: View {
+    let message: RemoteConversationMessage
+    var pendingImages: [Data] = []
+
+    var body: some View {
+        VStack(alignment: message.role == .human ? .trailing : .leading, spacing: 6) {
+            if message.role == .human, !pendingImages.isEmpty || !(message.images ?? []).isEmpty {
+                images
+            }
+            if !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                MessageView(message: RemoteMessage(id: message.id, role: message.role == .human ? .user : .assistant,
+                                                   text: message.text, at: message.at))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == .human ? .trailing : .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var identifier: String {
+        if message.role == .agent { return "conversationAgent" }
+        return message.id.hasPrefix("pending-") ? "conversationPending" : "conversationHuman"
+    }
+
+    @ViewBuilder private var images: some View {
+        HStack(spacing: 6) {
+            Spacer(minLength: 48)
+            if !pendingImages.isEmpty {
+                ForEach(Array(pendingImages.enumerated()), id: \.offset) { _, data in
+                    Group {
+                        if let ui = UIImage(data: data) {
+                            Image(uiImage: ui).resizable().scaledToFill()
+                        } else {
+                            Color(.tertiarySystemFill)
+                        }
+                    }
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .opacity(0.5)
+                    .accessibilityIdentifier("conversationPendingImage")
+                }
+            } else {
+                ForEach(Array((message.images ?? []).enumerated()), id: \.offset) { _, _ in
+                    Label("Image", systemImage: "photo")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .accessibilityIdentifier("conversationImage")
+                }
+            }
+        }
+    }
+}
+
 /// The agent message a conversation continues from, at its top.
 struct QuotedMessage: View {
     let text: String
@@ -318,8 +337,8 @@ struct QuotedMessage: View {
     }
 }
 
-/// A conversation listed under its card: its title, unread with a blue dot
-/// and bold, and "Waiting on you" while the agent's message is the last.
+/// A conversation listed under its card: its title, bold while unread, and
+/// a preview of its last message.
 struct ConversationRow: View {
     let conversation: RemoteConversation
 
@@ -328,22 +347,12 @@ struct ConversationRow: View {
             Image(systemName: "arrow.turn.down.right")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            Circle()
-                .fill(conversation.unread ? Color.blue : Color.clear)
-                .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.displayTitle)
                     .font(.subheadline.weight(conversation.unread ? .semibold : .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                if conversation.waiting {
-                    HStack(spacing: 4) {
-                        Circle().fill(Color.orange).frame(width: 6, height: 6)
-                        Text("Waiting on you")
-                    }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.orange)
-                } else if let preview = conversation.preview, !preview.isEmpty {
+                if let preview = conversation.preview, !preview.isEmpty {
                     Text(preview)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -368,7 +377,7 @@ struct ConversationRow: View {
     private var accessibilityText: String {
         var parts = ["Conversation", conversation.displayTitle]
         if conversation.unread { parts.append("unread") }
-        if conversation.waiting { parts.append("waiting on you") }
+        if let preview = conversation.preview, !preview.isEmpty { parts.append(preview) }
         return parts.joined(separator: ", ")
     }
 }

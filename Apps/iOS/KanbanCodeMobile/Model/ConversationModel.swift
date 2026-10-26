@@ -21,6 +21,9 @@ final class ConversationModel {
     private(set) var messages: [RemoteConversationMessage] = []
     /// Sent from here, until the master lists them.
     private(set) var pending: [RemoteConversationMessage] = []
+    /// The images of each pending message, as attached here: the master's
+    /// copies are paths the phone cannot read.
+    private(set) var pendingImages: [String: [Data]] = [:]
     private(set) var error: String?
     private(set) var loadedOnce = false
     @ObservationIgnored private var isLoading = false
@@ -63,6 +66,7 @@ final class ConversationModel {
             conversation = detail.conversation
             messages = detail.messages
             pending.removeAll { sent in Self.lists(detail.messages, sent: sent) }
+            pendingImages = pendingImages.filter { id, _ in pending.contains { $0.id == id } }
             error = nil
             loadedOnce = true
             // Open on screen: what the agent wrote is read.
@@ -91,17 +95,13 @@ final class ConversationModel {
         apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(archived: true)))
     }
 
-    /// Shows a sent message before the master lists it. Returns its id.
+    /// Shows a message the master took before it lists it, faded. Returns its id.
     @discardableResult
-    func appendPending(_ text: String) -> String {
+    func appendPending(_ text: String, images: [Data] = []) -> String {
         let id = "pending-\(UUID().uuidString)"
         pending.append(RemoteConversationMessage(id: id, role: .human, text: text, at: .now))
+        if !images.isEmpty { pendingImages[id] = images }
         return id
-    }
-
-    /// Takes away a sent message whose send failed.
-    func removePending(_ id: String) {
-        pending.removeAll { $0.id == id }
     }
 
     /// The master lists a message the human sent from here: the same text,

@@ -2,34 +2,52 @@ import XCTest
 
 /// Conversations inside one card (docs/conversations.md), against the demo
 /// server. `card_wait` starts with two: "Theme switch without restart",
-/// waiting on the human and unread, and an untitled one waiting on the agent.
+/// unread and continued from an agent message, and an untitled one.
+///
+/// A conversation's composer is Main's, under the same identifiers. The
+/// image test needs a photo in the simulator: `xcrun simctl addmedia booted <png>`.
 final class ConversationTests: KanbanUITestCase {
-
-    private var conversationComposer: XCUIElement {
-        app.textViews["conversationComposer"].exists ? app.textViews["conversationComposer"] : app.textFields["conversationComposer"]
-    }
 
     private func row(_ id: String) -> XCUIElement { app.buttons["conversation-card_wait-\(id)"] }
 
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// Opens a new conversation of `card_wait` from the compose button.
+    private func startConversation() {
+        openCard("card_wait")
+        let compose = app.buttons["newConversation"]
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        compose.tap()
+        XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    }
+
     func testConversationsUnderTheCardOpenReplyAndArchive() throws {
-        let waiting = row("swift-otter")
-        XCTAssertTrue(waiting.waitForExistence(timeout: 15))
-        XCTAssertTrue(waiting.label.contains("Theme switch without restart"))
-        XCTAssertTrue(waiting.label.contains("unread"))
-        XCTAssertTrue(waiting.label.contains("waiting on you"))
+        let theme = row("swift-otter")
+        XCTAssertTrue(theme.waitForExistence(timeout: 15))
+        XCTAssertTrue(theme.label.contains("Theme switch without restart"))
+        XCTAssertTrue(theme.label.contains("unread"))
+        // No waiting marker: the row shows its title and last message.
+        XCTAssertFalse(theme.label.localizedCaseInsensitiveContains("waiting"))
+        XCTAssertTrue(theme.label.contains("Yes. The page can observe the theme"))
         XCTAssertTrue(row("calm-heron").label.contains("New conversation"))
+        XCTAssertFalse(row("calm-heron").label.contains("unread"))
         shot("80-conversations-on-board")
 
-        waiting.tap()
+        theme.tap()
         XCTAssertTrue(app.navigationBars["Theme switch without restart"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.descendants(matching: .any)["conversationQuote"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(element("conversationQuote").waitForExistence(timeout: 5))
         XCTAssertTrue(message(containing: "Should I also animate the switch").waitForExistence(timeout: 10))
         shot("81-conversation-open")
 
-        conversationComposer.tap()
-        conversationComposer.typeText("Keep it instant")
-        app.buttons["conversationSend"].tap()
+        composer.tap()
+        composer.typeText("Keep it instant")
+        app.buttons["send"].tap()
         XCTAssertTrue(message(containing: "Keep it instant").waitForExistence(timeout: 5))
+        // Listed by the master: shown at full weight, no longer pending.
+        XCTAssertTrue(waitFor(10) { !self.element("conversationPending").exists })
         XCTAssertTrue(message(containing: "Got it: Keep it instant").waitForExistence(timeout: 20))
         shot("82-conversation-reply")
 
@@ -49,7 +67,7 @@ final class ConversationTests: KanbanUITestCase {
         goBack()
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         goBack()
-        XCTAssertTrue(waitFor(10) { row("swift-otter").exists && !row("swift-otter").label.contains("unread") })
+        XCTAssertTrue(waitFor(10) { self.row("swift-otter").exists && !self.row("swift-otter").label.contains("unread") })
         shot("83-conversation-read-on-board")
 
         // Archive takes it off the card.
@@ -59,20 +77,18 @@ final class ConversationTests: KanbanUITestCase {
         app.buttons["conversationArchive"].tap()
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         goBack()
-        XCTAssertTrue(waitFor(10) { !row("swift-otter").exists })
+        XCTAssertTrue(waitFor(10) { !self.row("swift-otter").exists })
     }
 
     func testComposeButtonStartsAConversation() throws {
         openCard("card_wait")
-        let compose = app.buttons["newConversation"]
-        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 10))
         shot("84-compose-button")
-        compose.tap()
-        XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
-        XCTAssertTrue(conversationComposer.waitForExistence(timeout: 5))
-        conversationComposer.tap()
-        conversationComposer.typeText("Can we harden the vault next?")
-        app.buttons["conversationSend"].tap()
+        goBack()
+        startConversation()
+        composer.tap()
+        composer.typeText("Can we harden the vault next?")
+        app.buttons["send"].tap()
         XCTAssertTrue(message(containing: "Got it: Can we harden the vault next?").waitForExistence(timeout: 20))
         // The demo agent names an untitled conversation on its first reply.
         XCTAssertTrue(app.navigationBars.matching(NSPredicate(format: "identifier BEGINSWITH 'Demo topic'")).firstMatch
@@ -92,7 +108,54 @@ final class ConversationTests: KanbanUITestCase {
         shot("86-continue-menu")
         item.tap()
         XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.descendants(matching: .any)["conversationQuote"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(element("conversationQuote").waitForExistence(timeout: 5))
         shot("87-continued-conversation")
+    }
+
+    /// An image goes with the message; the phone shows a chip for it once
+    /// the master lists the message, since the master keeps the file.
+    func testAnImageGoesWithAConversationMessage() throws {
+        startConversation()
+        composer.tap()
+        composer.typeText("here is the screen ")
+        // The image's marker goes where the caret is, after the text.
+        pickFirstPhoto()
+        XCTAssertTrue(element("attachment").waitForExistence(timeout: 15))
+        shot("88-conversation-attachment")
+        app.buttons["send"].tap()
+        XCTAssertTrue(element("conversationImage").waitForExistence(timeout: 10))
+        XCTAssertTrue(message(containing: "here is the screen").waitForExistence(timeout: 5))
+        XCTAssertFalse(element("attachment").exists)
+        XCTAssertTrue(message(containing: "Got it:").waitForExistence(timeout: 20))
+        shot("89-conversation-image-sent")
+    }
+
+    /// A send the master refuses leaves the message in the composer with the
+    /// error, as Main does, and nothing in the conversation.
+    func testAFailedSendKeepsTheDraftAndShowsTheError() throws {
+        startConversation()
+        composer.tap()
+        composer.typeText("Ship it [demo: fail]")
+        app.buttons["send"].tap()
+        let error = element("conversationSendError")
+        XCTAssertTrue(error.waitForExistence(timeout: 10))
+        XCTAssertTrue((composer.value as? String)?.contains("Ship it [demo: fail]") == true)
+        XCTAssertFalse(element("conversationHuman").exists)
+        XCTAssertFalse(element("conversationPending").exists)
+        shot("90-conversation-send-failed")
+    }
+
+    /// A key in the text gets the vault offer before anything is sent, as in Main.
+    func testASecretInAConversationMessageOffersTheVault() throws {
+        startConversation()
+        composer.tap()
+        composer.typeText("use key sk-proj-Qm7vT2xLp9Rk4Wn8Zb3Hc6Yd1Fg5Js0Ae_Uq-Vt8Nr2Mx for the deploy")
+        app.buttons["send"].tap()
+        XCTAssertTrue(element("vaultSecretOffer").waitForExistence(timeout: 10))
+        XCTAssertFalse(element("conversationHuman").exists)
+        shot("91-conversation-vault-offer")
+        app.buttons["vaultSendAsIs"].tap()
+        XCTAssertTrue(waitFor(10) { !self.element("vaultSecretOffer").exists })
+        XCTAssertTrue(message(containing: "for the deploy").waitForExistence(timeout: 10))
     }
 }

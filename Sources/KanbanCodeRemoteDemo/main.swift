@@ -583,10 +583,14 @@ final class DemoHost: RemoteControlHost {
         if Self.slowSendCards.contains(cardId) { try? await Task.sleep(for: .seconds(4)) }
         let text = Self.promptText(request.text, imageCount: images.count)
         let promptId = "prompt_\(UUID().uuidString.prefix(8))"
+        // A prompt that names this marker fails, for the tests of a failed send.
+        if request.text.contains("[demo: fail]") { throw RemoteHostError.conflict("the demo refused this prompt") }
         if let conversation = request.conversation {
             guard thread(c, conversation) != nil else { throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversation)") }
             // The conversation shows the message from when it is queued.
-            appendConversation(cardId, [.message(conversation, id: promptId, role: .human, text: request.text)])
+            // Where the owner would keep the images, which only it can read.
+            let paths = images.indices.map { "/demo/images/\(promptId)-\($0 + 1).jpg" }
+            appendConversation(cardId, [.message(conversation, id: promptId, role: .human, text: request.text, images: paths)])
         }
         if c.card.isBusy && request.mode != .now {
             let prompt = RemoteQueuedPrompt(id: promptId, text: request.text, imageCount: images.count)

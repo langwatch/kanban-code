@@ -85,6 +85,24 @@ class KanbanUITestCase: XCTestCase {
         return XCTWaiter.wait(for: [done], timeout: 10) == .completed
     }
 
+    /// Picks the first photo of the library through + > Photos.
+    func pickFirstPhoto() {
+        app.buttons["attach"].tap()
+        app.buttons["Photos"].firstMatch.tap()
+        // The system picker: pick the first photo, then Done.
+        let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        XCTAssertTrue(photo.waitForExistence(timeout: 15), "no photos in the simulator; add one with xcrun simctl addmedia")
+        // The picker's first-run privacy notice covers the grid.
+        let close = app.buttons["Close"].firstMatch
+        if close.waitForExistence(timeout: 2) { close.tap() }
+        sleep(1)
+        // The grid sits under an overlay that XCUITest counts as covering it.
+        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(waitEnabled(done))
+        done.tap()
+    }
+
     func shot(_ name: String) {
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
