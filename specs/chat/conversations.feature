@@ -72,13 +72,13 @@ Feature: Conversations inside one card
     Then Main shows again
     And the card chat has no extra row above it for switching
 
-  Scenario: Waiting on you
+  Scenario: Unread replies
     Given the agent's reply is the last message of "swift-otter"
-    Then "swift-otter" shows as waiting on me
-    And it shows as unread until I open it
+    Then "swift-otter" shows in bold in the sidebar and on the phone, with no other marker
+    And kanban conversation list reports it as waiting on the human
     When I open it
-    Then it is no longer unread, on every device
-    And it stays waiting on me until I send a message in it
+    Then it is no longer bold, on every device
+    And it stays waiting on the human until I send a message in it
 
   # ── Pop off ─────────────────────────────────────────────────────────
 

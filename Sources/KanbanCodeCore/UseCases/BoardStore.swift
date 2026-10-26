@@ -129,6 +129,15 @@ public final class AppState: @unchecked Sendable {
     public var conversations: [String: [RemoteConversation]] = [:]
     /// The conversation each card's chat shows; a card not in it shows Main.
     public var openConversations: [String: String] = [:]
+    /// Conversation messages sent from this app that the conversation's
+    /// log does not show yet, per card: the view shows them faded.
+    public var conversationOutbox: [String: [QueuedPrompt]] = [:]
+
+    /// The sidebar highlights a card's row only while its Main chat shows;
+    /// with one of its conversations open, only that conversation's row is.
+    public func highlightsCardRow(_ cardId: String) -> Bool {
+        selectedCardId == cardId && openConversations[cardId] == nil
+    }
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
     /// `selectedCardId` / `selectedChannelName` / `selectedDMParticipant`
@@ -792,6 +801,10 @@ public enum Action: Sendable {
     case setError(String?)
     /// A prompt sent from the card's chat did not reach its session.
     case promptSendFailed(cardId: String, prompt: QueuedPrompt, message: String)
+    /// A conversation message left this app; it shows faded until the log has it.
+    case conversationMessageSent(cardId: String, prompt: QueuedPrompt)
+    /// The log shows these outbox messages now.
+    case conversationMessagesDelivered(cardId: String, promptIds: [String])
     /// The chat let go of a failed prompt: sent again, edited or discarded.
     case dismissFailedPrompt(cardId: String, promptId: String)
     /// Same banner as `setError`, but says what kind of news it is.
@@ -2019,7 +2032,8 @@ public enum Reducer {
             if let conversation = prompt.conversation {
                 // The conversation shows the message from when it was written.
                 effects.append(.appendConversationEvents(cardId: cardId, events: [
-                    .message(conversation, id: prompt.id, role: .human, text: prompt.body, at: prompt.humanWrittenAt ?? .now)
+                    .message(conversation, id: prompt.id, role: .human, text: prompt.body, at: prompt.humanWrittenAt ?? .now,
+                         images: prompt.imagePaths)
                 ]))
             }
             return effects
@@ -3003,7 +3017,24 @@ public enum Reducer {
             state.notice = message.map { Notice($0) }
             return []
 
+        case .conversationMessageSent(let cardId, let prompt):
+            var outbox = state.conversationOutbox[cardId] ?? []
+            outbox.removeAll { $0.id == prompt.id }
+            outbox.append(prompt)
+            state.conversationOutbox[cardId] = outbox
+            return []
+
+        case .conversationMessagesDelivered(let cardId, let promptIds):
+            guard var outbox = state.conversationOutbox[cardId] else { return [] }
+            outbox.removeAll { promptIds.contains($0.id) }
+            state.conversationOutbox[cardId] = outbox.isEmpty ? nil : outbox
+            return []
+
         case .promptSendFailed(let cardId, let prompt, let message):
+            if var outbox = state.conversationOutbox[cardId] {
+                outbox.removeAll { $0.id == prompt.id }
+                state.conversationOutbox[cardId] = outbox.isEmpty ? nil : outbox
+            }
             var failed = state.failedPrompts[cardId] ?? []
             failed.removeAll { $0.id == prompt.id }
             failed.append(FailedPrompt(prompt: prompt, message: message))

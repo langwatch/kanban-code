@@ -744,7 +744,8 @@ struct CardDetailView: View {
                 }
             },
             githubBaseURL: githubBaseURL,
-            failedPrompts: AppComposition.shared.store.state.failedPrompts[card.id] ?? [],
+            // A conversation's failed sends show in that conversation.
+            failedPrompts: (AppComposition.shared.store.state.failedPrompts[card.id] ?? []).filter { $0.prompt.conversation == nil },
             onDismissFailedPrompt: { failed in
                 AppComposition.shared.store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
             },

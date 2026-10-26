@@ -169,7 +169,7 @@ struct ListBoardView: View {
     ) -> ListCardRowView {
         ListCardRowView(
             card: card,
-            isSelected: card.id == store.state.selectedCardId,
+            isSelected: store.state.highlightsCardRow(card.id),
             onCopyConversationMarkdown: { onCopyConversationMarkdown(card.id) },
             subagentCount: descendantCounts[card.id] ?? 0,
             activeDirectSubagentCount: activeSubagentCardsByParent[card.id]?.count ?? 0,
@@ -266,7 +266,7 @@ struct ListBoardView: View {
     private func sectionView(for section: ListBoardSection) -> some View {
         ListBoardSectionView(
             section: section,
-            selectedCardId: store.state.selectedCardId,
+            selectedCardId: store.state.selectedCardId.flatMap { store.state.highlightsCardRow($0) ? $0 : nil },
             isCollapsed: collapsedColumns.contains(section.column),
             isRefreshingBacklog: store.state.isRefreshingBacklog,
             availableProjects: availableProjects,

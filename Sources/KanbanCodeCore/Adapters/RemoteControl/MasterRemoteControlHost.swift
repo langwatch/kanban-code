@@ -262,7 +262,7 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
                 text = ConversationPrompt.wrap(request.text, conversation: conversation)
                 try await MainActor.run {
                     try engine.appendConversation(cardId: cardId, [
-                        .message(conversation.id, id: KSUID.generate(prefix: "msg"), role: .human, text: request.text)
+                        .message(conversation.id, id: KSUID.generate(prefix: "msg"), role: .human, text: request.text, images: imagePaths)
                     ])
                 }
             }

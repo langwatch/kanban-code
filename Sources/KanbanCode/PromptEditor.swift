@@ -456,8 +456,12 @@ final class SubmitTextView: NSTextView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Catch Cmd+V explicitly — in SwiftUI sheets the Edit menu may not dispatch paste: to us
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+        // Catch Cmd+V explicitly: in SwiftUI sheets the Edit menu may not dispatch paste: to us.
+        // AppKit offers key equivalents to every view in the window, so only
+        // the focused editor takes it; a hidden composer under another one
+        // would take the images otherwise.
+        if window?.firstResponder === self,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            event.charactersIgnoringModifiers == "v" {
             if tryPasteImage() { return true }
         }

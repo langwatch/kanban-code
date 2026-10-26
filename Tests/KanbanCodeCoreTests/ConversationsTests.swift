@@ -259,6 +259,54 @@ struct ConversationHostTests {
         for _ in 0..<100 where !condition() { try? await Task.sleep(for: .milliseconds(20)) }
     }
 
+    @Test("a sent message waits in the outbox until the log has it, a failed one leaves it, images are logged")
+    func outboxAndImages() async throws {
+        let (_, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let conv = try await engine.createConversation(cardId: "card_a", RemoteConversationCreate(), by: "human")
+        let prompt = QueuedPrompt(body: "look [Image #1]", sendAutomatically: true, imagePaths: ["/tmp/acme/one.png"],
+                                  humanWrittenAt: .now, conversation: conv.id)
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: prompt))
+        #expect(store.state.conversationOutbox["card_a"]?.map(\.id) == [prompt.id])
+
+        store.dispatch(.addQueuedPrompt(cardId: "card_a", prompt: prompt, placement: .back))
+        await waitFor { (store.state.conversations["card_a"]?.first?.messageCount ?? 0) > 0 }
+        let logged = try #require(engine.conversationStore.threads(cardId: "card_a", ownerMachine: nil).first?.messages.first)
+        #expect(logged.images == ["/tmp/acme/one.png"])
+        #expect(ConversationOutbox.delivers(logged, prompt))
+        store.dispatch(.conversationMessagesDelivered(cardId: "card_a", promptIds: [prompt.id]))
+        #expect(store.state.conversationOutbox["card_a"] == nil)
+
+        let lost = QueuedPrompt(body: "a long prompt", sendAutomatically: true, humanWrittenAt: .now, conversation: conv.id)
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: lost))
+        store.dispatch(.promptSendFailed(cardId: "card_a", prompt: lost, message: "peer offline"))
+        #expect(store.state.conversationOutbox["card_a"] == nil)
+        #expect(store.state.failedPrompts["card_a"]?.first?.prompt.conversation == conv.id)
+    }
+
+    @Test("a message logged by another master is the one sent here when the human's text matches and it is not older")
+    func outboxMatchesForwardedMessages() {
+        let written = Date(timeIntervalSince1970: 1_800_000_000)
+        let prompt = QueuedPrompt(body: "ship it\n", sendAutomatically: true, humanWrittenAt: written, conversation: "swift-otter")
+        #expect(ConversationOutbox.delivers(.init(id: "msg_owner", role: .human, text: "ship it", at: written.addingTimeInterval(2)), prompt))
+        #expect(!ConversationOutbox.delivers(.init(id: "msg_owner", role: .agent, text: "ship it", at: written.addingTimeInterval(2)), prompt))
+        #expect(!ConversationOutbox.delivers(.init(id: "msg_old", role: .human, text: "ship it", at: written.addingTimeInterval(-3600)), prompt))
+        #expect(!ConversationOutbox.delivers(.init(id: "msg_other", role: .human, text: "hold it", at: written), prompt))
+    }
+
+    @Test("the sidebar highlights the card row with Main open, and only the conversation row with a conversation open")
+    func oneHighlightedRow() async throws {
+        let (_, _, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        store.dispatch(.selectCard(cardId: "card_a"))
+        #expect(store.state.highlightsCardRow("card_a"))
+        store.dispatch(.openConversation(cardId: "card_a", conversationId: "swift-otter"))
+        #expect(!store.state.highlightsCardRow("card_a"))
+        store.dispatch(.openConversation(cardId: "card_a", conversationId: nil))
+        #expect(store.state.highlightsCardRow("card_a"))
+        #expect(!store.state.highlightsCardRow("card_b"))
+    }
+
     @Test("a log on disk loads once its card reaches the board, even when the watcher saw it first")
     func watcherLoadsLogsOfCardsThatArriveLater() async throws {
         let (_, engine, store, _, dir) = makeHost()

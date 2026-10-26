@@ -49,6 +49,9 @@ enum ConversationActions {
         let prompt = QueuedPrompt(
             body: text, sendAutomatically: true, imagePaths: imagePaths.isEmpty ? nil : imagePaths,
             humanWrittenAt: .now, conversation: conversationId)
+        // Shows faded in the conversation until its log has it; the send
+        // itself is journalled like any chat prompt.
+        store.dispatch(.conversationMessageSent(cardId: cardId, prompt: prompt))
         store.dispatch(.addQueuedPrompt(cardId: cardId, prompt: prompt, placement: .back))
         store.dispatch(.sendQueuedPrompt(cardId: cardId, promptId: prompt.id))
     }
@@ -62,20 +65,41 @@ enum ConversationActions {
     }
 }
 
-// MARK: - State dots
+// MARK: - Drafts
 
-/// Waiting on you (orange) and unread (blue), as the sidebar shows them.
-struct ConversationStateDot: View {
-    let conversation: RemoteConversation
+/// What is typed in each conversation's composer, kept while the human
+/// switches views, and where an image dropped on the window goes while a
+/// conversation is open.
+@MainActor @Observable
+final class ConversationDrafts {
+    static let shared = ConversationDrafts()
 
-    var body: some View {
-        if conversation.unread {
-            Circle().fill(Color.accentColor).frame(width: 7, height: 7)
-                .help(conversation.waiting ? "New reply, waiting on you" : "New reply")
-        } else if conversation.waiting {
-            Circle().strokeBorder(Color.orange, lineWidth: 1.5).frame(width: 7, height: 7)
-                .help("Waiting on you")
-        }
+    struct Draft: Equatable {
+        var text = ""
+        var images: [Data] = []
+    }
+
+    private var drafts: [String: Draft] = [:]
+
+    private static func key(_ cardId: String, _ conversationId: String) -> String { cardId + "/" + conversationId }
+
+    func draft(cardId: String, conversationId: String) -> Draft {
+        drafts[Self.key(cardId, conversationId)] ?? Draft()
+    }
+
+    func set(_ draft: Draft, cardId: String, conversationId: String) {
+        drafts[Self.key(cardId, conversationId)] = draft == Draft() ? nil : draft
+    }
+
+    /// Adds an image at the end of the text, with its `[Image #N]` marker,
+    /// as a paste in the composer does.
+    func addImage(_ data: Data, cardId: String, conversationId: String) {
+        var draft = draft(cardId: cardId, conversationId: conversationId)
+        let marker = PromptImagePlaceholders.insertMarker(for: draft.images)
+        draft.images.append(data)
+        let separator = draft.text.isEmpty || draft.text.hasSuffix(" ") || draft.text.hasSuffix("\n") ? "" : " "
+        draft.text += separator + marker
+        set(draft, cardId: cardId, conversationId: conversationId)
     }
 }
 
@@ -100,13 +124,6 @@ struct SidebarConversationRows: View {
                     .foregroundStyle(conversation.title == nil ? .secondary : .primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if conversation.waiting {
-                    Text("Waiting on you")
-                        .font(.app(.caption2))
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                }
-                ConversationStateDot(conversation: conversation)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -138,10 +155,47 @@ struct ConversationChatView: View {
     let card: KanbanCodeCard
     let conversation: RemoteConversation
     @State private var messages: [RemoteConversationMessage] = []
-    @State private var draft = ""
-    @State private var draftImages: [Data] = []
     @State private var renaming = false
     @State private var newTitle = ""
+    @State private var focusToken = 0
+
+    private var store: BoardStore { AppComposition.shared.store }
+    private var drafts: ConversationDrafts { ConversationDrafts.shared }
+
+    private var draftText: Binding<String> {
+        Binding(
+            get: { drafts.draft(cardId: card.id, conversationId: conversation.id).text },
+            set: { text in
+                var draft = drafts.draft(cardId: card.id, conversationId: conversation.id)
+                draft.text = text
+                drafts.set(draft, cardId: card.id, conversationId: conversation.id)
+            })
+    }
+
+    private var draftImages: Binding<[Data]> {
+        Binding(
+            get: { drafts.draft(cardId: card.id, conversationId: conversation.id).images },
+            set: { images in
+                var draft = drafts.draft(cardId: card.id, conversationId: conversation.id)
+                draft.images = images
+                drafts.set(draft, cardId: card.id, conversationId: conversation.id)
+            })
+    }
+
+    /// Messages sent from here that the log does not show yet.
+    private var pending: [QueuedPrompt] {
+        let sent = store.state.conversationOutbox[card.id]?.filter { $0.conversation == conversation.id } ?? []
+        return sent.filter { prompt in !messages.contains { ConversationOutbox.delivers($0, prompt) } }
+    }
+
+    /// Prompts of this card still in its queue: the session has not taken them.
+    private var queuedIds: Set<String> {
+        Set((card.link.queuedPrompts ?? []).map(\.id))
+    }
+
+    private var failed: [FailedPrompt] {
+        store.state.failedPrompts[card.id]?.filter { $0.prompt.conversation == conversation.id } ?? []
+    }
 
     private var isWorking: Bool {
         card.activityState == .activelyWorking && messages.last?.role != .agent
@@ -166,8 +220,36 @@ struct ConversationChatView: View {
                                 .padding(.top, 40)
                         }
                         ForEach(messages) { message in
-                            ConversationMessageRow(message: message, cardId: card.id)
+                            ConversationMessageRow(message: message, cardId: card.id,
+                                                   waiting: queuedIds.contains(message.id))
                                 .id(message.id)
+                        }
+                        ForEach(pending, id: \.id) { prompt in
+                            PendingConversationBubble(prompt: prompt)
+                                .id(prompt.id)
+                        }
+                        ForEach(failed) { failed in
+                            HStack {
+                                Spacer(minLength: 0)
+                                FailedPromptBubble(
+                                    failed: failed,
+                                    onRetry: {
+                                        store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
+                                        ConversationActions.send(cardId: card.id, conversationId: conversation.id,
+                                                                 text: failed.prompt.body, imagePaths: failed.prompt.imagePaths ?? [])
+                                    },
+                                    onEdit: {
+                                        store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
+                                        drafts.set(.init(text: failed.prompt.body,
+                                                         images: (failed.prompt.imagePaths ?? []).compactMap { FileManager.default.contents(atPath: $0) }),
+                                                   cardId: card.id, conversationId: conversation.id)
+                                        focusToken += 1
+                                    },
+                                    onDiscard: { store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id)) }
+                                )
+                                .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                            }
+                            .id(failed.id)
                         }
                         if isWorking {
                             HStack(spacing: 6) {
@@ -187,6 +269,9 @@ struct ConversationChatView: View {
                 .onChange(of: messages.count) {
                     if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
                 }
+                .onChange(of: pending.map(\.id)) { _, ids in
+                    if let last = ids.last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
+                }
                 .onAppear {
                     if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -197,20 +282,28 @@ struct ConversationChatView: View {
                 cardId: card.id,
                 placeholderOverride: "Message \(conversation.displayTitle)",
                 userMessageHistory: messages.filter { $0.role == .human }.reversed().map(\.text),
+                focusRequestToken: focusToken,
                 onSend: { text, images in
                     ConversationActions.send(cardId: card.id, conversationId: conversation.id, text: text, imagePaths: images)
                 },
-                text: $draft,
-                pastedImages: $draftImages
+                text: draftText,
+                pastedImages: draftImages
             )
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: "\(card.id)/\(conversation.id)/\(conversation.updatedAt.timeIntervalSince1970)/\(conversation.messageCount)") {
             messages = ConversationActions.messages(cardId: card.id, conversationId: conversation.id)
+            let sent = store.state.conversationOutbox[card.id]?.filter { $0.conversation == conversation.id } ?? []
+            let delivered = sent.filter { prompt in messages.contains { ConversationOutbox.delivers($0, prompt) } }.map(\.id)
+            if !delivered.isEmpty {
+                store.dispatch(.conversationMessagesDelivered(cardId: card.id, promptIds: delivered))
+            }
             if conversation.unread {
                 ConversationActions.update(cardId: card.id, conversationId: conversation.id, .init(read: true))
             }
         }
+        .onAppear { focusToken += 1 }
+        .onChange(of: conversation.id) { focusToken += 1 }
         .sheet(isPresented: $renaming) {
             RenameSessionDialog(
                 currentName: conversation.title ?? "",
@@ -232,11 +325,6 @@ struct ConversationChatView: View {
             Text(conversation.id)
                 .font(.app(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
-            if conversation.waiting {
-                Text("Waiting on you")
-                    .font(.app(.caption))
-                    .foregroundStyle(.orange)
-            }
             Spacer()
             Button("Rename") {
                 newTitle = conversation.title ?? ""
@@ -271,18 +359,30 @@ struct ConversationChatView: View {
 private struct ConversationMessageRow: View {
     let message: RemoteConversationMessage
     let cardId: String
+    /// Logged but not taken by the session yet: faded, as the chat shows a
+    /// message going out.
+    var waiting = false
 
     var body: some View {
         if message.role == .human {
             HStack {
                 Spacer(minLength: 60)
-                Text(message.text)
-                    .font(.app(.body))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(RoundedRectangle(cornerRadius: 18).fill(Color.accentColor.opacity(0.15)))
-                    .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 6) {
+                    ConversationImageStrip(paths: message.images ?? [])
+                    Text(message.text)
+                        .font(.app(.body))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 18).fill(Color.accentColor.opacity(0.15)))
+                }
+                .opacity(waiting ? 0.5 : 1)
+                .overlay(alignment: .leading) {
+                    if waiting {
+                        ProgressView().controlSize(.small).opacity(0.5).offset(x: -24)
+                    }
+                }
+                .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
@@ -301,6 +401,63 @@ private struct ConversationMessageRow: View {
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(message.text, forType: .string)
+                }
+            }
+        }
+    }
+}
+
+/// A message sent from here that the log does not show yet, faded with a
+/// spinner as the chat's pending message is.
+private struct PendingConversationBubble: View {
+    let prompt: QueuedPrompt
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+            VStack(alignment: .trailing, spacing: 6) {
+                ConversationImageStrip(paths: prompt.imagePaths ?? [])
+                Text(prompt.body)
+                    .font(.app(.body))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+            }
+            .opacity(0.5)
+            .overlay(alignment: .leading) {
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(0.5)
+                    .offset(x: -24)
+            }
+            .frame(maxWidth: userBubbleMaxWidth, alignment: .trailing)
+        }
+    }
+}
+
+/// The images of a message: thumbnails when this machine can read them,
+/// a chip each otherwise (they live on the master that owns the card).
+private struct ConversationImageStrip: View {
+    let paths: [String]
+
+    var body: some View {
+        if !paths.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
+                    if let image = NSImage(contentsOfFile: path) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 72, height: 72)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .help((path as NSString).lastPathComponent)
+                    } else {
+                        Label("Image \(index + 1)", systemImage: "photo")
+                            .font(.app(.caption))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
                 }
             }
         }

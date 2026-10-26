@@ -31,6 +31,8 @@ struct ConversationSidebarSnapshotTests {
     func sidebarRows() throws {
         let directory = try #require(Self.directory)
         let conversations = try Self.log.map { ConversationLog.fold(try Data(contentsOf: URL(fileURLWithPath: $0))).map(\.summary) } ?? sample()
+        // A conversation is open: only its row is highlighted, not the card's.
+        let openId = conversations.first?.id
         let view = VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Circle().fill(Color.green).frame(width: 8, height: 8)
@@ -39,9 +41,9 @@ struct ConversationSidebarSnapshotTests {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18)))
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(openId == nil ? 0.18 : 0)))
             SidebarConversationRows(cardId: "card", conversations: conversations,
-                                    openId: conversations.first?.id, isCardSelected: true)
+                                    openId: openId, isCardSelected: true)
             Spacer()
         }
         .padding(10)

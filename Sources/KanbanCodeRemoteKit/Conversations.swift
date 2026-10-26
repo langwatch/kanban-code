@@ -97,12 +97,16 @@ public struct RemoteConversationMessage: Codable, Sendable, Equatable, Identifia
     public var role: RemoteConversationRole
     public var text: String
     public var at: Date
+    /// Paths of the images sent with the message, on the master that owns
+    /// the card. Another machine shows them only when it can read them.
+    public var images: [String]?
 
-    public init(id: String, role: RemoteConversationRole, text: String, at: Date) {
+    public init(id: String, role: RemoteConversationRole, text: String, at: Date, images: [String]? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.at = at
+        self.images = images?.isEmpty == true ? nil : images
     }
 }
 
@@ -163,9 +167,12 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
     /// `human` or `agent`, on `created` and `title`.
     public var by: String?
     public var archived: Bool?
+    /// On `message`: paths of its images on the owner.
+    public var images: [String]?
 
     public init(type: Kind, conv: String, at: Date = .now, id: String? = nil, role: RemoteConversationRole? = nil,
-                text: String? = nil, title: String? = nil, quote: String? = nil, by: String? = nil, archived: Bool? = nil) {
+                text: String? = nil, title: String? = nil, quote: String? = nil, by: String? = nil, archived: Bool? = nil,
+                images: [String]? = nil) {
         self.type = type
         self.conv = conv
         self.at = at
@@ -176,14 +183,16 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
         self.quote = quote
         self.by = by
         self.archived = archived
+        self.images = images?.isEmpty == true ? nil : images
     }
 
     public static func created(_ conv: String, title: String? = nil, quote: String? = nil, by: String = "human", at: Date = .now) -> Self {
         .init(type: .created, conv: conv, at: at, title: title, quote: quote, by: by)
     }
 
-    public static func message(_ conv: String, id: String, role: RemoteConversationRole, text: String, at: Date = .now) -> Self {
-        .init(type: .message, conv: conv, at: at, id: id, role: role, text: text)
+    public static func message(_ conv: String, id: String, role: RemoteConversationRole, text: String, at: Date = .now,
+                               images: [String]? = nil) -> Self {
+        .init(type: .message, conv: conv, at: at, id: id, role: role, text: text, images: images)
     }
 
     public static func title(_ conv: String, _ title: String, by: String = "human", at: Date = .now) -> Self {
@@ -268,8 +277,9 @@ public enum ConversationLog {
                 let text = event.text ?? ""
                 if let index = messages.firstIndex(where: { $0.id == id }) {
                     messages[index].text = text
+                    if let images = event.images { messages[index].images = images }
                 } else {
-                    messages.append(.init(id: id, role: role, text: text, at: event.at))
+                    messages.append(.init(id: id, role: role, text: text, at: event.at, images: event.images))
                 }
             case .title:
                 let t = event.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

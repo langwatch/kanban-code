@@ -1151,6 +1151,10 @@ struct ChatInputBar: View {
     }
 
     private func normalizeInlineImages(for newValue: String) {
+        // An image dropped on the window arrives with its marker already in the text.
+        if !usesInlineImageMarkers, !pastedImages.isEmpty, newValue.contains(PromptImageLayout.markerPrefix) {
+            usesInlineImageMarkers = true
+        }
         guard usesInlineImageMarkers else { return }
         if !newValue.contains(PromptImageLayout.markerPrefix) {
             pastedImages = []
