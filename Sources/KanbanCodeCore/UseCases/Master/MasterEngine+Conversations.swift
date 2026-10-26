@@ -100,11 +100,13 @@ extension MasterEngine {
         while !Task.isCancelled {
             let files = await Task.detached { conversationStore.scan() }.value
             var changed: Set<String> = []
-            for file in files where seen[file.path] != file {
+            // A log whose card is not on the board yet (links still loading
+            // at launch) stays unseen, so it loads once the card shows up.
+            for file in files where seen[file.path] != file && store.state.links[file.cardId] != nil {
                 seen[file.path] = file
                 changed.insert(file.cardId)
             }
-            for cardId in changed where store.state.links[cardId] != nil {
+            for cardId in changed {
                 reloadConversations(cardId: cardId)
             }
             try? await Task.sleep(for: interval)

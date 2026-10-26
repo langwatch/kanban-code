@@ -259,6 +259,21 @@ struct ConversationHostTests {
         for _ in 0..<100 where !condition() { try? await Task.sleep(for: .milliseconds(20)) }
     }
 
+    @Test("a log on disk loads once its card reaches the board, even when the watcher saw it first")
+    func watcherLoadsLogsOfCardsThatArriveLater() async throws {
+        let (_, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try engine.conversationStore.append(cardId: "card_late", [.created("calm-heron", title: "Later", by: "human")])
+        let watcher = Task { await engine.runConversationWatcher(interval: .milliseconds(20)) }
+        defer { watcher.cancel() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(store.state.conversations["card_late"] == nil)
+
+        store.dispatch(.createManualTask(Link(id: "card_late", name: "Late", projectPath: "/tmp/acme", column: .inProgress)))
+        await waitFor { store.state.conversations["card_late"] != nil }
+        #expect(store.state.conversations["card_late"]?.first?.title == "Later")
+    }
+
     @Test("start a conversation, send in it, the agent replies through the log, the human reads it")
     func roundTrip() async throws {
         let (host, engine, store, tmux, dir) = makeHost()
