@@ -147,13 +147,27 @@ struct ConversationScreen: View {
         }
     }
 
+    private func startRename() {
+        newTitle = model.conversation?.title ?? ""
+        renaming = true
+    }
+
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        // The title renames the conversation on a tap or a hold.
+        ToolbarItem(placement: .principal) {
+            Button(action: startRename) {
+                Text(model.title)
+                    .font(.headline)
+                    .lineLimit(1)
+            }
+            .tint(.primary)
+            .disabled(board.client == nil || !board.isOnline)
+            .accessibilityHint("Renames the conversation")
+            .accessibilityIdentifier("conversationTitle")
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                Button("Rename", systemImage: "pencil") {
-                    newTitle = model.conversation?.title ?? ""
-                    renaming = true
-                }
+                Button("Rename", systemImage: "pencil", action: startRename)
                 .accessibilityIdentifier("conversationRename")
                 Button("Archive", systemImage: "archivebox", role: .destructive) { archive() }
                     .accessibilityIdentifier("conversationArchive")

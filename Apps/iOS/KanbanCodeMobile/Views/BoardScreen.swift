@@ -20,6 +20,11 @@ struct BoardScreen: View {
     @State private var attentionFocus: String?
     @State private var actions: CardActionController
     @State private var expandedSections: Set<String> = []
+    /// The conversation being renamed from its row, and the title typed.
+    @State private var renameTarget: ConversationModel?
+    @State private var renamingConversation = false
+    @State private var newConversationTitle = ""
+    @State private var conversationError: String?
     /// Project name the board is narrowed to, "" for every project.
     @AppStorage("projectFilter.fleet") private var projectFilter = ""
 
@@ -52,6 +57,20 @@ struct BoardScreen: View {
                     }
                 }
                 .cardActions(actions)
+                .alert("Rename conversation", isPresented: $renamingConversation) {
+                    TextField("Title", text: $newConversationTitle)
+                        .accessibilityIdentifier("conversationTitleField")
+                    Button("Cancel", role: .cancel) {}
+                    Button("Rename") { renameConversation() }
+                        .accessibilityIdentifier("conversationRenameConfirm")
+                }
+                .alert("Something went wrong", isPresented: Binding(
+                    get: { conversationError != nil }, set: { if !$0 { conversationError = nil } }
+                )) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(conversationError ?? "")
+                }
         }
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
@@ -93,6 +112,43 @@ struct BoardScreen: View {
                     attentionFocus = nil
                     showAttention = true
                 }
+            }
+        }
+    }
+
+    @ViewBuilder private func conversationMenu(entry: FleetCard, conversation: RemoteConversation) -> some View {
+        let model = ConversationModel(cardId: entry.card.id, id: conversation.id, board: entry.master)
+        let reachable = entry.master.client != nil && entry.master.isOnline
+        Button("Rename", systemImage: "pencil") {
+            newConversationTitle = conversation.title ?? ""
+            renameTarget = model
+            renamingConversation = true
+        }
+        .disabled(!reachable)
+        .accessibilityIdentifier("conversationRename")
+        Button("Archive", systemImage: "archivebox", role: .destructive) {
+            Task {
+                do {
+                    try await model.archive()
+                } catch {
+                    conversationError = "Could not archive the conversation: \(error.localizedDescription)"
+                }
+            }
+        }
+        .disabled(!reachable)
+        .accessibilityIdentifier("conversationArchive")
+    }
+
+    /// Renames through the card's master; the row takes the new title at once.
+    private func renameConversation() {
+        guard let model = renameTarget else { return }
+        let title = newConversationTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        Task {
+            do {
+                try await model.rename(title)
+            } catch {
+                conversationError = "Could not rename the conversation: \(error.localizedDescription)"
             }
         }
     }
@@ -171,6 +227,7 @@ struct BoardScreen: View {
                                         ConversationRow(conversation: conversation)
                                     }
                                     .tint(.primary)
+                                    .contextMenu { conversationMenu(entry: entry, conversation: conversation) }
                                     .accessibilityIdentifier("conversation-\(entry.card.id)-\(conversation.id)")
                                 }
                             }

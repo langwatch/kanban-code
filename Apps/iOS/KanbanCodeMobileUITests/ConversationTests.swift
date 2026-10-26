@@ -80,6 +80,46 @@ final class ConversationTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(10) { !self.row("swift-otter").exists })
     }
 
+    /// Holding a conversation row offers Rename; the row and the conversation
+    /// take the new title, and the title in the conversation renames too.
+    func testRenameAConversationFromItsRow() throws {
+        let untitled = row("calm-heron")
+        XCTAssertTrue(untitled.waitForExistence(timeout: 15))
+        untitled.press(forDuration: 1.0)
+        let rename = app.buttons["conversationRename"]
+        XCTAssertTrue(rename.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["conversationArchive"].exists)
+        shot("90-conversation-row-menu")
+        rename.tap()
+        let field = app.alerts.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText("Release notes")
+        app.buttons["conversationRenameConfirm"].firstMatch.tap()
+        XCTAssertTrue(waitFor(10) { self.row("calm-heron").label.contains("Release notes") })
+        shot("91-conversation-renamed-row")
+
+        row("calm-heron").tap()
+        XCTAssertTrue(app.navigationBars["Release notes"].waitForExistence(timeout: 10))
+        let title = app.buttons["conversationTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "Release notes")
+
+        // The title renames it again, prefilled with the current one.
+        title.tap()
+        let again = app.alerts.textFields.firstMatch
+        XCTAssertTrue(again.waitForExistence(timeout: 5))
+        XCTAssertEqual(again.value as? String, "Release notes")
+        again.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        again.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 15) + "Release notes v2")
+        app.buttons["conversationRenameConfirm"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Release notes v2"].waitForExistence(timeout: 10))
+        shot("92-conversation-renamed-title")
+        goBack()
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        goBack()
+        XCTAssertTrue(waitFor(10) { self.row("calm-heron").label.contains("Release notes v2") })
+    }
+
     func testComposeButtonStartsAConversation() throws {
         openCard("card_wait")
         XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 10))
