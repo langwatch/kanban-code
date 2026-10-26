@@ -127,6 +127,8 @@ public final class AppState: @unchecked Sendable {
     /// first, archived ones included: from the card's log here, or from the
     /// copy of its owner's.
     public var conversations: [String: [RemoteConversation]] = [:]
+    /// The conversation each card's chat shows; a card not in it shows Main.
+    public var openConversations: [String: String] = [:]
     /// Single source of truth for which drawer is open. Only ONE thing can be
     /// selected at a time; the type system enforces that invariant. The legacy
     /// `selectedCardId` / `selectedChannelName` / `selectedDMParticipant`
@@ -782,6 +784,8 @@ public enum Action: Sendable {
     case peerCardRead(cardId: String, state: PeerCardState?)
     /// A card's conversation log was read again.
     case conversationsLoaded(cardId: String, conversations: [RemoteConversation])
+    /// Shows a conversation in the card's chat, or Main for nil.
+    case openConversation(cardId: String, conversationId: String?)
 
     // Settings / misc
     case settingsLoaded(projects: [Project], excludedPaths: [String], remote: RemoteSettings?, remoteMode: RemoteMode = .boxd, boxd: BoxdSettings? = nil)
@@ -2935,6 +2939,10 @@ public enum Reducer {
 
         case .peerCardRead(let cardId, let card):
             if state.peerCards[cardId] != card { state.peerCards[cardId] = card }
+            return []
+
+        case .openConversation(let cardId, let conversationId):
+            if state.openConversations[cardId] != conversationId { state.openConversations[cardId] = conversationId }
             return []
 
         case .conversationsLoaded(let cardId, let conversations):

@@ -14,6 +14,8 @@ struct ChatMessageView: View, Equatable {
     var onFork: (() -> Void)?
     var onCheckpoint: ((ConversationTurn) -> Void)?
     var onSendAnswer: ((String) -> Void)?
+    /// Starts a conversation that continues from this agent message.
+    var onContinueInConversation: ((String) -> Void)?
     var suppressBackground: Bool = false
     var highlightText: String? = nil
     var isCurrentMatch: Bool = false
@@ -120,6 +122,12 @@ struct ChatMessageView: View, Equatable {
                     VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
                         if turn.role == "user" {
                             userBubble
+                        } else if let onContinueInConversation, !turnText.isEmpty {
+                            assistantMessage
+                                .contextMenu {
+                                    Button("Continue in New Conversation") { onContinueInConversation(turnText) }
+                                    Button("Copy") { onCopy?(turnText) }
+                                }
                         } else {
                             assistantMessage
                         }
@@ -206,6 +214,13 @@ struct ChatMessageView: View, Equatable {
                             truncatedSystemText(block.text, blockIndex: i, color: .secondaryLabelColor)
                         } else if block.text.contains("[Request interrupted by user") {
                             truncatedSystemText(block.text, blockIndex: i, color: .secondaryLabelColor)
+                        } else if let tagged = ConversationPrompt.parse(block.text) {
+                            // A message of a conversation: its name, then the text as typed.
+                            Label(tagged.title ?? tagged.id, systemImage: "bubble.left.and.bubble.right")
+                                .font(.app(.caption))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            truncatedTextBlock(tagged.text, blockIndex: i, font: .app(.body))
                         } else {
                             truncatedTextBlock(block.text, blockIndex: i, font: .app(.body))
                         }
@@ -536,6 +551,12 @@ struct ChatMessageView: View, Equatable {
             if let onCheckpoint {
                 ActionButton(icon: "clock.arrow.circlepath", help: "Checkpoint") {
                     onCheckpoint(turn)
+                }
+            }
+
+            if turn.role != "user", let onContinueInConversation, !turnText.isEmpty {
+                ActionButton(icon: "arrow.turn.down.right", help: "Continue in new conversation") {
+                    onContinueInConversation(turnText)
                 }
             }
 

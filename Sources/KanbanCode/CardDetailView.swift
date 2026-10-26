@@ -1,6 +1,7 @@
 import SwiftUI
 import KanbanCodeCore
 import MarkdownUI
+import KanbanCodeRemoteKit
 import Darwin
 
 /// Bundles tab-management notification listeners into a single ViewModifier
@@ -583,6 +584,17 @@ struct CardDetailView: View {
     // MARK: - Terminal View
 
     /// Whether the Claude tab is selected (nil = Claude tab, no browser tab selected).
+    /// The card's conversations (docs/conversations.md), most recent first.
+    private var cardConversations: [RemoteConversation] {
+        AppComposition.shared.store.state.conversations[card.id] ?? []
+    }
+
+    /// The conversation the card's chat shows, nil for Main.
+    private var openConversation: RemoteConversation? {
+        guard let id = AppComposition.shared.store.state.openConversations[card.id] else { return nil }
+        return cardConversations.first { $0.id == id }
+    }
+
     private var isClaudeTabSelected: Bool {
         selectedTerminalSession == nil && selectedBrowserTabId == nil
     }
@@ -891,6 +903,11 @@ struct CardDetailView: View {
                     Divider()
                 }
 
+                if isClaudeTabSelected, card.link.sessionLink != nil || card.link.tmuxLink != nil {
+                    ConversationStrip(cardId: card.id, conversations: cardConversations, openId: openConversation?.id)
+                    Divider()
+                }
+
                 // Content area: either ChatView or TerminalContainerView (not both)
                 ZStack {
                     if preferChatView && isClaudeTabSelected {
@@ -984,10 +1001,14 @@ struct CardDetailView: View {
                             .allowsHitTesting(false)
                             .transition(.opacity)
                     }
+                    if isClaudeTabSelected, let conversation = openConversation {
+                        ConversationChatView(card: card, conversation: conversation)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
                 // Floating chat/terminal toggle — only on assistant tab
                 .overlay(alignment: .topTrailing) {
-                    if isClaudeTabSelected {
+                    if isClaudeTabSelected, openConversation == nil {
                     Button {
                         preferChatView.toggle()
                         if !preferChatView {

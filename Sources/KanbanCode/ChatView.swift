@@ -156,6 +156,9 @@ struct ChatView: View {
                             if let answerCard = AppServices.answerCard, await answerCard(cardId, answer) { return }
                             onSendPrompt(answer, [])
                         }
+                    },
+                    onContinueInConversation: cardId.isEmpty ? nil : { [cardId] text in
+                        ConversationActions.start(cardId: cardId, quote: text)
                     }
                 )
 
@@ -344,6 +347,8 @@ private struct ChatMessageList: View {
     /// Room left at the top of the list for what sits over it.
     var topInset: CGFloat = 0
     var onSendAnswer: ((String) -> Void)?
+    /// Starts a conversation that continues from an agent message.
+    var onContinueInConversation: ((String) -> Void)?
 
     /// The row a catch-up link landed on, tinted for a moment.
     @State private var highlightedLineNumber: Int?
@@ -1062,6 +1067,7 @@ private struct ChatMessageList: View {
             onFork: onFork,
             onCheckpoint: onCheckpoint,
             onSendAnswer: onSendAnswer,
+            onContinueInConversation: onContinueInConversation,
             highlightText: activeQuery.isEmpty ? nil : activeQuery,
             isCurrentMatch: currentMatchLineNumber == turn.lineNumber,
             sessionPath: sessionPath,
