@@ -328,3 +328,67 @@ struct ConversationHostTests {
         #expect(ConversationLog.fold(whole.data).first?.summary.title == "One")
     }
 }
+
+/// A paste that takes a while, recording whether two ran at once.
+private final class SlowPaste: TmuxManagerPort, @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = 0
+    private var _overlapped = false
+    private var _order: [String] = []
+
+    var overlapped: Bool { lock.lock(); defer { lock.unlock() }; return _overlapped }
+    var order: [String] { lock.lock(); defer { lock.unlock() }; return _order }
+
+    private func begin(_ text: String) {
+        lock.lock(); defer { lock.unlock() }
+        active += 1
+        if active > 1 { _overlapped = true }
+        _order.append(text)
+    }
+
+    private func end() {
+        lock.lock(); defer { lock.unlock() }
+        active -= 1
+    }
+
+    private func slow(_ text: String) async {
+        begin(text)
+        try? await Task.sleep(for: .milliseconds(80))
+        end()
+    }
+
+    func listSessions() async throws -> [TmuxSession] { [] }
+    func createSession(name: String, path: String, command: String?) async throws {}
+    func killSession(name: String) async throws {}
+    func findSessionForWorktree(sessions: [TmuxSession], worktreePath: String, branch: String?) -> TmuxSession? { nil }
+    func sendPrompt(to sessionName: String, text: String) async throws { await slow(text) }
+    func pastePrompt(to sessionName: String, text: String) async throws { await slow(text) }
+    func pasteText(to sessionName: String, text: String) async throws {}
+    func submitPrompt(to sessionName: String) async throws {}
+    func capturePane(sessionName: String) async throws -> String { "" }
+    func sendBracketedPaste(to sessionName: String) async throws {}
+    func isAvailable() async -> Bool { true }
+}
+
+@Suite("Prompts to one session")
+struct OnePromptAtATimeTests {
+    @Test("Prompts sent at once to a session are pasted one after the other, in order")
+    func serialPerSession() async {
+        let tmux = SlowPaste()
+        let handler = EffectHandler(
+            coordinationStore: CoordinationStore(basePath: NSTemporaryDirectory() + "kanban-serial-\(UUID().uuidString)"),
+            tmuxAdapter: tmux
+        )
+        await withTaskGroup(of: Void.self) { group in
+            for text in ["first", "second", "third"] {
+                group.addTask {
+                    await handler.execute(.sendPromptToTmux(sessionName: "claude-1", promptBody: text, assistant: .claude),
+                                          dispatch: { _ in })
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        #expect(!tmux.overlapped)
+        #expect(tmux.order == ["first", "second", "third"])
+    }
+}

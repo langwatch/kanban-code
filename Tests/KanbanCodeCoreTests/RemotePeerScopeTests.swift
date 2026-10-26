@@ -28,6 +28,9 @@ struct RemotePeerScopeTests {
         ("DELETE", ["cards", "c1", "queue", "p1"]),
         ("POST", ["cards", "c1", "side-chat"]), ("GET", ["cards", "c1", "side-chat", "r1"]),
         ("DELETE", ["cards", "c1", "side-chat", "r1"]),
+        ("GET", ["cards", "c1", "conversations"]), ("POST", ["cards", "c1", "conversations"]),
+        ("GET", ["cards", "c1", "conversations", "swift-otter"]), ("PATCH", ["cards", "c1", "conversations", "swift-otter"]),
+        ("GET", ["cards", "c1", "conversations-raw"]),
         ("GET", ["cards", "c1", "slash-commands"]), ("POST", ["cards", "c1", "pasted-image"]),
     ]
 

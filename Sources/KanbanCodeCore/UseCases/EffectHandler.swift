@@ -70,6 +70,32 @@ public actor EffectHandler {
     private var bursts: [String: Burst] = [:]
     private let burstWindow: TimeInterval = 2.0
 
+    // MARK: - One prompt at a time per session
+    //
+    // Pasting a prompt waits until the assistant took it. Two prompts sent
+    // at once to the same session would otherwise land in one input box as
+    // a single message, so each session delivers them in order.
+    private var sendingSessions: Set<String> = []
+    private var sendWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    private func acquireSend(_ sessionName: String) async {
+        guard sendingSessions.contains(sessionName) else {
+            sendingSessions.insert(sessionName)
+            return
+        }
+        await withCheckedContinuation { sendWaiters[sessionName, default: []].append($0) }
+    }
+
+    private func releaseSend(_ sessionName: String) {
+        guard var waiters = sendWaiters[sessionName], !waiters.isEmpty else {
+            sendingSessions.remove(sessionName)
+            return
+        }
+        let next = waiters.removeFirst()
+        sendWaiters[sessionName] = waiters.isEmpty ? nil : waiters
+        next.resume()
+    }
+
     public init(
         coordinationStore: CoordinationStore,
         tmuxAdapter: TmuxManagerPort? = nil,
@@ -231,6 +257,8 @@ public actor EffectHandler {
             humanMessageLog.append(cardId: cardId, HumanMessageRecord(at: at, text: text, sessionId: sessionId))
 
         case .sendPromptToTmux(let sessionName, let promptBody, let assistant, let human):
+            await acquireSend(sessionName)
+            defer { releaseSend(sessionName) }
             do {
                 // A prompt to a session on a paused machine brings the
                 // machine back first; the prompt itself never wakes it.
@@ -254,6 +282,8 @@ public actor EffectHandler {
             }
 
         case .sendPromptWithImagesToTmux(let sessionName, let promptBody, let imagePaths, let assistant, let human):
+            await acquireSend(sessionName)
+            defer { releaseSend(sessionName) }
             do {
                 guard let tmux = tmuxAdapter else { return }
                 guard await remoteMachines?.resumeMachine(forSession: sessionName) != false else {
