@@ -705,6 +705,22 @@ async function readSecretFromStdin(name: string): Promise<string> {
   });
 }
 
+/**
+ * The released values, plus each `project/environment/KEY` secret under its bare `KEY` as well,
+ * unless two released secrets share that key: `kv run laze/prod/QA_PASSWORD -- cmd` gives cmd
+ * both `laze/prod/QA_PASSWORD` and `QA_PASSWORD`.
+ */
+export function withShortNames(values: Record<string, string>): Record<string, string> {
+  const byKey = new Map<string, string[]>();
+  for (const name of Object.keys(values)) {
+    const { key, project } = parseSecretName(name);
+    if (project && !(key in values)) byKey.set(key, [...(byKey.get(key) ?? []), name]);
+  }
+  const out = { ...values };
+  for (const [key, names] of byKey) if (names.length === 1) out[key] = values[names[0]];
+  return out;
+}
+
 function runChild(argv: string[], extraEnv: Record<string, string>): Promise<number> {
   if (argv.length === 0) throw new VaultCliError("kv: give the command after --");
   return new Promise((resolveCode) => {
@@ -942,7 +958,7 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       refuseMoved(io, before, "run", ctx);
       const r = await client.decide("release", { mode: "run", names: before, command: commandLine(after), reason, ...ctx });
       if (r.status !== "granted") throw deniedError(r);
-      return runChild(after, r.values ?? {});
+      return runChild(after, withShortNames(r.values ?? {}));
     }
 
     case "env": {

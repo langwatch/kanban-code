@@ -295,6 +295,8 @@ kv import [--apply]
 kv exec-provider                             OpenClaw exec SecretRef provider
 ```
 
+`kv run` sets each secret under its full name, and a `project/environment/KEY` secret under its bare `KEY` as well, unless two released secrets share that key: `kv run laze/prod/QA_MAC_PASSWORD -- cmd` gives cmd `QA_MAC_PASSWORD` too.
+
 `kv exec-provider` speaks OpenClaw's exec provider protocol (`{"protocolVersion":1,"ids":[...]}` on stdin, `{"values":{...},"errors":{...}}` on stdout); each id is a vault secret name. It never waits on a human: a secret that needs approval comes back as `NEEDS_APPROVAL` and its request stays open for the next `openclaw secrets reload`.
 
 `kv rm` deletes secrets (`POST /v1/vault/delete`): the names given, or with `--plan` the names in a file (a JSON array, or one name per line, `#` for comments). All of them are one approval with Face ID, and the reason is required. `--dry-run` prints what each name would do (`delete`, `missing`, or the secret an earlier name resolves to) and asks nothing. A deleted secret becomes a tombstone that reaches the other replica like any edit, and each one gets an audit line with action `delete`. Its aliases stop resolving.
