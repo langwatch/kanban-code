@@ -183,6 +183,7 @@ final class AppComposition {
         let mirror = PeerTranscriptMirror(engine: engine)
         Task { await mirror.run() }
         Task { await engine.runConversationWatcher() }
+        WindowSnapshots.start()
         // Channels live on the channels home when it is another master.
         Task { await effectHandler.setChannelsHome { [weak engine] in await engine?.channelsHomeRoute() } }
         Task { await engine.runChannelsMirror() }
