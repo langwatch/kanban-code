@@ -97,6 +97,17 @@ import {
 } from "./export.js";
 import { parseDuration, runShare } from "./share-cli.js";
 import {
+  ConversationError,
+  createConversation,
+  formatConversationDetail,
+  formatConversationList,
+  listCardConversations,
+  replyToConversation,
+  setConversationTitle,
+  showConversation,
+  type ConversationContext,
+} from "./conversations.js";
+import {
   assertOwnedSubagent,
   buildSubagentPrompt,
   currentCardOrThrow,
@@ -2399,6 +2410,112 @@ program
     program.help({ error: true });
   });
 
+// ── kanban reply / kanban conversation ──────────────────────────────
+
+function conversationContext(cardQuery: string | undefined): ConversationContext {
+  const links = readLinks();
+  const card = cardQuery ? findCard(links, cardQuery) : callerCard(links);
+  if (!card) {
+    throw new ConversationError(
+      cardQuery ? `Card not found: ${cardQuery}` : "Not inside a card session: run this in the card's session or pass --card <card>."
+    );
+  }
+  return { card, localMachineId: readLocalMachine()?.id };
+}
+
+function runConversationCommand(action: () => Promise<void> | void): Promise<void> {
+  return Promise.resolve()
+    .then(action)
+    .catch((error) => {
+      console.error(String(error instanceof Error ? error.message : error));
+      process.exitCode = 1;
+    });
+}
+
+program
+  .command("reply")
+  .description("Reply to a conversation of this card (text, or - for stdin)")
+  .argument("<conversation>", "Conversation id, such as swift-otter")
+  .argument("[text...]", "Reply text; - or nothing reads stdin")
+  .option("--title <title>", "Set the conversation's title")
+  .option("--card <card>", "Act on another card")
+  .option("-j, --json", "Output as JSON")
+  .action((conv: string, text: string[], opts: { title?: string; card?: string; json?: boolean }) =>
+    runConversationCommand(async () => {
+      const ctx = conversationContext(opts.card);
+      const body = text.length === 0 && opts.title ? "" : await readMessageFromArgsOrStdin(text);
+      const result = replyToConversation(ctx, conv, body, opts.title);
+      if (opts.json) return output(result, { json: true });
+      const parts = [];
+      if (result.message) parts.push(`Replied in ${conv}`);
+      if (result.title) parts.push(`${result.message ? "titled" : `Titled ${conv}`} "${result.title}"`);
+      output(parts.join(", "), { json: false });
+    })
+  );
+
+const conversationCmd = program
+  .command("conversation")
+  .description("List, start, show and rename the conversations of this card");
+
+conversationCmd
+  .command("list")
+  .description("List this card's conversations, most recent first")
+  .option("--all", "Include archived conversations")
+  .option("--card <card>", "Act on another card")
+  .option("-j, --json", "Output as JSON")
+  .action((opts: { all?: boolean; card?: string; json?: boolean }) =>
+    runConversationCommand(() => {
+      const summaries = listCardConversations(conversationContext(opts.card), Boolean(opts.all));
+      output(opts.json ? summaries : formatConversationList(summaries), { json: opts.json });
+    })
+  );
+
+conversationCmd
+  .command("new")
+  .description("Start a conversation; with a message the agent speaks first")
+  .argument("[message...]", "First message; - reads stdin")
+  .option("--title <title>", "Title of the conversation")
+  .option("--card <card>", "Act on another card")
+  .option("-j, --json", "Output as JSON")
+  .action((message: string[], opts: { title?: string; card?: string; json?: boolean }) =>
+    runConversationCommand(async () => {
+      const ctx = conversationContext(opts.card);
+      const explicitStdin = message.length === 1 && message[0] === "-";
+      const body = message.length === 0 ? "" : explicitStdin ? await readMessageFromArgsOrStdin(message) : message.join(" ");
+      const result = createConversation(ctx, { title: opts.title, message: body });
+      output(opts.json ? result : result.conversation.id, { json: opts.json });
+    })
+  );
+
+conversationCmd
+  .command("show")
+  .description("Show a conversation's messages, oldest first")
+  .argument("<conversation>", "Conversation id")
+  .option("--limit <n>", "Only the last n messages")
+  .option("--card <card>", "Act on another card")
+  .option("-j, --json", "Output as JSON")
+  .action((conv: string, opts: { limit?: string; card?: string; json?: boolean }) =>
+    runConversationCommand(() => {
+      const limit = opts.limit ? parseInt(opts.limit, 10) : undefined;
+      const detail = showConversation(conversationContext(opts.card), conv, limit);
+      output(opts.json ? detail : formatConversationDetail(detail), { json: opts.json });
+    })
+  );
+
+conversationCmd
+  .command("title")
+  .description("Set a conversation's title")
+  .argument("<conversation>", "Conversation id")
+  .argument("<title...>", "New title")
+  .option("--card <card>", "Act on another card")
+  .option("-j, --json", "Output as JSON")
+  .action((conv: string, title: string[], opts: { card?: string; json?: boolean }) =>
+    runConversationCommand(() => {
+      const summary = setConversationTitle(conversationContext(opts.card), conv, title.join(" "));
+      output(opts.json ? summary : `Titled ${conv} "${summary.title}"`, { json: opts.json });
+    })
+  );
+
 registerRemoteCommands(program);
 
 // Listed for help only: `kanban vault ...` is handed to kv before commander parses.
@@ -2420,6 +2537,8 @@ sortTopLevelCommands([
   "subagent",
   "parent",
   "send",
+  "reply",
+  "conversation",
 ]);
 
 // ── Vault alias ──────────────────────────────────────────────────────
