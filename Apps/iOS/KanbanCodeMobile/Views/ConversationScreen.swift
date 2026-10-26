@@ -23,6 +23,7 @@ struct FleetConversationScreen: View {
 /// the conversation named.
 struct ConversationScreen: View {
     let board: BoardModel
+    private let focusesComposer: Bool
     @State private var model: ConversationModel
     @State private var draft: ComposerDraft
     @State private var sendError: String?
@@ -38,6 +39,7 @@ struct ConversationScreen: View {
 
     init(route: ConversationRoute, board: BoardModel, model: ConversationModel? = nil) {
         self.board = board
+        focusesComposer = route.focusesComposer
         _model = State(initialValue: model ?? ConversationModel(cardId: route.cardId, id: route.id, board: board))
         // Its own draft, apart from the card's main chat.
         _draft = State(initialValue: board.client == nil
@@ -57,7 +59,8 @@ struct ConversationScreen: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if let quote = model.conversation?.quote, !quote.isEmpty {
-                        QuotedMessage(text: quote)
+                        QuotedMessage(text: quote, fromHuman: model.conversation?.quotesHuman == true,
+                                      reply: model.conversation?.quoteReply)
                     }
                     ForEach(model.shown) { message in
                         ConversationMessageView(message: message, pendingImages: model.pendingImages[message.id] ?? [])
@@ -87,6 +90,12 @@ struct ConversationScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomBar
                 .background(Color(.systemBackground))
+        }
+        .task {
+            guard focusesComposer else { return }
+            // After the push, so the keyboard comes up with the screen in place.
+            try? await Task.sleep(for: .milliseconds(450))
+            composerFocused = true
         }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -302,24 +311,20 @@ struct ConversationMessageView: View {
     }
 }
 
-/// The agent message a conversation continues from, at its top.
+/// The message a conversation continues from, at its top: an agent
+/// message, or one of the human's with the agent's reply to it.
 struct QuotedMessage: View {
     let text: String
-    @State private var expanded = false
+    var fromHuman = false
+    var reply: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Continued from", systemImage: "arrowshape.turn.up.left")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            MarkdownText(text: expanded || text.count <= 600 ? text : String(text.prefix(600)) + "…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            if text.count > 600 {
-                Button(expanded ? "Show less" : "Show all") {
-                    withAnimation(.snappy) { expanded.toggle() }
-                }
-                .font(.caption.weight(.medium))
+        VStack(alignment: .leading, spacing: 10) {
+            QuotedPart(label: fromHuman ? "Continued from your message" : "Continued from",
+                       systemImage: "arrowshape.turn.up.left", text: text)
+            if fromHuman, let reply, !reply.isEmpty {
+                QuotedPart(label: "and the reply", systemImage: "arrowshape.turn.up.right", text: reply)
+                    .accessibilityIdentifier("conversationQuoteReply")
             }
         }
         .padding(.leading, 12)
@@ -332,8 +337,32 @@ struct QuotedMessage: View {
                 .frame(width: 3)
         }
         .background(Color(.secondarySystemBackground).opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversationQuote")
+    }
+}
+
+/// A label and a quoted text, cut after 600 characters until asked.
+private struct QuotedPart: View {
+    let label: String
+    let systemImage: String
+    let text: String
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(label, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            MarkdownText(text: expanded || text.count <= 600 ? text : String(text.prefix(600)) + "…")
+            if text.count > 600 {
+                Button(expanded ? "Show less" : "Show all") {
+                    withAnimation(.snappy) { expanded.toggle() }
+                }
+                .font(.caption.weight(.medium))
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

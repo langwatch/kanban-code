@@ -96,6 +96,37 @@ final class ConversationTests: KanbanUITestCase {
         shot("85-new-conversation")
     }
 
+    /// The human's own message continues too: the new conversation quotes it
+    /// with the agent's reply, and opens ready to write in.
+    func testHoldYourMessageToContinueItWithTheReply() throws {
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap()
+        composer.typeText("Plan the theme toggle")
+        app.buttons["send"].tap()
+        XCTAssertTrue(message(containing: "Got it: Plan the theme toggle").waitForExistence(timeout: 20))
+        // The bubble, not the reply that repeats its text.
+        let mine = app.textViews.matching(NSPredicate(format: "label == %@", "Plan the theme toggle")).firstMatch
+        XCTAssertTrue(mine.waitForExistence(timeout: 10))
+        // The keyboard goes away first: the chat moves when it does.
+        tapConversation()
+        XCTAssertTrue(waitFor(5) { !self.app.keyboards.firstMatch.exists })
+        mine.press(forDuration: 1.0)
+        let item = app.menuItems["Continue in new conversation"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        shot("92-continue-your-message-menu")
+        item.tap()
+        XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
+        let quote = element("conversationQuote")
+        XCTAssertTrue(quote.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Continued from your message"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["and the reply"].exists)
+        XCTAssertTrue(message(containing: "Got it: Plan the theme toggle").exists)
+        // The composer has the keyboard.
+        XCTAssertTrue(waitFor(5) { (self.composer.value(forKey: "hasKeyboardFocus") as? Bool) == true })
+        shot("93-continued-your-message")
+    }
+
     func testHoldAnAgentMessageToContinueInANewConversation() throws {
         openCard("card_wait")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))

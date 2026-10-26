@@ -623,7 +623,8 @@ final class DemoHost: RemoteControlHost {
         let c = try cardState(cardId)
         let existing = Set(ConversationLog.fold(c.conversationLog).map(\.summary.id))
         let id = ConversationSlug.generate(existing: existing)
-        appendConversation(cardId, [.created(id, title: request.title, quote: request.quote)])
+        appendConversation(cardId, [.created(id, title: request.title, quote: request.quote,
+                                             quoteRole: request.quoteRole, quoteReply: request.quoteReply)])
         guard let created = thread(try cardState(cardId), id) else { throw RemoteHostError.notFound("conversation \(id)") }
         return created.summary
     }

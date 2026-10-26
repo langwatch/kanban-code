@@ -6,6 +6,8 @@ import KanbanCodeRemoteKit
 struct ConversationRoute: Hashable, Identifiable {
     let cardId: String
     let id: String
+    /// Opens with the keyboard up, to write the first message.
+    var focusesComposer = false
 }
 
 /// One conversation of a card (docs/conversations.md): its messages as the

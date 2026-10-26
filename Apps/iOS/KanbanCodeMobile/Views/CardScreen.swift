@@ -85,7 +85,7 @@ struct CardScreen: View {
                 case .chat:
                     ChatPane(card: card, transcript: transcript, board: board, draft: draft, onResume: resume,
                              onInterrupt: { Task { await interrupt(card) } },
-                             onContinueInConversation: supportsConversations ? { startConversation(quote: $0) } : nil)
+                             onContinueInConversation: supportsConversations ? { startConversation($0, focusComposer: true) } : nil)
                 case .terminal:
                     if showFullTerminal {
                         Color(white: 0.07)
@@ -224,7 +224,7 @@ struct CardScreen: View {
         if supportsConversations, tab == .chat {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    startConversation(quote: nil)
+                    startConversation(RemoteConversationCreate())
                 } label: {
                     Label("New conversation", systemImage: "square.and.pencil")
                 }
@@ -252,20 +252,20 @@ struct CardScreen: View {
         board.client != nil && board.supports(RemoteAPI.Feature.conversations)
     }
 
-    /// Starts a conversation, continuing an agent message when `quote` is
+    /// Starts a conversation, continuing a message when the request quotes
     /// one, and opens it.
-    private func startConversation(quote: String?) {
+    private func startConversation(_ request: RemoteConversationCreate, focusComposer: Bool = false) {
         guard let client = board.client, !isCreatingConversation else { return }
         isCreatingConversation = true
         Task {
             defer { isCreatingConversation = false }
             do {
-                let conversation = try await client.createConversation(cardId: cardId, RemoteConversationCreate(quote: quote))
+                let conversation = try await client.createConversation(cardId: cardId, request)
                 if var card = board.card(id: cardId), !card.conversations.contains(where: { $0.id == conversation.id }) {
                     card.conversations.insert(conversation, at: 0)
                     board.upsert(card)
                 }
-                openConversation = ConversationRoute(cardId: cardId, id: conversation.id)
+                openConversation = ConversationRoute(cardId: cardId, id: conversation.id, focusesComposer: focusComposer)
             } catch {
                 actionError = "Could not start a conversation: \(error.localizedDescription)"
             }

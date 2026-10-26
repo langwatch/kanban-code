@@ -8,9 +8,9 @@ struct ChatPane: View {
     let draft: ComposerDraft
     let onResume: () -> Void
     let onInterrupt: () -> Void
-    /// Starts a conversation that continues an agent message; nil when the
-    /// master keeps no conversations.
-    var onContinueInConversation: ((String) -> Void)? = nil
+    /// Starts a conversation that continues a message; nil when the master
+    /// keeps no conversations.
+    var onContinueInConversation: ((RemoteConversationCreate) -> Void)? = nil
 
     @State private var sendError: String?
     @State private var notice: String?
@@ -230,11 +230,35 @@ struct ChatPane: View {
     }
 
     private func continueItem(for message: RemoteMessage) -> SelectableTextMenuItem? {
-        guard message.role == .assistant, let onContinueInConversation else { return nil }
-        let text = message.text
-        return SelectableTextMenuItem(title: "Continue in new conversation", systemImage: "square.and.pencil") {
-            onContinueInConversation(text)
+        guard let onContinueInConversation, !message.id.hasPrefix("pending-") else { return nil }
+        let request: RemoteConversationCreate
+        switch message.role {
+        case .assistant:
+            request = RemoteConversationCreate(quote: message.text)
+        case .user:
+            // The human's own words, without the header of the conversation
+            // the prompt came from, and what the agent answered to it.
+            let text = ConversationPrompt.parse(message.text)?.text ?? message.text
+            request = RemoteConversationCreate(quote: text, quoteRole: .human, quoteReply: reply(to: message))
+        default:
+            return nil
         }
+        return SelectableTextMenuItem(title: "Continue in new conversation", systemImage: "square.and.pencil") {
+            onContinueInConversation(request)
+        }
+    }
+
+    /// The agent's text after a human message, up to the next human
+    /// message, or nil when it has not answered yet.
+    private func reply(to message: RemoteMessage) -> String? {
+        let messages = transcript.messages
+        guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return nil }
+        var parts: [String] = []
+        for next in messages[(index + 1)...] {
+            if next.role == .user { break }
+            if next.role == .assistant, !next.text.isEmpty { parts.append(next.text) }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     private var queuedTexts: Set<String> {
