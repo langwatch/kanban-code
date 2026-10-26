@@ -49,12 +49,44 @@ enum WindowSnapshots {
         let windows = NSApp.windows.filter { $0.isVisible && $0.frame.width > 300 && $0.frame.height > 200 }
         for (index, window) in windows.enumerated() {
             guard let view = window.contentView?.superview ?? window.contentView,
-                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            guard let png = bitmap.representation(using: .png, properties: [:]) else { continue }
+                  let png = layerPNG(of: view) ?? cachedPNG(of: view) else { continue }
             let file = index == 0 ? "\(name).png" : "\(name)-\(index).png"
             try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(file))
         }
         KanbanCodeLog.info("snapshots", "\(name): \(windows.count) window(s)")
+    }
+
+    /// Renders the layer tree, which holds what SwiftUI and glass draw;
+    /// `cacheDisplay` leaves those parts blank.
+    private static func layerPNG(of view: NSView) -> Data? {
+        guard let layer = view.layer else { return nil }
+        let scale = view.window?.backingScaleFactor ?? 2
+        let width = Int(view.bounds.width * scale), height = Int(view.bounds.height * scale)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        layer.render(in: context)
+        // The sidebar list draws through a backdrop the layer render skips:
+        // draw each scroll view over its place.
+        for visible in descendants(of: view).filter({ $0 is NSScrollView && !$0.isHiddenOrHasHiddenAncestor }) {
+            guard let bitmap = visible.bitmapImageRepForCachingDisplay(in: visible.bounds),
+                  let cg = { visible.cacheDisplay(in: visible.bounds, to: bitmap); return bitmap.cgImage }() else { continue }
+            var rect = visible.convert(visible.bounds, to: view)
+            if view.isFlipped { rect.origin.y = view.bounds.height - rect.maxY }
+            context.draw(cg, in: rect)
+        }
+        guard let image = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+
+    private static func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    private static func cachedPNG(of view: NSView) -> Data? {
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap.representation(using: .png, properties: [:])
     }
 }
