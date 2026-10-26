@@ -15,7 +15,7 @@ extension MasterEngine {
     }
 
     /// Starts a conversation on the card: an id of two words, no title yet
-    /// unless one is given, and the agent message it continues from.
+    /// unless one is given, and the message it continues from.
     public func createConversation(cardId: String, _ request: RemoteConversationCreate,
                                    by: String = "human") async throws -> RemoteConversation {
         if let owner = await ownerClient(forCard: cardId) {
@@ -28,8 +28,10 @@ extension MasterEngine {
         let id = ConversationSlug.generate(existing: existing)
         let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let quote = request.quote?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reply = request.quoteReply?.trimmingCharacters(in: .whitespacesAndNewlines)
         try appendConversation(cardId: cardId, [.created(id, title: title?.isEmpty == false ? title : nil,
-                                                         quote: quote?.isEmpty == false ? quote : nil, by: by)])
+                                                         quote: quote?.isEmpty == false ? quote : nil, by: by,
+                                                         quoteRole: request.quoteRole, quoteReply: reply)])
         guard let created = store.state.conversations[cardId]?.first(where: { $0.id == id }) else {
             throw RemoteHostError.conflict("the conversation was not written")
         }

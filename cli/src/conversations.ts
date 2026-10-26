@@ -19,7 +19,16 @@ import type { Link } from "./types.js";
 export type ConversationRole = "human" | "agent";
 
 export type ConversationEvent =
-  | { type: "created"; conv: string; at: string; by: ConversationRole; quote?: string; title?: string }
+  | {
+      type: "created";
+      conv: string;
+      at: string;
+      by: ConversationRole;
+      quote?: string;
+      quoteRole?: ConversationRole;
+      quoteReply?: string;
+      title?: string;
+    }
   | { type: "message"; conv: string; id: string; role: ConversationRole; text: string; at: string }
   | { type: "title"; conv: string; title: string; at: string; by: ConversationRole }
   | { type: "read"; conv: string; at: string }
@@ -39,6 +48,10 @@ export interface Conversation {
   createdAt: string;
   createdBy?: ConversationRole;
   quote?: string;
+  /** Who wrote `quote`; absent is the agent. */
+  quoteRole?: ConversationRole;
+  /** With a quote of the human's: the agent's answer to it. */
+  quoteReply?: string;
   archived: boolean;
   lastReadAt?: string;
   messages: ConversationMessage[];
@@ -56,6 +69,8 @@ export interface ConversationSummary {
   waiting: boolean;
   archived: boolean;
   quote?: string;
+  quoteRole?: ConversationRole;
+  quoteReply?: string;
   /** The agent wrote in it at least once. */
   replied: boolean;
 }
@@ -107,7 +122,12 @@ export function foldConversations(logText: string): Conversation[] {
         target.createdAt = at;
         if (isRole(raw.by)) target.createdBy = raw.by;
         const quote = str(raw.quote);
-        if (quote) target.quote = quote;
+        if (quote) {
+          target.quote = quote;
+          if (isRole(raw.quoteRole)) target.quoteRole = raw.quoteRole;
+          const reply = str(raw.quoteReply);
+          if (reply) target.quoteReply = reply;
+        }
         const title = str(raw.title)?.trim();
         if (title) target.title = title;
         break;
@@ -184,6 +204,8 @@ export function summarizeConversation(conversation: Conversation): ConversationS
     summary.preview = previewText(last.text);
   }
   if (conversation.quote) summary.quote = conversation.quote;
+  if (conversation.quoteRole) summary.quoteRole = conversation.quoteRole;
+  if (conversation.quoteReply) summary.quoteReply = conversation.quoteReply;
   return summary;
 }
 
@@ -488,7 +510,14 @@ function formatTime(iso: string): string {
 export function formatConversationDetail(detail: ConversationDetail): string {
   const { conversation, messages } = detail;
   const lines = [`${conversation.id}  ${displayTitle(conversation)}`];
-  if (conversation.quote) lines.push(`continues: ${previewText(conversation.quote)}`);
+  if (conversation.quote) {
+    if (conversation.quoteRole === "human") {
+      lines.push(`continues the human's message: ${previewText(conversation.quote)}`);
+      if (conversation.quoteReply) lines.push(`and the reply: ${previewText(conversation.quoteReply)}`);
+    } else {
+      lines.push(`continues: ${previewText(conversation.quote)}`);
+    }
+  }
   if (messages.length === 0) lines.push("", "No messages yet.");
   for (const message of messages) {
     const [first, ...rest] = message.text.split("\n");

@@ -171,6 +171,22 @@ describe("foldConversations", () => {
     );
     assert.deepEqual(listSummaries(foldConversations(log)).map((s) => s.id), ["keen-owl", "calm-heron"]);
   });
+
+  test("a conversation started from the human's message keeps who wrote it and the agent's reply", () => {
+    const log = lines({
+      type: "created",
+      conv: "keen-owl",
+      at: "2026-10-26T10:00:00.000Z",
+      by: "human",
+      quote: "move the reports",
+      quoteRole: "human",
+      quoteReply: "Done, all 40 moved.",
+    });
+    const summary = summarizeConversation(foldConversations(log)[0]);
+    assert.equal(summary.quote, "move the reports");
+    assert.equal(summary.quoteRole, "human");
+    assert.equal(summary.quoteReply, "Done, all 40 moved.");
+  });
 });
 
 describe("previewText", () => {

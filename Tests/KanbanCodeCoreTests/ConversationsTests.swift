@@ -53,6 +53,22 @@ struct ConversationLogTests {
         #expect(!threads[1].summary.waiting)
     }
 
+    @Test("a conversation continued from the user's message keeps the quote's role and reply")
+    func humanQuoteFold() throws {
+        let threads = ConversationLog.fold(log([
+            .created("calm-heron", quote: "Use a 15 min lease.", at: t0, quoteRole: .human, quoteReply: "Done."),
+            .created("swift-otter", at: t0.addingTimeInterval(1), quoteRole: .human, quoteReply: "ignored"),
+        ]))
+        let heron = try #require(threads.first { $0.summary.id == "calm-heron" }).summary
+        #expect(heron.quotesHuman)
+        #expect(heron.quoteReply == "Done.")
+        let otter = try #require(threads.first { $0.summary.id == "swift-otter" }).summary
+        #expect(otter.quoteRole == nil)
+        let decoded = try JSONDecoder().decode(RemoteConversation.self, from: JSONEncoder().encode(heron))
+        #expect(decoded.quoteRole == .human)
+        #expect(decoded.quoteReply == "Done.")
+    }
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [
@@ -130,6 +146,18 @@ struct ConversationPromptTests {
             .hasPrefix("[conversation calm-heron, new, continues your message \"The lease tiers are open, ask and his-only.\"] more on this"))
         conversation.replied = true
         #expect(!ConversationPrompt.wrap("more", conversation: conversation).contains("continues"))
+    }
+
+    @Test("continuing the user's own message names it, and the agent's reply when there is one")
+    func humanQuote() {
+        let withReply = ConversationPrompt.wrap("why?", id: "calm-heron", title: nil,
+                                                quote: "Use a 15 min lease.", quoteRole: .human,
+                                                quoteReply: "Done, the \"ask\" tier is set.")
+        #expect(withReply.hasPrefix(
+            "[conversation calm-heron, new, continues the user's message \"Use a 15 min lease.\" and your reply \"Done, the 'ask' tier is set.\"] why?"))
+        #expect(ConversationPrompt.parse(withReply)?.text == "why?")
+        let alone = ConversationPrompt.wrap("why?", id: "calm-heron", title: nil, quote: "Use a 15 min lease.", quoteRole: .human)
+        #expect(alone.hasPrefix("[conversation calm-heron, new, continues the user's message \"Use a 15 min lease.\"] why?"))
     }
 
     @Test("a wrapped prompt parses back, and is never wrapped twice")
@@ -320,6 +348,19 @@ struct ConversationHostTests {
         store.dispatch(.createManualTask(Link(id: "card_late", name: "Late", projectPath: "/tmp/acme", column: .inProgress)))
         await waitFor { store.state.conversations["card_late"] != nil }
         #expect(store.state.conversations["card_late"]?.first?.title == "Later")
+    }
+
+    @Test("a conversation continued from the user's message sends a header naming it and the reply")
+    func continuedFromHumanMessage() async throws {
+        let (host, _, _, tmux, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let created = try await host.createConversation(
+            cardId: "card_a", RemoteConversationCreate(quote: "Use a 15 min lease.", quoteRole: .human, quoteReply: "  Done.  "))
+        #expect(created.quotesHuman)
+        #expect(created.quoteReply == "Done.")
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "why?", human: true, conversation: created.id), images: [])
+        await waitFor { !tmux.sent.isEmpty }
+        #expect(tmux.sent.first?.contains("continues the user's message \"Use a 15 min lease.\" and your reply \"Done.\"]") == true)
     }
 
     @Test("start a conversation, send in it, the agent replies through the log, the human reads it")

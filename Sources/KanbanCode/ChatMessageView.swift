@@ -16,6 +16,8 @@ struct ChatMessageView: View, Equatable {
     var onSendAnswer: ((String) -> Void)?
     /// Starts a conversation that continues from this agent message.
     var onContinueInConversation: ((String) -> Void)?
+    /// Starts a conversation from this message of the human's.
+    var onContinueUserMessage: (() -> Void)?
     var suppressBackground: Bool = false
     var highlightText: String? = nil
     var isCurrentMatch: Bool = false
@@ -120,7 +122,13 @@ struct ChatMessageView: View, Equatable {
                 HStack {
                     Spacer(minLength: 0)
                     VStack(alignment: turn.role == "user" ? .trailing : .leading, spacing: 4) {
-                        if turn.role == "user" {
+                        if turn.role == "user", let onContinueUserMessage {
+                            userBubble
+                                .contextMenu {
+                                    Button("Continue in New Conversation") { onContinueUserMessage() }
+                                    Button("Copy") { onCopy?(turnText) }
+                                }
+                        } else if turn.role == "user" {
                             userBubble
                         } else if let onContinueInConversation, !turnText.isEmpty {
                             assistantMessage
@@ -557,6 +565,11 @@ struct ChatMessageView: View, Equatable {
             if turn.role != "user", let onContinueInConversation, !turnText.isEmpty {
                 ActionButton(icon: "arrow.turn.down.right", help: "Continue in new conversation") {
                     onContinueInConversation(turnText)
+                }
+            }
+            if turn.role == "user", let onContinueUserMessage {
+                ActionButton(icon: "arrow.turn.down.right", help: "Continue in new conversation") {
+                    onContinueUserMessage()
                 }
             }
 

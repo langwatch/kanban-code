@@ -91,6 +91,11 @@ Feature: Conversations inside one card
     When I press and hold an agent message and choose "Continue in new conversation"
     Then a new conversation opens that starts with that message quoted
 
+  Scenario: Continue my own message in a new conversation
+    When I right-click one of my messages, use its hover button, or press and hold it on the phone, and choose "Continue in new conversation"
+    Then a new conversation opens with my message quoted as "Continued from your message", and the agent's reply below it if there is one
+    And my first message in it tells the agent it continues the user's message, and its reply when there is one
+
   # ── Devices and masters ─────────────────────────────────────────────
 
   Scenario: Every device sees the same conversations

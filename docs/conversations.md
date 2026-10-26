@@ -23,7 +23,7 @@ An untitled conversation:
 (reply with: kanban reply swift-otter --title "<3-6 word title>" "<answer>")
 ```
 
-A conversation started from an agent message ("Continue in new conversation") adds the start of that message to the header until the agent first replies in it: `[conversation swift-otter, new, continues your message "The lease tiers are..."]`.
+A conversation started from an agent message ("Continue in new conversation") adds the start of that message to the header until the agent first replies in it: `[conversation swift-otter, new, continues your message "The lease tiers are..."]`. A conversation started from one of the user's own messages names that message, and the agent's reply to it when there is one: `[conversation swift-otter, new, continues the user's message "Use a 15 min..." and your reply "Done, the ask..."]`.
 
 The prompt goes through the card's normal send path: the queue, the prompt journal, images and the retry of a failed send. `QueuedPrompt.conversation` holds the id; the header is added when the prompt leaves the queue, so the queue shows the text as typed.
 
@@ -69,7 +69,7 @@ The master that owns the card keeps an append-only log, `~/.kanban-code/conversa
 ```
 
 - A `message` with an id that is already in the log replaces that message's text (an edited queued prompt). `retracted` removes a message (a queued prompt removed before it went out).
-- `quote` on `created` is the agent message a pop-off started from.
+- `quote` on `created` is the message a pop-off started from. `quoteRole` is `human` when it is the user's own message, and `quoteReply` then holds the agent's reply to it, if any.
 - The app and the CLI append with `O_APPEND`, one write per line, so they never lock each other out. Readers skip a line that does not parse.
 - Another master copies the log of each card it shows under `~/.kanban-code/peers/<machine>/conversations/<cardId>.jsonl`, by offset, like the transcript mirror. A master that adopts a card continues the copy it has.
 

@@ -22,14 +22,19 @@ public struct RemoteConversation: Codable, Sendable, Equatable, Identifiable, Ha
     /// The last message is the agent's: the conversation waits on the human.
     public var waiting: Bool
     public var archived: Bool
-    /// The agent message a "Continue in new conversation" started from.
+    /// The message a "Continue in new conversation" started from.
     public var quote: String?
+    /// Who wrote the quoted message; nil is the agent.
+    public var quoteRole: RemoteConversationRole?
+    /// With a quoted message of the human's: the agent's answer to it.
+    public var quoteReply: String?
     /// The agent wrote in it at least once.
     public var replied: Bool
 
     public init(id: String, title: String? = nil, createdAt: Date, updatedAt: Date? = nil, messageCount: Int = 0,
                 lastRole: RemoteConversationRole? = nil, preview: String? = nil, unread: Bool = false,
-                waiting: Bool = false, archived: Bool = false, quote: String? = nil, replied: Bool = false) {
+                waiting: Bool = false, archived: Bool = false, quote: String? = nil, replied: Bool = false,
+                quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
@@ -41,8 +46,13 @@ public struct RemoteConversation: Codable, Sendable, Equatable, Identifiable, Ha
         self.waiting = waiting
         self.archived = archived
         self.quote = quote
+        self.quoteRole = quoteRole
+        self.quoteReply = quoteReply
         self.replied = replied
     }
+
+    /// The quoted message is the human's own.
+    public var quotesHuman: Bool { quoteRole == .human }
 
     /// The title, or what a conversation without one is called.
     public var displayTitle: String {
@@ -51,7 +61,7 @@ public struct RemoteConversation: Codable, Sendable, Equatable, Identifiable, Ha
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, createdAt, updatedAt, messageCount, lastRole, preview, unread, waiting, archived, quote, replied
+        case id, title, createdAt, updatedAt, messageCount, lastRole, preview, unread, waiting, archived, quote, quoteRole, quoteReply, replied
     }
 
     public init(from decoder: Decoder) throws {
@@ -67,6 +77,8 @@ public struct RemoteConversation: Codable, Sendable, Equatable, Identifiable, Ha
         waiting = try c.decodeIfPresent(Bool.self, forKey: .waiting) ?? false
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         quote = try c.decodeIfPresent(String.self, forKey: .quote)
+        quoteRole = try? c.decodeIfPresent(RemoteConversationRole.self, forKey: .quoteRole)
+        quoteReply = try c.decodeIfPresent(String.self, forKey: .quoteReply)
         replied = try c.decodeIfPresent(Bool.self, forKey: .replied) ?? false
     }
 
@@ -83,6 +95,8 @@ public struct RemoteConversation: Codable, Sendable, Equatable, Identifiable, Ha
         if waiting { try c.encode(true, forKey: .waiting) }
         if archived { try c.encode(true, forKey: .archived) }
         try c.encodeIfPresent(quote, forKey: .quote)
+        try c.encodeIfPresent(quoteRole, forKey: .quoteRole)
+        try c.encodeIfPresent(quoteReply, forKey: .quoteReply)
         if replied { try c.encode(true, forKey: .replied) }
     }
 }
@@ -125,12 +139,18 @@ public struct RemoteConversationDetail: Codable, Sendable, Equatable {
 /// POST /v1/cards/{id}/conversations
 public struct RemoteConversationCreate: Codable, Sendable, Equatable {
     public var title: String?
-    /// The agent message the conversation continues from.
+    /// The message the conversation continues from.
     public var quote: String?
+    /// Who wrote `quote`; nil is the agent.
+    public var quoteRole: RemoteConversationRole?
+    /// With a message of the human's: the agent's answer to it, if any.
+    public var quoteReply: String?
 
-    public init(title: String? = nil, quote: String? = nil) {
+    public init(title: String? = nil, quote: String? = nil, quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) {
         self.title = title
         self.quote = quote
+        self.quoteRole = quoteRole
+        self.quoteReply = quoteReply
     }
 }
 
@@ -169,6 +189,9 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
     public var archived: Bool?
     /// On `message`: paths of its images on the owner.
     public var images: [String]?
+    /// On `created`: who wrote `quote`, and the agent's answer to it.
+    public var quoteRole: RemoteConversationRole?
+    public var quoteReply: String?
 
     public init(type: Kind, conv: String, at: Date = .now, id: String? = nil, role: RemoteConversationRole? = nil,
                 text: String? = nil, title: String? = nil, quote: String? = nil, by: String? = nil, archived: Bool? = nil,
@@ -186,8 +209,14 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
         self.images = images?.isEmpty == true ? nil : images
     }
 
-    public static func created(_ conv: String, title: String? = nil, quote: String? = nil, by: String = "human", at: Date = .now) -> Self {
-        .init(type: .created, conv: conv, at: at, title: title, quote: quote, by: by)
+    public static func created(_ conv: String, title: String? = nil, quote: String? = nil, by: String = "human", at: Date = .now,
+                               quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) -> Self {
+        var event = Self(type: .created, conv: conv, at: at, title: title, quote: quote, by: by)
+        if quote != nil {
+            event.quoteRole = quoteRole
+            event.quoteReply = quoteReply?.isEmpty == true ? nil : quoteReply
+        }
+        return event
     }
 
     public static func message(_ conv: String, id: String, role: RemoteConversationRole, text: String, at: Date = .now,
@@ -257,6 +286,8 @@ public enum ConversationLog {
         var createdAt: Date
         var title: String?
         var quote: String?
+        var quoteRole: RemoteConversationRole?
+        var quoteReply: String?
         var archived = false
         var readAt: Date?
         var messages: [RemoteConversationMessage] = []
@@ -271,7 +302,11 @@ public enum ConversationLog {
             case .created:
                 createdAt = event.at
                 if let t = event.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { title = t }
-                if let q = event.quote, !q.isEmpty { quote = q }
+                if let q = event.quote, !q.isEmpty {
+                    quote = q
+                    quoteRole = event.quoteRole
+                    quoteReply = event.quoteReply
+                }
             case .message:
                 guard let id = event.id, let role = event.role else { return }
                 let text = event.text ?? ""
@@ -302,7 +337,7 @@ public enum ConversationLog {
                 id: id, title: title, createdAt: createdAt, updatedAt: last?.at ?? createdAt,
                 messageCount: messages.count, lastRole: last?.role, preview: last.map { ConversationLog.preview($0.text) },
                 unread: unread, waiting: last?.role == .agent, archived: archived, quote: quote,
-                replied: messages.contains { $0.role == .agent })
+                replied: messages.contains { $0.role == .agent }, quoteRole: quoteRole, quoteReply: quoteReply)
             return ConversationThread(summary: summary, messages: messages)
         }
     }
@@ -325,10 +360,12 @@ public enum ConversationPrompt {
 
     public static func wrap(_ text: String, conversation: RemoteConversation) -> String {
         wrap(text, id: conversation.id, title: conversation.title,
-             quote: conversation.replied ? nil : conversation.quote)
+             quote: conversation.replied ? nil : conversation.quote,
+             quoteRole: conversation.quoteRole, quoteReply: conversation.quoteReply)
     }
 
-    public static func wrap(_ text: String, id: String, title: String?, quote: String? = nil) -> String {
+    public static func wrap(_ text: String, id: String, title: String?, quote: String? = nil,
+                            quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) -> String {
         if parse(text) != nil { return text }
         var header = "[conversation \(id)"
         let named = title.map { !$0.isEmpty } ?? false
@@ -338,14 +375,24 @@ public enum ConversationPrompt {
             header += ", new"
         }
         if let quote, !quote.isEmpty {
-            let excerpt = ConversationLog.preview(quote, limit: quoteLimit).replacingOccurrences(of: "\"", with: "'")
-            header += ", continues your message \"\(excerpt)\""
+            if quoteRole == .human {
+                header += ", continues the user's message \"\(excerpt(quote))\""
+                if let quoteReply, !quoteReply.isEmpty {
+                    header += " and your reply \"\(excerpt(quoteReply))\""
+                }
+            } else {
+                header += ", continues your message \"\(excerpt(quote))\""
+            }
         }
         header += "]"
         let reply = named
             ? "(reply with: kanban reply \(id) \"<answer>\")"
             : "(reply with: kanban reply \(id) --title \"<3-6 word title>\" \"<answer>\")"
         return "\(header) \(text)\n\(reply)"
+    }
+
+    private static func excerpt(_ text: String) -> String {
+        ConversationLog.preview(text, limit: quoteLimit).replacingOccurrences(of: "\"", with: "'")
     }
 
     /// The conversation a prompt in the transcript was sent from, and the

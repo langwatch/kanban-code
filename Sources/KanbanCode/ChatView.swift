@@ -159,6 +159,9 @@ struct ChatView: View {
                     },
                     onContinueInConversation: cardId.isEmpty ? nil : { [cardId] text in
                         ConversationActions.start(cardId: cardId, quote: text)
+                    },
+                    onContinueUserMessage: cardId.isEmpty ? nil : { [cardId] text, reply in
+                        ConversationActions.start(cardId: cardId, quote: text, quoteRole: .human, quoteReply: reply)
                     }
                 )
 
@@ -349,6 +352,9 @@ private struct ChatMessageList: View {
     var onSendAnswer: ((String) -> Void)?
     /// Starts a conversation that continues from an agent message.
     var onContinueInConversation: ((String) -> Void)?
+    /// Starts a conversation from a message of the human's: its text, and
+    /// the agent's answer to it when there is one.
+    var onContinueUserMessage: ((String, String?) -> Void)?
 
     /// The row a catch-up link landed on, tinted for a moment.
     @State private var highlightedLineNumber: Int?
@@ -1029,6 +1035,30 @@ private struct ChatMessageList: View {
         }
     }
 
+    /// For a message of the human's: starts a conversation quoting it and
+    /// the agent's text that answered it, up to the human's next message.
+    private func userMessageContinuation(_ turn: ConversationTurn, in turns: [ConversationTurn]) -> (() -> Void)? {
+        guard turn.role == "user", let onContinueUserMessage else { return nil }
+        let raw = turn.contentBlocks
+            .filter { if case .text = $0.kind { return true }; return false }
+            .map(\.text).joined(separator: "\n")
+        let text = (ConversationPrompt.parse(raw)?.text ?? raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return {
+            var reply: [String] = []
+            if let index = turns.firstIndex(where: { $0.lineNumber == turn.lineNumber }) {
+                for next in turns[(index + 1)...] {
+                    if next.role == "user" { break }
+                    let t = next.contentBlocks
+                        .filter { if case .text = $0.kind { return true }; return false }
+                        .map(\.text).joined(separator: "\n")
+                    if !t.isEmpty { reply.append(t) }
+                }
+            }
+            onContinueUserMessage(text, reply.isEmpty ? nil : reply.joined(separator: "\n\n"))
+        }
+    }
+
     @ViewBuilder
     private func singleTurnRow(
         _ turn: ConversationTurn,
@@ -1068,6 +1098,7 @@ private struct ChatMessageList: View {
             onCheckpoint: onCheckpoint,
             onSendAnswer: onSendAnswer,
             onContinueInConversation: onContinueInConversation,
+            onContinueUserMessage: userMessageContinuation(turn, in: allVisibleTurns),
             highlightText: activeQuery.isEmpty ? nil : activeQuery,
             isCurrentMatch: currentMatchLineNumber == turn.lineNumber,
             sessionPath: sessionPath,

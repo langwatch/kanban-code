@@ -13,12 +13,14 @@ enum ConversationActions {
     static var engine: MasterEngine { AppComposition.shared.engine }
     static var store: BoardStore { AppComposition.shared.store }
 
-    /// Starts a conversation and shows it; `quote` is the agent message it
-    /// continues from.
-    static func start(cardId: String, quote: String? = nil) {
+    /// Starts a conversation and shows it; `quote` is the message it
+    /// continues from, the agent's unless `quoteRole` says the human's, with
+    /// the agent's answer to it in `quoteReply`.
+    static func start(cardId: String, quote: String? = nil, quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) {
         Task { @MainActor in
             do {
-                let created = try await engine.createConversation(cardId: cardId, RemoteConversationCreate(quote: quote))
+                let created = try await engine.createConversation(
+                    cardId: cardId, RemoteConversationCreate(quote: quote, quoteRole: quoteRole, quoteReply: quoteReply))
                 store.dispatch(.selectCard(cardId: cardId))
                 store.dispatch(.openConversation(cardId: cardId, conversationId: created.id))
             } catch {
@@ -209,7 +211,10 @@ struct ConversationChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if let quote = conversation.quote {
-                            quoteBlock(quote)
+                            quoteBlock(quote, label: conversation.quotesHuman ? "Continued from your message" : "Continued from")
+                            if conversation.quotesHuman, let reply = conversation.quoteReply {
+                                quoteBlock(reply, label: "and the reply")
+                            }
                         }
                         if messages.isEmpty && conversation.quote == nil {
                             Text("A new conversation with this card's agent. It shares the session with Main; the agent answers here with kanban reply.")
@@ -343,9 +348,9 @@ struct ConversationChatView: View {
         .padding(.vertical, 8)
     }
 
-    private func quoteBlock(_ quote: String) -> some View {
+    private func quoteBlock(_ quote: String, label: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Continued from")
+            Text(label)
                 .font(.app(.caption))
                 .foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: 8) {
