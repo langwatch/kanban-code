@@ -333,6 +333,8 @@ extension Theme {
 struct RenameSessionDialog: View {
     let currentName: String
     @Binding var isPresented: Bool
+    var heading = "Rename Session"
+    var placeholder = "Session name"
     var onRename: (String) -> Void = { _ in }
 
     @State private var name = ""
@@ -340,11 +342,11 @@ struct RenameSessionDialog: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Rename Session")
+            Text(heading)
                 .font(.app(.title3))
                 .fontWeight(.semibold)
 
-            TextField("Session name", text: $name)
+            TextField(placeholder, text: $name)
                 .textFieldStyle(.roundedBorder)
                 .focused($nameFocused)
 

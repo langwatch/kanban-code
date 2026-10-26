@@ -35,6 +35,14 @@ enum ConversationActions {
         store.dispatch(.openConversation(cardId: cardId, conversationId: conversationId))
     }
 
+    /// Opens the conversation with its rename sheet up. The open
+    /// conversation shows the sheet: one on a sidebar row would be attached
+    /// to every row.
+    static func rename(cardId: String, conversationId: String) {
+        open(cardId: cardId, conversationId: conversationId)
+        ConversationRenameRequest.shared.conversationId = conversationId
+    }
+
     static func update(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) {
         Task { @MainActor in
             do {
@@ -138,6 +146,9 @@ struct SidebarConversationRows: View {
             .padding(.leading, 22)
             .onTapGesture { ConversationActions.open(cardId: cardId, conversationId: conversation.id) }
             .contextMenu {
+                Button("Rename Conversation") {
+                    ConversationActions.rename(cardId: cardId, conversationId: conversation.id)
+                }
                 Button("Archive Conversation") {
                     ConversationActions.update(cardId: cardId, conversationId: conversation.id, .init(archived: true))
                     if openId == conversation.id { ConversationActions.open(cardId: cardId, conversationId: nil) }
@@ -145,6 +156,34 @@ struct SidebarConversationRows: View {
             }
             .accessibilityIdentifier("sidebar-conversation-\(conversation.id)")
         }
+    }
+}
+
+/// A rename asked for from the sidebar, shown by the conversation once it
+/// is open.
+@MainActor @Observable
+final class ConversationRenameRequest {
+    static let shared = ConversationRenameRequest()
+    var conversationId: String?
+}
+
+/// Renames a conversation as the human; the agent's titles no longer
+/// replace it after this.
+struct ConversationRenameSheet: View {
+    let cardId: String
+    let conversation: RemoteConversation
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        RenameSessionDialog(
+            currentName: conversation.title ?? "",
+            isPresented: $isPresented,
+            heading: "Rename Conversation",
+            placeholder: "Conversation title",
+            onRename: { title in
+                ConversationActions.update(cardId: cardId, conversationId: conversation.id, .init(title: title))
+            }
+        )
     }
 }
 
@@ -158,7 +197,6 @@ struct ConversationChatView: View {
     let conversation: RemoteConversation
     @State private var messages: [RemoteConversationMessage] = []
     @State private var renaming = false
-    @State private var newTitle = ""
     @State private var focusToken = 0
 
     private var store: BoardStore { AppComposition.shared.store }
@@ -308,15 +346,14 @@ struct ConversationChatView: View {
             }
         }
         .onAppear { focusToken += 1 }
+        .onChange(of: ConversationRenameRequest.shared.conversationId, initial: true) { _, requested in
+            guard requested == conversation.id else { return }
+            ConversationRenameRequest.shared.conversationId = nil
+            renaming = true
+        }
         .onChange(of: conversation.id) { focusToken += 1 }
         .sheet(isPresented: $renaming) {
-            RenameSessionDialog(
-                currentName: conversation.title ?? "",
-                isPresented: $renaming,
-                onRename: { title in
-                    ConversationActions.update(cardId: card.id, conversationId: conversation.id, .init(title: title))
-                }
-            )
+            ConversationRenameSheet(cardId: card.id, conversation: conversation, isPresented: $renaming)
         }
     }
 
@@ -332,7 +369,6 @@ struct ConversationChatView: View {
                 .foregroundStyle(.tertiary)
             Spacer()
             Button("Rename") {
-                newTitle = conversation.title ?? ""
                 renaming = true
             }
             .buttonStyle(.borderless)

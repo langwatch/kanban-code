@@ -7,6 +7,7 @@ import KanbanCodeCore
 ///
 ///     select <cardId>                       selects a card
 ///     conversation <cardId> <id|main>       opens a conversation, or Main
+///     rename <cardId> <id>                  opens a conversation's rename sheet, as its sidebar menu does
 ///     wait <seconds>                        waits before the next line
 ///     snap <name>                           writes <dir>/<name>.png per window
 ///     send <cardId> <id> <text...>          sends a message in a conversation, as its composer does
@@ -42,6 +43,8 @@ enum WindowSnapshots {
             store.dispatch(.selectCard(cardId: words[1]))
         case ("conversation", 3):
             store.dispatch(.openConversation(cardId: words[1], conversationId: words[2] == "main" ? nil : words[2]))
+        case ("rename", 3):
+            ConversationActions.rename(cardId: words[1], conversationId: words[2])
         case ("wait", 2):
             try? await Task.sleep(for: .seconds(Double(words[1]) ?? 1))
         case ("snap", 2):

@@ -69,6 +69,24 @@ struct ConversationLogTests {
         #expect(decoded.quoteReply == "Done.")
     }
 
+    @Test("a title the human gives wins over the agent's later titles until the human clears it")
+    func humanTitleWins() {
+        var events: [ConversationEvent] = [
+            .created("swift-otter", title: "Agent plan", by: "agent", at: t0),
+            .title("swift-otter", "My plan", by: "human", at: t0.addingTimeInterval(1)),
+            .title("swift-otter", "Agent again", by: "agent", at: t0.addingTimeInterval(2)),
+        ]
+        #expect(ConversationLog.fold(log(events))[0].summary.title == "My plan")
+        events.append(.title("swift-otter", "", by: "human", at: t0.addingTimeInterval(3)))
+        events.append(.title("swift-otter", "Agent after clear", by: "agent", at: t0.addingTimeInterval(4)))
+        #expect(ConversationLog.fold(log(events))[0].summary.title == "Agent after clear")
+        let named = log([
+            .created("calm-heron", title: "Named at start", at: t0),
+            .title("calm-heron", "Agent", by: "agent", at: t0.addingTimeInterval(1)),
+        ])
+        #expect(ConversationLog.fold(named)[0].summary.title == "Named at start")
+    }
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [
@@ -361,6 +379,22 @@ struct ConversationHostTests {
         try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "why?", human: true, conversation: created.id), images: [])
         await waitFor { !tmux.sent.isEmpty }
         #expect(tmux.sent.first?.contains("continues the user's message \"Use a 15 min lease.\" and your reply \"Done.\"]") == true)
+    }
+
+    @Test("a rename through the API is the human's: the agent's later title does not replace it")
+    func renameThroughApi() async throws {
+        let (host, engine, _, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let created = try await host.createConversation(cardId: "card_a", RemoteConversationCreate())
+        let renamed = try await host.updateConversation(cardId: "card_a", conversationId: created.id, .init(title: "My plan"))
+        #expect(renamed.title == "My plan")
+        let logPath = engine.conversationStore.path(cardId: "card_a")
+        let handle = try #require(FileHandle(forWritingAtPath: logPath))
+        handle.seekToEndOfFile()
+        handle.write(ConversationEvent.title(created.id, "Agent plan", by: "agent").line())
+        try handle.close()
+        let thread = try #require(engine.conversationStore.threads(cardId: "card_a", ownerMachine: nil).first)
+        #expect(thread.summary.title == "My plan")
     }
 
     @Test("start a conversation, send in it, the agent replies through the log, the human reads it")

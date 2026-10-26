@@ -288,6 +288,8 @@ public enum ConversationLog {
         var quote: String?
         var quoteRole: RemoteConversationRole?
         var quoteReply: String?
+        /// A title the human gave; the agent's titles no longer replace it.
+        var titledByHuman = false
         var archived = false
         var readAt: Date?
         var messages: [RemoteConversationMessage] = []
@@ -301,7 +303,10 @@ public enum ConversationLog {
             switch event.type {
             case .created:
                 createdAt = event.at
-                if let t = event.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { title = t }
+                if let t = event.title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                    title = t
+                    titledByHuman = event.by != "agent"
+                }
                 if let q = event.quote, !q.isEmpty {
                     quote = q
                     quoteRole = event.quoteRole
@@ -317,8 +322,11 @@ public enum ConversationLog {
                     messages.append(.init(id: id, role: role, text: text, at: event.at, images: event.images))
                 }
             case .title:
+                let byAgent = event.by == "agent"
+                if byAgent && titledByHuman { return }
                 let t = event.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 title = t.isEmpty ? nil : t
+                titledByHuman = !byAgent && !t.isEmpty
             case .read:
                 if readAt.map({ event.at > $0 }) ?? true { readAt = event.at }
             case .retracted:

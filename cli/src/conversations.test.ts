@@ -1,6 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONVERSATION_ADJECTIVES, CONVERSATION_ANIMALS } from "./conversation-words.js";
@@ -149,6 +149,22 @@ describe("foldConversations", () => {
     assert.equal(conversation.quote, "The lease tiers are...");
     const titled = foldConversations(log.split("\n")[0] + "\n")[0];
     assert.equal(titled.title, "Plan");
+  });
+
+  test("a title the human gives wins over the agent's later titles until the human clears it", () => {
+    const at = (s: number) => `2026-10-26T10:00:0${s}.000Z`;
+    const events: object[] = [
+      { type: "created", conv: "keen-owl", at: at(0), by: "agent", title: "Agent plan" },
+      { type: "title", conv: "keen-owl", title: "My plan", at: at(1), by: "human" },
+      { type: "title", conv: "keen-owl", title: "Agent again", at: at(2), by: "agent" },
+    ];
+    assert.equal(foldConversations(lines(...events))[0].title, "My plan");
+    events.push({ type: "title", conv: "keen-owl", title: "", at: at(3), by: "human" });
+    events.push({ type: "title", conv: "keen-owl", title: "Agent after clear", at: at(4), by: "agent" });
+    assert.equal(foldConversations(lines(...events))[0].title, "Agent after clear");
+    const named = lines({ type: "created", conv: "keen-owl", at: at(0), by: "human", title: "Named at start" },
+                        { type: "title", conv: "keen-owl", title: "Agent", at: at(1), by: "agent" });
+    assert.equal(foldConversations(named)[0].title, "Named at start");
   });
 
   test("lines that do not parse or lack fields are skipped", () => {
@@ -323,6 +339,18 @@ describe("conversation commands", () => {
     createConversation(ctx(), { random: () => 0 });
     assert.equal(setConversationTitle(ctx(), "amber-badger", "  New name ").title, "New name");
     assert.throws(() => setConversationTitle(ctx(), "amber-badger", " "), /empty/);
+  });
+
+  test("after the user renames, the agent's title is not applied and the CLI says so", () => {
+    createConversation(ctx(), { random: () => 0, title: "Agent plan" });
+    appendFileSync(conversationLogPath(card.id),
+      JSON.stringify({ type: "title", conv: "amber-badger", title: "My plan", at: "2026-10-26T10:00:30.000Z", by: "human" }) + "\n");
+    const reply = replyToConversation(ctx(), "amber-badger", "Done.", "Other plan");
+    assert.equal(reply.title, undefined);
+    assert.equal(reply.keptHumanTitle, "My plan");
+    assert.equal(reply.conversation.title, "My plan");
+    assert.equal(reply.conversation.messageCount, 1);
+    assert.throws(() => setConversationTitle(ctx(), "amber-badger", "Other plan"), /user named this conversation "My plan"/);
   });
 
   test("an unknown conversation fails and lists the card's conversations", () => {

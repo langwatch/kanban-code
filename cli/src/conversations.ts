@@ -52,6 +52,8 @@ export interface Conversation {
   quoteRole?: ConversationRole;
   /** With a quote of the human's: the agent's answer to it. */
   quoteReply?: string;
+  /** Who gave the title. Once the human names it, the agent's titles no longer apply. */
+  titledBy?: ConversationRole;
   archived: boolean;
   lastReadAt?: string;
   messages: ConversationMessage[];
@@ -129,7 +131,10 @@ export function foldConversations(logText: string): Conversation[] {
           if (reply) target.quoteReply = reply;
         }
         const title = str(raw.title)?.trim();
-        if (title) target.title = title;
+        if (title) {
+          target.title = title;
+          target.titledBy = raw.by === "agent" ? "agent" : "human";
+        }
         break;
       }
       case "message": {
@@ -146,7 +151,10 @@ export function foldConversations(logText: string): Conversation[] {
         const title = str(raw.title);
         if (title === undefined) break;
         const target = ensure(conv, at);
+        const by: ConversationRole = raw.by === "agent" ? "agent" : "human";
+        if (by === "agent" && target.titledBy === "human") break;
         target.title = title.trim() || undefined;
+        target.titledBy = target.title ? by : undefined;
         break;
       }
       case "read": {
@@ -393,6 +401,8 @@ export interface ReplyResult {
   conversation: ConversationSummary;
   message?: ConversationMessage;
   title?: string;
+  /** The human's title, kept when the agent passed another. */
+  keptHumanTitle?: string;
 }
 
 /** `kanban reply`: the agent's message in a conversation, and its title when given. */
@@ -405,10 +415,11 @@ export function replyToConversation(
   assertOwned(ctx.card, ctx.localMachineId);
   const trimmedTitle = title?.trim();
   if (!text.trim() && !trimmedTitle) throw new ConversationError("Nothing to send: pass the reply text, `-` for stdin, or --title.");
-  requireConversation(ctx, conv);
+  const conversation = requireConversation(ctx, conv);
+  const humanTitle = conversation.titledBy === "human" ? conversation.title : undefined;
   const at = timestamp(ctx);
   const events: ConversationEvent[] = [];
-  if (trimmedTitle) events.push({ type: "title", conv, title: trimmedTitle, at, by: "agent" });
+  if (trimmedTitle && !humanTitle) events.push({ type: "title", conv, title: trimmedTitle, at, by: "agent" });
   let message: ConversationMessage | undefined;
   if (text.trim()) {
     message = { id: messageId(ctx), role: "agent", text, at };
@@ -416,7 +427,8 @@ export function replyToConversation(
   }
   appendConversationEvents(ctx.card, ctx.localMachineId, events);
   const result: ReplyResult = { conversation: findSummary(ctx, conv), message };
-  if (trimmedTitle) result.title = trimmedTitle;
+  if (trimmedTitle && humanTitle) result.keptHumanTitle = humanTitle;
+  else if (trimmedTitle) result.title = trimmedTitle;
   return result;
 }
 
@@ -449,7 +461,10 @@ export function setConversationTitle(ctx: ConversationContext, conv: string, tit
   assertOwned(ctx.card, ctx.localMachineId);
   const trimmed = title.trim();
   if (!trimmed) throw new ConversationError("The title is empty.");
-  requireConversation(ctx, conv);
+  const conversation = requireConversation(ctx, conv);
+  if (conversation.titledBy === "human") {
+    throw new ConversationError(`The user named this conversation "${conversation.title}", so its title stays.`);
+  }
   appendConversationEvents(ctx.card, ctx.localMachineId, [
     { type: "title", conv, title: trimmed, at: timestamp(ctx), by: "agent" },
   ]);

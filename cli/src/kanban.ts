@@ -2449,6 +2449,7 @@ program
       const parts = [];
       if (result.message) parts.push(`Replied in ${conv}`);
       if (result.title) parts.push(`${result.message ? "titled" : `Titled ${conv}`} "${result.title}"`);
+      if (result.keptHumanTitle) parts.push(`title not changed: the user named it "${result.keptHumanTitle}"`);
       output(parts.join(", "), { json: false });
     })
   );

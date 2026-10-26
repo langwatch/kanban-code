@@ -46,6 +46,13 @@ Feature: Conversations inside one card
     And the conversation's title becomes "Vault hardening" in the sidebar, the chat header and on the phone
     And the reply does not show in another conversation
 
+  Scenario: The user renames a conversation and the name stays
+    When I choose "Rename Conversation" in the conversation's right-click menu on the Mac, or press and hold it on the phone, and name it "My plan"
+    Then it is called "My plan" on every device
+    When the agent later runs `kanban reply swift-otter --title "Other plan" "Done."`
+    Then the reply is logged but the title stays "My plan"
+    And the CLI tells the agent the user named it "My plan"
+
   Scenario: Long replies come from stdin
     When the agent runs `kanban reply swift-otter -` with markdown on stdin
     Then the whole markdown text is the reply

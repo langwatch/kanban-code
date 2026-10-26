@@ -5,7 +5,7 @@ A card runs one session. Conversations split the chat with that session by topic
 ## Ids and titles
 
 - An id is two lowercase words joined by a dash, such as `swift-otter`, unique within the card.
-- A conversation starts without a title. The prompt of an untitled conversation asks the agent to set one with `--title` on its reply. The human can rename it too.
+- A conversation starts without a title. The prompt of an untitled conversation asks the agent to set one with `--title` on its reply. The human renames it from the conversation's right-click menu or header on the Mac, or by pressing and holding it on the phone. A title the human gives wins: the agent's later titles are not applied (`kanban reply --title` says the title was kept, `kanban conversation title` fails) until the human clears it.
 
 ## What the session receives
 
