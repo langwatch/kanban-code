@@ -9,6 +9,9 @@ struct ChatPane: View {
     let draft: ComposerDraft
     let onResume: () -> Void
     let onInterrupt: () -> Void
+    /// Starts a conversation that continues an agent message; nil when the
+    /// master keeps no conversations.
+    var onContinueInConversation: ((String) -> Void)? = nil
 
     @State private var isSending = false
     @State private var sendError: String?
@@ -95,6 +98,9 @@ struct ChatPane: View {
                 }
                 ForEach(visibleMessages) { message in
                     MessageView(message: message)
+                        // Touch and hold an agent message: its edit menu
+                        // offers to go on with it in a conversation of its own.
+                        .environment(\.selectableTextMenuItem, continueItem(for: message))
                         .background {
                             if highlightedMessage == message.id {
                                 RoundedRectangle(cornerRadius: 12)
@@ -242,6 +248,14 @@ struct ChatPane: View {
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { data in insertImage(data) }
                 .ignoresSafeArea()
+        }
+    }
+
+    private func continueItem(for message: RemoteMessage) -> SelectableTextMenuItem? {
+        guard message.role == .assistant, let onContinueInConversation else { return nil }
+        let text = message.text
+        return SelectableTextMenuItem(title: "Continue in new conversation", systemImage: "square.and.pencil") {
+            onContinueInConversation(text)
         }
     }
 
@@ -953,9 +967,20 @@ struct MessageView: View {
     @ViewBuilder private var content: some View {
         switch message.role {
         case .user:
+            // A prompt sent from a conversation shows as the human wrote
+            // it, under the name of its conversation.
+            let fromConversation = ConversationPrompt.parse(text)
+            if let fromConversation {
+                Label(fromConversation.title ?? fromConversation.id, systemImage: "bubble.left.and.text.bubble.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityIdentifier("promptConversation")
+            }
             HStack {
                 Spacer(minLength: 48)
-                SelectableText(text: SelectableTextStyle.plain(text, color: .white))
+                SelectableText(text: SelectableTextStyle.plain(fromConversation?.text ?? text, color: .white))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)

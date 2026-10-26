@@ -11,6 +11,7 @@ struct SelectableText: UIViewRepresentable {
     var wraps = true
     var alignment: NSTextAlignment = .natural
     @Environment(\.selectableTextTap) private var onTap
+    @Environment(\.selectableTextMenuItem) private var menuItem
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -26,6 +27,7 @@ struct SelectableText: UIViewRepresentable {
         tap.cancelsTouchesInView = false
         tap.delegate = context.coordinator
         view.addGestureRecognizer(tap)
+        view.delegate = context.coordinator
         view.isEditable = false
         view.isSelectable = true
         view.isScrollEnabled = false
@@ -46,16 +48,29 @@ struct SelectableText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.onTap = onTap
+        context.coordinator.menuItem = menuItem
         if view.attributedText != text {
             view.attributedText = text
         }
         view.textAlignment = alignment
     }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, UITextViewDelegate {
         var onTap: (() -> Void)?
+        var menuItem: SelectableTextMenuItem?
 
         @objc func tapped() { onTap?() }
+
+        /// `menuItem` first when one is set, then the system items (Copy,
+        /// Look Up, Share).
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard let menuItem else { return nil }
+            let action = UIAction(title: menuItem.title, image: UIImage(systemName: menuItem.systemImage)) { _ in
+                menuItem.action()
+            }
+            return UIMenu(children: [action] + suggestedActions)
+        }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
@@ -117,7 +132,17 @@ enum SelectableTextStyle {
     }
 }
 
+/// An item added to the edit menu that touching and holding the text of
+/// a `SelectableText` opens, next to Copy and Look Up.
+struct SelectableTextMenuItem {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+}
+
 extension EnvironmentValues {
     /// Called on a plain tap on any `SelectableText` below.
     @Entry var selectableTextTap: (() -> Void)? = nil
+    /// Added to the edit menu of any `SelectableText` below.
+    @Entry var selectableTextMenuItem: SelectableTextMenuItem? = nil
 }

@@ -94,6 +94,17 @@ final class DemoHost: RemoteControlHost {
         var card: RemoteCard
         var messages: [RemoteMessage]
         var rushId: String?
+        /// The card's conversation log, as `~/.kanban-code/conversations/<cardId>.jsonl` holds it.
+        var conversationLog = Data()
+        /// The conversation of each queued prompt sent from one.
+        var queuedConversations: [String: String] = [:]
+
+        /// The card with the summaries of its conversations not archived.
+        var listed: RemoteCard {
+            var card = card
+            card.conversations = ConversationLog.fold(conversationLog).map(\.summary).filter { !$0.archived }
+            return card
+        }
     }
 
     struct State {
@@ -206,7 +217,36 @@ final class DemoHost: RemoteControlHost {
                                       live: false, minutesAgo: 60_000)),
                   messages: Self.conversation("Résumé parser for the careers page")),
         ]
-        state.withLock { $0.cards = cards }
+        state.withLock {
+            $0.cards = cards
+            if let i = $0.cards.firstIndex(where: { $0.card.id == "card_wait" }) {
+                $0.cards[i].conversationLog = Self.seedConversations(now: now)
+            }
+        }
+    }
+
+    /// Two conversations of card_wait: one waiting on the human and unread,
+    /// one waiting on the agent with no title yet.
+    static func seedConversations(now: Date) -> Data {
+        let t = now.addingTimeInterval(-3600)
+        let events: [ConversationEvent] = [
+            .created("calm-heron", at: t),
+            .message("calm-heron", id: "q1", role: .human, text: "Can the toggle keep the system setting as a third option?",
+                     at: t.addingTimeInterval(60)),
+            .created("swift-otter", quote: "The settings page reads the theme once at launch, so a change only shows after a restart.",
+                     at: t.addingTimeInterval(600)),
+            .message("swift-otter", id: "q2", role: .human, text: "Can it switch without a restart?", at: t.addingTimeInterval(660)),
+            .message("swift-otter", id: "a2", role: .agent, text: """
+            Yes. The page can observe the theme instead of reading it once:
+
+            - `ThemeStore` publishes changes
+            - the settings view subscribes on appear
+
+            Should I also animate the switch, or keep it instant?
+            """, at: t.addingTimeInterval(1200)),
+            .title("swift-otter", "Theme switch without restart", by: "agent", at: t.addingTimeInterval(1200)),
+        ]
+        return events.reduce(into: Data()) { $0.append($1.line()) }
     }
 
     static func conversation(_ task: String) -> [RemoteMessage] {
@@ -373,7 +413,9 @@ final class DemoHost: RemoteControlHost {
     }
 
     /// The assistant "works" for a few seconds, then answers.
-    private func simulateTurn(_ id: String, reply: String) {
+    /// A turn on a conversation's prompt ends with the agent's reply in it,
+    /// with a title when it had none.
+    private func simulateTurn(_ id: String, reply: String, conversation: RemoteConversation? = nil) {
         update(id) { c in
             c.card.isBusy = true
             c.card.column = .inProgress
@@ -385,6 +427,22 @@ final class DemoHost: RemoteControlHost {
                 c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .tool, text: "Read src/demo.ts", at: Date()))
             }
             try? await Task.sleep(for: .seconds(2))
+            if let conversation {
+                var events: [ConversationEvent] = []
+                if conversation.title == nil {
+                    events.append(.title(conversation.id, "Demo topic \(conversation.id)", by: "agent"))
+                }
+                events.append(.message(conversation.id, id: "reply_\(UUID().uuidString.prefix(8))", role: .agent, text: reply))
+                self.appendConversation(id, events)
+                self.update(id) { c in
+                    c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .tool,
+                                                    text: "Bash kanban reply \(conversation.id) -", at: Date()))
+                    c.card.isBusy = false
+                    c.card.column = .waiting
+                    c.card.lastActivity = Date()
+                }
+                return
+            }
             self.update(id) { c in
                 c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .assistant, text: reply, at: Date()))
                 c.card.isBusy = false
@@ -395,7 +453,7 @@ final class DemoHost: RemoteControlHost {
     }
 
     func board() async -> RemoteBoard {
-        state.withLock { s in RemoteBoard(cards: s.cards.map(\.card), projects: projects, generatedAt: Date(), machine: machine) }
+        state.withLock { s in RemoteBoard(cards: s.cards.map(\.listed), projects: projects, generatedAt: Date(), machine: machine) }
     }
 
     func transcript(cardId: String, limit: Int, before: String?) async throws -> RemoteTranscript {
@@ -524,16 +582,68 @@ final class DemoHost: RemoteControlHost {
         guard c.card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first") }
         if Self.slowSendCards.contains(cardId) { try? await Task.sleep(for: .seconds(4)) }
         let text = Self.promptText(request.text, imageCount: images.count)
+        let promptId = "prompt_\(UUID().uuidString.prefix(8))"
+        if let conversation = request.conversation {
+            guard thread(c, conversation) != nil else { throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversation)") }
+            // The conversation shows the message from when it is queued.
+            appendConversation(cardId, [.message(conversation, id: promptId, role: .human, text: request.text)])
+        }
         if c.card.isBusy && request.mode != .now {
-            let prompt = RemoteQueuedPrompt(id: "prompt_\(UUID().uuidString.prefix(8))", text: request.text, imageCount: images.count)
+            let prompt = RemoteQueuedPrompt(id: promptId, text: request.text, imageCount: images.count)
             update(cardId) { c in
                 c.card.queuedPrompts.append(prompt)
                 c.card.queuedPromptCount = c.card.queuedPrompts.count
+                if let conversation = request.conversation { c.queuedConversations[promptId] = conversation }
             }
             deliverWhenIdle(cardId)
             return
         }
-        deliver(cardId, text: text, interrupting: c.card.isBusy)
+        deliver(cardId, text: text, interrupting: c.card.isBusy, conversation: request.conversation)
+    }
+
+    // MARK: Conversations
+
+    private func thread(_ c: CardState, _ id: String) -> ConversationThread? {
+        ConversationLog.fold(c.conversationLog).first { $0.summary.id == id }
+    }
+
+    private func appendConversation(_ cardId: String, _ events: [ConversationEvent]) {
+        update(cardId) { c in events.forEach { c.conversationLog.append($0.line()) } }
+    }
+
+    func conversations(cardId: String) async throws -> [RemoteConversation] {
+        ConversationLog.fold(try cardState(cardId).conversationLog).map(\.summary)
+    }
+
+    func createConversation(cardId: String, _ request: RemoteConversationCreate) async throws -> RemoteConversation {
+        let c = try cardState(cardId)
+        let existing = Set(ConversationLog.fold(c.conversationLog).map(\.summary.id))
+        let id = ConversationSlug.generate(existing: existing)
+        appendConversation(cardId, [.created(id, title: request.title, quote: request.quote)])
+        guard let created = thread(try cardState(cardId), id) else { throw RemoteHostError.notFound("conversation \(id)") }
+        return created.summary
+    }
+
+    func conversation(cardId: String, conversationId: String) async throws -> RemoteConversationDetail {
+        guard let found = thread(try cardState(cardId), conversationId) else {
+            throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversationId)")
+        }
+        return found.detail
+    }
+
+    func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
+        guard thread(try cardState(cardId), conversationId) != nil else {
+            throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversationId)")
+        }
+        var events: [ConversationEvent] = []
+        if let title = update.title { events.append(.title(conversationId, title)) }
+        if update.read == true { events.append(.read(conversationId)) }
+        if let archived = update.archived { events.append(.archived(conversationId, archived)) }
+        appendConversation(cardId, events)
+        guard let found = thread(try cardState(cardId), conversationId) else {
+            throw RemoteHostError.notFound("conversation \(conversationId)")
+        }
+        return found.summary
     }
 
     /// What the transcript shows for a prompt, with its images as the Mac pastes them.
@@ -543,14 +653,17 @@ final class DemoHost: RemoteControlHost {
         return [images, text].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private func deliver(_ cardId: String, text: String, interrupting: Bool) {
+    private func deliver(_ cardId: String, text: String, interrupting: Bool, conversation: String? = nil) {
+        // The session gets the conversation's header, as the owner adds it.
+        let summary = conversation.flatMap { id in (try? cardState(cardId)).flatMap { thread($0, id)?.summary } }
+        let sent = summary.map { ConversationPrompt.wrap(text, conversation: $0) } ?? text
         update(cardId) { c in
             if interrupting {
                 c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .system, text: "Interrupted", at: Date()))
             }
-            c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .user, text: text, at: Date()))
+            c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .user, text: sent, at: Date()))
         }
-        simulateTurn(cardId, reply: "Got it: \(text)")
+        simulateTurn(cardId, reply: "Got it: \(text)", conversation: summary)
     }
 
     /// Sends the oldest queued prompt once the turn ends, as the Mac does.
@@ -558,7 +671,12 @@ final class DemoHost: RemoteControlHost {
         Task {
             while (try? self.cardState(cardId))?.card.isBusy == true { try? await Task.sleep(for: .milliseconds(200)) }
             guard let next = self.popQueued(cardId, promptId: nil) else { return }
-            self.deliver(cardId, text: Self.promptText(next.text, imageCount: next.imageCount), interrupting: false)
+            let conversation = self.state.withLock { s -> String? in
+                guard let i = s.cards.firstIndex(where: { $0.card.id == cardId }) else { return nil }
+                return s.cards[i].queuedConversations.removeValue(forKey: next.id)
+            }
+            self.deliver(cardId, text: Self.promptText(next.text, imageCount: next.imageCount), interrupting: false,
+                         conversation: conversation)
         }
     }
 
@@ -618,7 +736,7 @@ final class DemoHost: RemoteControlHost {
             let name = "\(c.card.projectName ?? "demo")-\(c.card.id)"
             c.card.terminals = [RemoteTerminal(sessionName: name, label: "claude", isPrimary: true)]
         }
-        return try cardState(cardId).card
+        return try cardState(cardId).listed
     }
 
     func updateCard(cardId: String, _ request: RemoteCardUpdate) async throws -> RemoteCard {
@@ -650,7 +768,7 @@ final class DemoHost: RemoteControlHost {
                 }
             }
         }
-        return try cardState(cardId).card
+        return try cardState(cardId).listed
     }
 
     func deleteCard(cardId: String) async throws {

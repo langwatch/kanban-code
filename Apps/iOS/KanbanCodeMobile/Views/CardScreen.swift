@@ -38,6 +38,9 @@ struct CardScreen: View {
     @State private var terminalSession: String?
     @State private var terminal = TerminalController()
     @State private var draft: ComposerDraft
+    /// The conversation open over the chat.
+    @State private var openConversation: ConversationRoute?
+    @State private var isCreatingConversation = false
 
     init(cardId: String, board: BoardModel, machineName: String? = nil, fallback: RemoteCard? = nil,
          transcript: TranscriptModel? = nil) {
@@ -81,7 +84,8 @@ struct CardScreen: View {
                 switch tab {
                 case .chat:
                     ChatPane(card: card, transcript: transcript, board: board, draft: draft, onResume: resume,
-                             onInterrupt: { Task { await interrupt(card) } })
+                             onInterrupt: { Task { await interrupt(card) } },
+                             onContinueInConversation: supportsConversations ? { startConversation(quote: $0) } : nil)
                 case .terminal:
                     if showFullTerminal {
                         Color(white: 0.07)
@@ -98,6 +102,9 @@ struct CardScreen: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .navigationDestination(item: $openConversation) { route in
+            ConversationScreen(route: route, board: board)
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { actionError != nil }, set: { if !$0 { actionError = nil } }
         )) {
@@ -214,6 +221,17 @@ struct CardScreen: View {
             Text(card?.column.displayName ?? "")
                 .font(.subheadline.weight(.semibold))
         }
+        if supportsConversations, tab == .chat {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    startConversation(quote: nil)
+                } label: {
+                    Label("New conversation", systemImage: "square.and.pencil")
+                }
+                .disabled(isCreatingConversation || !board.isOnline)
+                .accessibilityIdentifier("newConversation")
+            }
+        }
         if let card {
             if card.isBusy {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -225,6 +243,31 @@ struct CardScreen: View {
                     .tint(.red)
                     .accessibilityIdentifier("interrupt")
                 }
+            }
+        }
+    }
+
+    /// The master keeps conversations for this card.
+    private var supportsConversations: Bool {
+        board.client != nil && board.supports(RemoteAPI.Feature.conversations)
+    }
+
+    /// Starts a conversation, continuing an agent message when `quote` is
+    /// one, and opens it.
+    private func startConversation(quote: String?) {
+        guard let client = board.client, !isCreatingConversation else { return }
+        isCreatingConversation = true
+        Task {
+            defer { isCreatingConversation = false }
+            do {
+                let conversation = try await client.createConversation(cardId: cardId, RemoteConversationCreate(quote: quote))
+                if var card = board.card(id: cardId), !card.conversations.contains(where: { $0.id == conversation.id }) {
+                    card.conversations.insert(conversation, at: 0)
+                    board.upsert(card)
+                }
+                openConversation = ConversationRoute(cardId: cardId, id: conversation.id)
+            } catch {
+                actionError = "Could not start a conversation: \(error.localizedDescription)"
             }
         }
     }
