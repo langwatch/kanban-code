@@ -64,7 +64,7 @@ enum ConversationActions {
 
 // MARK: - State dots
 
-/// Waiting on you (orange) and unread (blue), as the sidebar and the strip show them.
+/// Waiting on you (orange) and unread (blue), as the sidebar shows them.
 struct ConversationStateDot: View {
     let conversation: RemoteConversation
 
@@ -126,61 +126,6 @@ struct SidebarConversationRows: View {
             }
             .accessibilityIdentifier("sidebar-conversation-\(conversation.id)")
         }
-    }
-}
-
-// MARK: - Strip over the chat
-
-/// Main and the card's conversations over its chat, with the compose button
-/// at the right.
-struct ConversationStrip: View {
-    let cardId: String
-    let conversations: [RemoteConversation]
-    let openId: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    chip(title: "Main", selected: openId == nil, conversation: nil) {
-                        ConversationActions.open(cardId: cardId, conversationId: nil)
-                    }
-                    ForEach(conversations.filter { !$0.archived }) { conversation in
-                        chip(title: conversation.displayTitle, selected: openId == conversation.id, conversation: conversation) {
-                            ConversationActions.open(cardId: cardId, conversationId: conversation.id)
-                        }
-                    }
-                }
-            }
-            Button {
-                ConversationActions.start(cardId: cardId)
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.app(size: 14))
-                    .frame(width: 28, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .help("New conversation")
-            .accessibilityIdentifier("new-conversation")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-    }
-
-    private func chip(title: String, selected: Bool, conversation: RemoteConversation?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                if let conversation { ConversationStateDot(conversation: conversation) }
-                Text(title).lineLimit(1)
-            }
-            .font(.app(.caption, weight: selected ? .semibold : .regular))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06)))
-            .frame(maxWidth: 220)
-        }
-        .buttonStyle(.plain)
     }
 }
 

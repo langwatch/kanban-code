@@ -40,7 +40,7 @@ Tool calls and the agent's plain text stay in Main.
 - **Unread**: the agent wrote after the human last opened it. Opening it on any device clears it everywhere.
 - **Waiting on you**: the last message is the agent's.
 
-The sidebar on the Mac and the card list on the phone show the conversations under their card, most recent first, with both states.
+The sidebar on the Mac and the card list on the phone show the conversations under their card, most recent first, with both states. On the Mac, "New Conversation" sits next to "Queue Prompt" in the card toolbar; a conversation opens from its sidebar row, and a click on the card row goes back to Main.
 
 ## CLI
 

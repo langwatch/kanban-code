@@ -13,7 +13,7 @@ Feature: Conversations inside one card
   # ── Starting a conversation ─────────────────────────────────────────
 
   Scenario: Start a new conversation from the compose button
-    When I press the compose button at the top right of the card chat
+    When I press "New Conversation" next to "Queue Prompt" in the card toolbar
     Then a new conversation opens with an empty message list
     And it gets a two-word id such as "swift-otter"
     And it is listed under the card in the sidebar as "New conversation"
@@ -65,6 +65,12 @@ Feature: Conversations inside one card
     Given the card has conversations "swift-otter" and "calm-heron"
     Then the sidebar lists them under the card, most recent first
     And each shows its title, or "New conversation" before it has one
+
+  Scenario: Switching between Main and conversations from the sidebar
+    Given the conversation "swift-otter" is open
+    When I click the card row in the sidebar
+    Then Main shows again
+    And the card chat has no extra row above it for switching
 
   Scenario: Waiting on you
     Given the agent's reply is the last message of "swift-otter"

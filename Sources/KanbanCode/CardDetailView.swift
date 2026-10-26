@@ -878,6 +878,20 @@ struct CardDetailView: View {
                         .fixedSize()
                     }
 
+                    if isClaudeTabSelected, card.link.sessionLink != nil || card.link.tmuxLink != nil {
+                        Button {
+                            ConversationActions.start(cardId: card.id)
+                        } label: {
+                            Label("New Conversation", systemImage: "square.and.pencil")
+                                .font(.app(.caption))
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Start a new conversation with this card's agent")
+                        .padding(.leading, 16)
+                        .fixedSize()
+                        .accessibilityIdentifier("new-conversation")
+                    }
+
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 0)
@@ -900,11 +914,6 @@ struct CardDetailView: View {
                         onRemove: { promptId in onRemoveQueuedPrompt(promptId) },
                         onReorder: { promptIds in onReorderQueuedPrompts(promptIds) }
                     )
-                    Divider()
-                }
-
-                if isClaudeTabSelected, card.link.sessionLink != nil || card.link.tmuxLink != nil {
-                    ConversationStrip(cardId: card.id, conversations: cardConversations, openId: openConversation?.id)
                     Divider()
                 }
 

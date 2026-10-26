@@ -321,6 +321,12 @@ struct ListBoardView: View {
     }
 
     private func handleCardSelection(_ cardId: String) {
+        // A click on the card while one of its conversations is open goes
+        // back to Main.
+        if store.state.selectedCardId == cardId, store.state.openConversations[cardId] != nil {
+            store.dispatch(.openConversation(cardId: cardId, conversationId: nil))
+            return
+        }
         let newId = store.state.selectedCardId == cardId ? nil : cardId
         store.dispatch(.selectCard(cardId: newId))
         if newId != nil { onCardClicked(cardId) }
