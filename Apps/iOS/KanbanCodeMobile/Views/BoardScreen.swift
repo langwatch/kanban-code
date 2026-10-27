@@ -218,11 +218,10 @@ struct BoardScreen: View {
                                 .contextMenu { CardActionsMenu(entry: entry, controller: actions) }
                                 .accessibilityIdentifier("card-\(entry.card.id)")
                                 // Its conversations, nested under it. One opens
-                                // over the card's chat, so back lands there.
+                                // straight from the board, so back lands there.
                                 ForEach(entry.card.conversations) { conversation in
                                     Button {
-                                        path = [.card(entry.card.id),
-                                                .conversation(ConversationRoute(cardId: entry.card.id, id: conversation.id))]
+                                        path = [.conversation(ConversationRoute(cardId: entry.card.id, id: conversation.id))]
                                     } label: {
                                         ConversationRow(conversation: conversation)
                                     }

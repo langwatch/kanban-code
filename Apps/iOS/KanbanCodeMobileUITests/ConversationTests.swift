@@ -63,20 +63,25 @@ final class ConversationTests: KanbanUITestCase {
         app.buttons["conversationRenameConfirm"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Instant theme switch"].waitForExistence(timeout: 10))
 
-        // Back lands on the card's chat, then the board shows it read.
-        goBack()
-        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        // Opened from the board, back lands on the board, which shows it read.
         goBack()
         XCTAssertTrue(waitFor(10) { self.row("swift-otter").exists && !self.row("swift-otter").label.contains("unread") })
+        XCTAssertFalse(composer.exists)
         shot("83-conversation-read-on-board")
 
-        // Archive takes it off the card.
+        // A swipe from the left edge goes back to the board too.
+        row("swift-otter").tap()
+        XCTAssertTrue(app.navigationBars["Instant theme switch"].waitForExistence(timeout: 10))
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        XCTAssertTrue(row("swift-otter").waitForExistence(timeout: 10))
+        XCTAssertFalse(composer.exists)
+
+        // Archive takes it off the card, back on the board.
         row("swift-otter").tap()
         XCTAssertTrue(app.buttons["conversationMenu"].waitForExistence(timeout: 10))
         app.buttons["conversationMenu"].tap()
         app.buttons["conversationArchive"].tap()
-        XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        goBack()
         XCTAssertTrue(waitFor(10) { !self.row("swift-otter").exists })
     }
 
@@ -114,8 +119,6 @@ final class ConversationTests: KanbanUITestCase {
         app.buttons["conversationRenameConfirm"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Release notes v2"].waitForExistence(timeout: 10))
         shot("92-conversation-renamed-title")
-        goBack()
-        XCTAssertTrue(composer.waitForExistence(timeout: 10))
         goBack()
         XCTAssertTrue(waitFor(10) { self.row("calm-heron").label.contains("Release notes v2") })
     }
