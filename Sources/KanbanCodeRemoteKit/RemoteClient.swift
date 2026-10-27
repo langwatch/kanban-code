@@ -224,12 +224,24 @@ public struct RemoteClient: Sendable {
         try await send(makeRequest("PATCH", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))", body: body))
     }
 
+    /// GET /v1/cards/{id}/transcript/images?message=&index=: the bytes of
+    /// one image of a user message of the card's transcript.
+    public func transcriptImage(cardId: String, messageId: String, index: Int) async throws -> Data {
+        try await imageBytes(makeRequest("GET", "v1/cards/\(Self.escape(cardId))/transcript/images",
+                                         query: [URLQueryItem(name: "message", value: messageId),
+                                                 URLQueryItem(name: "index", value: String(index))]))
+    }
+
     /// GET /v1/cards/{id}/conversations/{conv}/images?message=&index=: the
     /// bytes of one image of a human message, read on the owning master.
     public func conversationImage(cardId: String, id: String, messageId: String, index: Int) async throws -> Data {
-        var request = makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))/images",
-                                  query: [URLQueryItem(name: "message", value: messageId),
-                                          URLQueryItem(name: "index", value: String(index))])
+        try await imageBytes(makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))/images",
+                                         query: [URLQueryItem(name: "message", value: messageId),
+                                                 URLQueryItem(name: "index", value: String(index))]))
+    }
+
+    private func imageBytes(_ request: URLRequest) async throws -> Data {
+        var request = request
         request.timeoutInterval = 30
         let data: Data
         let response: URLResponse

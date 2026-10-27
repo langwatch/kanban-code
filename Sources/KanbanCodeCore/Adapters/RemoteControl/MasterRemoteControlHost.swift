@@ -522,6 +522,24 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         try await engine.updateConversation(cardId: cardId, id: conversationId, update)
     }
 
+    /// Image `index` of the user message `messageId` (`<line offset>.<n>`),
+    /// read from the line of the card's transcript the id names.
+    public func transcriptImage(cardId: String, messageId: String, index: Int) async throws -> Data {
+        if let owner = await ownerClient(cardId) {
+            return try await forwarded { try await owner.transcriptImage(cardId: cardId, messageId: messageId, index: index) }
+        }
+        let path = try await MainActor.run { () throws -> String? in
+            let card = try card(cardId)
+            return card.link.sessionLink?.sessionPath ?? card.session?.jsonlPath
+        }
+        guard let path, let line = messageId.split(separator: ".").first.flatMap({ Int($0) }), line >= 0,
+              let images = try? await TranscriptReader.loadImagesAtOffset(from: path, byteOffset: line),
+              images.indices.contains(index) else {
+            throw RemoteHostError.notFound("no image \(index + 1) on message \(messageId)")
+        }
+        return images[index]
+    }
+
     public func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data {
         try await engine.conversationImage(cardId: cardId, id: conversationId, messageId: messageId, index: index)
     }

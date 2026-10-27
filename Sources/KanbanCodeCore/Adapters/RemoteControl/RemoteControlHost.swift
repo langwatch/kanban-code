@@ -13,6 +13,8 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// Newest `limit` messages of the card's conversation, older than
     /// `before` when given.
     func transcript(cardId: String, limit: Int, before: String?) async throws -> RemoteTranscript
+    /// The bytes of image `index` of a user message of the transcript.
+    func transcriptImage(cardId: String, messageId: String, index: Int) async throws -> Data
 
     /// The machines a task can run on, this master first.
     func machines() async -> [RemoteMachineEntry]
@@ -242,6 +244,10 @@ extension RemoteControlHost {
 
     public func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
         throw RemoteHostError.notFound("this host has no conversations")
+    }
+
+    public func transcriptImage(cardId: String, messageId: String, index: Int) async throws -> Data {
+        throw RemoteHostError.notFound("this host keeps no transcript images")
     }
 
     public func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data {

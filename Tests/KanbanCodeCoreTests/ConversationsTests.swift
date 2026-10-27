@@ -105,6 +105,26 @@ struct ConversationLogTests {
         #expect(ConversationTranscriptImages.turn(for: "isn't it odd?", conversationId: "calm-heron", in: turns) == nil)
     }
 
+    @Test("a user message of the transcript names its images, read back from the line its id gives")
+    func transcriptMessageImages() async throws {
+        let dir = NSTemporaryDirectory() + "kc-transcript-images-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 9, 9])
+        let lines = [
+            #"{"type":"user","uuid":"u0","timestamp":"2026-10-27T10:00:00Z","message":{"role":"user","content":"hello"}}"#,
+            #"{"type":"user","uuid":"u1","timestamp":"2026-10-27T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"look [Image #1]"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(png.base64EncodedString())"}}]}}"#,
+        ]
+        let path = dir + "/s.jsonl"
+        try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        let messages = RemoteTranscriptMapper.messages(from: try await TranscriptReader.readTurns(from: path))
+        let withImage = try #require(messages.first { $0.images != nil })
+        #expect(withImage.images == 1)
+        #expect(messages.first { $0.text == "hello" }?.images == nil)
+        let line = try #require(withImage.id.split(separator: ".").first.flatMap { Int($0) })
+        #expect(try await TranscriptReader.loadImagesAtOffset(from: path, byteOffset: line) == [png])
+    }
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [

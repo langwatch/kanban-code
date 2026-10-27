@@ -492,6 +492,15 @@ public final class RemoteControlServer: Sendable {
                 let before = request.query["before"].flatMap { $0.isEmpty ? nil : $0 }
                 return .response(.json(try await host.transcript(cardId: id, limit: limit, before: before)))
 
+            case ("GET", "cards/*/transcript/images"):
+                guard let message = request.query["message"], !message.isEmpty,
+                      let index = Int(request.query["index"] ?? ""), index >= 0 else {
+                    return .response(.error(400, "query must be ?message=<id>&index=<n>"))
+                }
+                let image = try await host.transcriptImage(cardId: id, messageId: message, index: index)
+                return .response(RemoteHTTPResponse(
+                    status: 200, headers: [("Content-Type", RemotePromptImages.mimeType(of: image))], body: image))
+
             case ("GET", "machines"):
                 return .response(.json(RemoteMachineList(machines: await host.machines())))
 
@@ -724,7 +733,7 @@ public final class RemoteControlServer: Sendable {
     private static let knownShapes: Set<String> = [
         "me", "board", "machines", "cards/search", "cards/*", "cards/*/transcript", "tasks", "cards/*/prompt", "cards/*/queue/*",
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
-        "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw",
+        "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw", "cards/*/transcript/images",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
         "cards/*/slash-commands", "cards/*/pasted-image",
         "cards/*/conversations", "cards/*/conversations/*", "cards/*/conversations-raw", "cards/*/conversations/*/images",

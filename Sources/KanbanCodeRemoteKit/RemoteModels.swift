@@ -492,13 +492,17 @@ public struct RemoteMessage: Codable, Sendable, Equatable, Identifiable {
     /// The long text behind a `system` note, shown when the note is
     /// opened: the summary of a compaction.
     public var detail: String?
+    /// How many images a `user` message carried; each is read with
+    /// `GET /v1/cards/{id}/transcript/images?message=&index=`.
+    public var images: Int?
 
-    public init(id: String, role: Role, text: String, at: Date? = nil, detail: String? = nil) {
+    public init(id: String, role: Role, text: String, at: Date? = nil, detail: String? = nil, images: Int? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.at = at
         self.detail = detail
+        self.images = images
     }
 }
 

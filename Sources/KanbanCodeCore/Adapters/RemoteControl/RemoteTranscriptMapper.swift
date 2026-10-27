@@ -20,7 +20,9 @@ public enum RemoteTranscriptMapper {
             func add(_ role: RemoteMessage.Role, _ text: String, detail: String? = nil) {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
-                out.append(RemoteMessage(id: "\(turn.lineNumber).\(index)", role: role, text: trimmed, at: at, detail: detail))
+                let images = role == .user && turn.imageCount > 0 ? turn.imageCount : nil
+                out.append(RemoteMessage(id: "\(turn.lineNumber).\(index)", role: role, text: trimmed, at: at,
+                                         detail: detail, images: images))
                 index += 1
             }
             func addUser(_ text: String) {
