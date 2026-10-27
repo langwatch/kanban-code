@@ -79,6 +79,43 @@ public enum SecretDetector {
         defaultName(kind: secret.kind, value: secret.value, text: "", valueStart: 0)
     }
 
+    /// The rules that read a credential from the words around it (`password:
+    /// ...`, a password on the line after an email address, `api_key=...`,
+    /// a URL password, an Authorization header) and the token formats that
+    /// carry no vendor name (JWT, AWS key id). They are safe to act on only in
+    /// text a human typed: an agent's prose and code say "password" and
+    /// "token" all the time.
+    public static let typedContextRuleIds: Set<String> = [
+        "labelled_password", "password_line", "credential_block", "sensitive_assignment", "url_credentials",
+        "bearer_token", "authorization_scheme_token", "basic_auth_credentials", "kubeconfig_client_credentials",
+        "jwt", "aws_access_key_id",
+    ]
+
+    /// Credentials in text a human typed that only the words around them
+    /// give away: the `typedContextRuleIds` finds, less any value a
+    /// vendor-format rule takes on its own and any value that reads as a
+    /// record id (`card_...`, a UUID).
+    public static func findTyped(in text: String) -> [DetectedSecret] {
+        find(in: text, ruleIds: typedContextRuleIds).filter { secret in
+            find(in: secret.value, ruleIds: vendorFormatRuleIds).isEmpty && !looksLikeIdentifier(secret.value)
+        }
+    }
+
+    /// The name a credential found in typed text is saved under: the field
+    /// it was assigned to (`DB_PASSWORD`) or one for its kind (`PASSWORD`).
+    public static func typedName(of secret: DetectedSecret) -> String {
+        let name = secret.suggestedName.uppercased()
+        return isValidName(name) ? name : "SECRET"
+    }
+
+    private static let uuidRegex = regex(#"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#, .caseInsensitive)
+
+    static func looksLikeIdentifier(_ value: String) -> Bool {
+        if test(uuidRegex, value) { return true }
+        guard let sep = value.firstIndex(where: { $0 == "_" || $0 == "-" }) else { return false }
+        return isNonCredentialPrefix(String(value[..<sep]))
+    }
+
     /// Secrets in `text` found by the given rules only, placeholders left out.
     public static func find(in text: String, ruleIds: Set<String>) -> [DetectedSecret] {
         matches(in: text, ruleIds: ruleIds).filter { !isPlaceholder($0.value, kind: $0.kind) }
@@ -369,6 +406,7 @@ public enum SecretDetector {
         case "bearer_token": return "BEARER_TOKEN"
         case "authorization_scheme_token": return "AUTH_TOKEN"
         case "basic_auth_credentials": return "BASIC_AUTH"
+        case "labelled_password", "password_line", "credential_block": return "PASSWORD"
         case "url_credentials":
             let window = max(0, valueStart - nameLookback)
             let before = text.substring(with: NSRange(location: window, length: valueStart - window))
@@ -639,6 +677,45 @@ public enum SecretDetector {
             + ")"
     }
 
+    // MARK: - Passwords a human types
+
+    /// Words that name a password, in the languages it gets typed in.
+    private static let passwordLabel =
+        #"(?:password|passwd|passwort|passphrase|pwd|pass|senha|contrase(?:ñ|n)a|mot de passe|wachtwoord)"#
+    /// "password for facebook", "senha do gmail".
+    private static let passwordOf = #"(?:[ \t]+(?:for|of|on|to|at|do|da|de|del|du|no|na|para|von|für)[ \t]+[\p{L}\p{N}.@_-]{1,40})?"#
+    /// A password: one run with no space or quote, 8 to 128 characters, a
+    /// sentence's full stop or comma after it left out.
+    private static let passwordValue = #"([^\s"'`]{7,127}[^\s"'`.,;])[.,;]?"#
+    private static let emailAddress = #"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"#
+
+    private static let wordWithPunctuation = regex(#"^\p{L}+[!?.,:;]*$"#)
+    private static let phoneLike = regex(#"^\+?[0-9 ().-]{7,}$"#)
+    private static let dateLike = regex(#"^\d{4}-\d{2}-\d{2}"#)
+    private static let emailLike = regex("^\(emailAddress)$")
+
+    /// Whether a value next to a password label reads as a password: not a
+    /// placeholder, a reference, code, a path, an address, a number, a date
+    /// or a plain word, and at least two of lowercase, uppercase, digits and
+    /// symbols.
+    static func isTypedPassword(_ value: String) -> Bool {
+        let n = value.utf16.count
+        guard n >= 8, n <= 128 else { return false }
+        if isPlaceholder(value, kind: "labelled_password") || test(placeholderValueRegex, value) { return false }
+        if test(envReferenceRegex, value) || test(codeExpressionRegex, value) || test(pathLikeRegex, value)
+            || test(urlRegex, value) || test(emailLike, value) || test(versionRegex, value) || test(dateLike, value)
+            || test(phoneLike, value) || test(wordWithPunctuation, value) {
+            return false
+        }
+        if value.contains(redactionMarker) || value.contains("{{vault:") { return false }
+        if value.contains(where: { "()[]{}<>".contains($0) }) { return false }
+        if let first = value.first, "-$%".contains(first) { return false }
+        let c = charClasses(value)
+        let other = n - c.lower - c.upper - c.digit
+        let classes = [c.lower, c.upper, c.digit, other].filter { $0 > 0 }.count
+        return classes >= 2
+    }
+
     nonisolated(unsafe) private static let rules: [Rule] = [
         Rule(id: "pem_private_key", regex: regex(
             #"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"#)),
@@ -682,6 +759,26 @@ public enum SecretDetector {
                  let value = group(m, 2, t)
                  return test(strictIntroduction, introduction) ? isCredentialValue(value) : isKeyMaterial(value)
              }),
+        // "password: X", "senha do gmail é X", "DB_PASS=X", `"password": "X"`.
+        Rule(id: "labelled_password",
+             regex: regex(#"(?im)(?:^|[^\p{L}\p{N}])"# + passwordLabel + passwordOf
+                          + #"["'`]?(?:[ \t]*(?:[:=]{1,2}|=>|->)[ \t]*|[ \t]+(?:is|é|eh|es|est|ist)[ \t]+)["'`]?"#
+                          + passwordValue + #"(?=["'`\s]|$)"#),
+             value: .group(1),
+             accept: { m, t in isTypedPassword(group(m, 1, t)) }),
+        // A label alone on its line and the password on the next one.
+        Rule(id: "password_line",
+             regex: regex(#"(?im)^[ \t]*(?:[\p{L}\p{N}.@_-]{1,40}[ \t]+)?"# + passwordLabel + passwordOf
+                          + #"[ \t]*:?[ \t]*\r?\n(?:[ \t]*\r?\n)?[ \t]*"# + passwordValue + #"[ \t]*\r?$"#),
+             value: .group(1),
+             accept: { m, t in isTypedPassword(group(m, 1, t)) }),
+        // A login pasted as it is: the email address, then the password on
+        // the next line or after a colon, a slash or a bar.
+        Rule(id: "credential_block",
+             regex: regex(#"(?im)^[ \t]*(?:(?:e-?mail|user(?:name)?|login|usu[aá]rio)[ \t]*[:=]?[ \t]*)?"# + emailAddress
+                          + #"[ \t]*(?:\r?\n(?:[ \t]*\r?\n)?[ \t]*|[ \t]*[|/:][ \t]*)"# + passwordValue + #"[ \t]*\r?$"#),
+             value: .group(1),
+             accept: { m, t in isTypedPassword(group(m, 1, t)) }),
     ]
 
     /// Rule ids, in the order they run (most specific first).

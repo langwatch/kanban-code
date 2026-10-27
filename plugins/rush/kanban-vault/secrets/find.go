@@ -163,6 +163,7 @@ var kindNames = map[string]string{
 	"pem_private_key": "PRIVATE_KEY", "putty_private_key": "PRIVATE_KEY",
 	"kubeconfig_client_credentials": "KUBECONFIG_CLIENT_KEY", "bearer_token": "BEARER_TOKEN",
 	"authorization_scheme_token": "AUTH_TOKEN", "basic_auth_credentials": "BASIC_AUTH",
+	"labelled_password": "PASSWORD", "password_line": "PASSWORD", "credential_block": "PASSWORD",
 }
 
 // defaultName names a secret by its kind and, for some, its prefix or the

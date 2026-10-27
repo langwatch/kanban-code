@@ -13,8 +13,17 @@ struct ScrubMatch: Sendable, Equatable {
     var newValue: String?
 }
 
-/// Finds vault values (by fingerprint) and vendor-format keys (by pattern)
-/// in the bytes of a file. It never holds a vault value.
+/// A value typed into a chat that is too short to fingerprint: it is
+/// looked for byte by byte, and only as a whole word.
+struct ScrubLiteral: Sendable, Equatable {
+    var value: String
+    var name: String
+    var tag: String
+}
+
+/// Finds vault values (by fingerprint), vendor-format keys (by pattern) and
+/// short values typed into a chat (by their bytes) in the bytes of a file.
+/// It never holds a vault value.
 struct ScrubScanner: Sendable {
     let key: ScrubKey
     /// Fingerprints by prefix.
@@ -26,15 +35,18 @@ struct ScrubScanner: Sendable {
     /// Vendor names (`LANGWATCH_API_KEY`) whose keys are left in place
     /// when the vault does not hold them.
     let except: Set<String>
+    let literals: [ScrubLiteral]
 
     /// The group new finds are saved under.
     static let foundProject = "scrubbed"
     static let foundEnvironment = "found"
 
-    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: ScrubPatterns = .on, except: Set<String> = []) {
+    init(entries: [ScrubFingerprint], key: ScrubKey, patterns: ScrubPatterns = .on, except: Set<String> = [],
+         literals: [ScrubLiteral] = []) {
         self.key = key
         self.patterns = patterns
         self.except = except
+        self.literals = literals
         var byPrefix: [UInt32: [ScrubFingerprint]] = [:]
         var byMac: [String: ScrubFingerprint] = [:]
         var bitmap = [UInt64](repeating: 0, count: 1 << 18)
@@ -54,12 +66,19 @@ struct ScrubScanner: Sendable {
     var generation: String {
         let macs = byMac.keys.sorted().joined()
         let left = except.isEmpty ? "" : "-" + except.sorted().joined(separator: ",")
-        return "v2:\(patterns.rawValue)\(left):" + key.macHex(Array(macs.utf8))
+        let short = literals.map(\.tag).sorted().joined()
+        return "v3:\(patterns.rawValue)\(left):" + key.macHex(Array((macs + short).utf8))
+    }
+
+    /// Whether the vault index already holds this value.
+    func knows(_ value: String) -> Bool {
+        byMac[key.macHex(Array(value.utf8))] != nil
     }
 
     /// Matches in file order, none overlapping another, none across a line break.
     func scan(_ buf: UnsafeRawBufferPointer) -> [ScrubMatch] {
         var found = exact(buf)
+        if !literals.isEmpty { found += literalMatches(buf) }
         if patterns != .off { found += vendorKeys(buf, taken: found) }
         found.sort { $0.offset < $1.offset }
         var out: [ScrubMatch] = []
@@ -97,6 +116,43 @@ struct ScrubScanner: Sendable {
                                 break
                             }
                         }
+                    }
+                }
+                i += 1
+            }
+        }
+        return out
+    }
+
+    // MARK: - Short typed values
+
+    private static func isWordByte(_ b: UInt8) -> Bool {
+        (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+    }
+
+    /// Each literal where it stands as a whole word: no letter or digit
+    /// touches it, except the `n`, `r` or `t` of a JSON escape before it.
+    private func literalMatches(_ buf: UnsafeRawBufferPointer) -> [ScrubMatch] {
+        let n = buf.count
+        var out: [ScrubMatch] = []
+        for literal in literals {
+            let bytes = Array(literal.value.utf8)
+            guard let first = bytes.first, bytes.count <= n else { continue }
+            var i = 0
+            while i + bytes.count <= n {
+                guard buf[i] == first else { i += 1; continue }
+                var same = true
+                for j in 1..<bytes.count where buf[i + j] != bytes[j] { same = false; break }
+                if same {
+                    let end = i + bytes.count
+                    let before = i == 0 || !Self.isWordByte(buf[i - 1])
+                        || (i >= 2 && buf[i - 2] == 0x5C && "nrt".utf8.contains(buf[i - 1]))
+                    let after = end == n || !Self.isWordByte(buf[end])
+                    if before, after {
+                        out.append(ScrubMatch(offset: i, length: bytes.count, name: literal.name, tag: literal.tag,
+                                              newValue: literal.value))
+                        i = end
+                        continue
                     }
                 }
                 i += 1
@@ -262,7 +318,8 @@ enum ScrubRewriter {
         var cursor = 0
         for m in matches {
             guard m.offset >= cursor, m.offset + m.length <= line.count,
-                  let reference = ScrubIndex.reference(name: m.name, tag: m.tag, length: m.length) else { continue }
+                  let reference = ScrubIndex.reference(name: m.name, tag: m.tag, length: m.length)
+                    ?? ScrubIndex.mask(length: m.length, typed: m.newValue != nil) else { continue }
             // A value right after a backslash starts inside an escape.
             if kind != .text, m.offset > 0, line[m.offset - 1] == 0x5C { continue }
             let padded = reference + [UInt8](repeating: 0x20, count: m.length - reference.count)

@@ -598,3 +598,91 @@ struct PastedSecretTests {
         #expect(r.replace == nil && r.error == nil)
     }
 }
+
+@Suite("secret rules, passwords a human types")
+struct TypedPasswordTests {
+    /// Made up, assembled at run time.
+    static let pw = ["Qm7", "xW2#", "pL9v"].joined()
+    static let longPw = ["aK9", "mQ2x", "WpL7v", "TzR4", "#nB"].joined()
+
+    private func typed(_ text: String) -> [String] { SecretDetector.findTyped(in: text).map(\.value) }
+
+    static let forms: [(String, String)] = [
+        ("a colon label", "password: \(pw)"),
+        ("an equals label", "pwd=\(pw)"),
+        ("an env style label", "DB_PASS=\(pw)"),
+        ("a JSON field", #"{"password": "\#(pw)"}"#),
+        ("a quoted value", "password = '\(pw)'"),
+        ("Portuguese", "a senha do facebook é \(pw)"),
+        ("Portuguese with a colon", "Senha: \(pw)"),
+        ("Spanish", "contraseña: \(pw)"),
+        ("a sentence", "my facebook password is \(pw)."),
+        ("a site after the label", "password for facebook.com: \(pw)"),
+        ("a label on its own line", "Facebook password\n\(pw)"),
+        ("a label line with a colon", "senha:\n\n\(pw)\n2fa: 123456"),
+        ("a login pasted as it is", "here is the login\n\nsomeone.test@example.com\n\n\(longPw)\n\n2fa: 123456\nuse it"),
+        ("an email and a colon", "someone.test@example.com:\(pw)"),
+        ("an email and a slash", "email: someone.test@example.com / \(pw)"),
+    ]
+
+    @Test("A password next to its label is found", arguments: forms)
+    func found(_ c: (String, String)) {
+        let v = typed(c.1)
+        #expect(v.count == 1, "\(c.0)")
+        #expect(v.first == (c.1.contains(Self.longPw) ? Self.longPw : Self.pw), "\(c.0)")
+    }
+
+    @Test("A password found by its label is named PASSWORD, an assignment by its field")
+    func names() {
+        #expect(SecretDetector.findTyped(in: "password: \(Self.pw)").map(SecretDetector.typedName) == ["PASSWORD"])
+        #expect(SecretDetector.findTyped(in: "someone@example.com\n\(Self.pw)").map(SecretDetector.typedName) == ["PASSWORD"])
+        #expect(SecretDetector.findTyped(in: "DB_PASSWORD=\(Self.pw)").map(SecretDetector.typedName) == ["DB_PASSWORD"])
+    }
+
+    static let notPasswords: [(String, String)] = [
+        ("advice", "your password should be long and memorable"),
+        ("a required field", "password: required"),
+        ("a type", "password: string;"),
+        ("code reading a field", "password = req.body.password"),
+        ("an env reference", "password: ${DB_PASSWORD}"),
+        ("an env name", "PASSWORD=DB_PASSWORD_PROD"),
+        ("a function call", "password = getpass()"),
+        ("a mask", "password: ********"),
+        ("a placeholder", "password: <your-password>"),
+        ("an example", "password: example123"),
+        ("a vault reference", "password: {{vault:FB_PASSWORD}}"),
+        ("a plain word", "password: Obrigado!"),
+        ("a number", "password: 12345678"),
+        ("a phone number", "someone@example.com\n+55 11 99999-9999"),
+        ("a date", "someone@example.com\n2026-10-27"),
+        ("a URL", "password reset: https://example.com/reset?id=42"),
+        ("a path", "password file: /etc/app/secret.txt"),
+        ("a sentence after an email", "someone@example.com\nThanks, talk tomorrow"),
+        ("a short value", "pass: Ab1#"),
+        ("a password manager", "password manager is 1Password"),
+        ("a hash field", "password_hash: Ab12cd34Ef56"),
+        ("bypass", "bypass: Ab12cd34Ef56"),
+        ("a card id", "token: card_3KflwWlgrpMp3oWWLYnIEQMxrzP"),
+        ("a uuid", "session token: 8c76706f-1c00-4aed-9c6d-7509f3033943"),
+        ("a vendor key goes to the vendor rule", "api_key=sk-ant-api03-aB3dEf_gHi-jKlMnOpQrStUvWx0123456789"),
+    ]
+
+    @Test("Text that only mentions a password is left alone", arguments: notPasswords)
+    func leftAlone(_ c: (String, String)) {
+        #expect(typed(c.1).isEmpty, "\(c.0)")
+    }
+
+    @Test("A URL password, a bearer token and a long assignment count as typed")
+    func otherContextRules() {
+        #expect(typed("postgres://app:\(Self.longPw)@db.internal:5432/app") == [Self.longPw])
+        #expect(typed("Authorization: Bearer Zk3vQ9mT7pLw2Xy8Rb4N") == ["Zk3vQ9mT7pLw2Xy8Rb4N"])
+        #expect(typed("client_secret: h9Kd2Lm4Nq7Pr1Ts5Vw8Xz3") == ["h9Kd2Lm4Nq7Pr1Ts5Vw8Xz3"])
+    }
+
+    @Test("The composer offers to save a labelled password too")
+    func composerOffer() {
+        let offers = SecretDetector.proposals(in: "fb login\nsomeone@example.com\n\(Self.longPw)", existingNames: [])
+        #expect(offers.map(\.name) == ["PASSWORD"])
+        #expect(offers.map(\.value) == [Self.longPw])
+    }
+}

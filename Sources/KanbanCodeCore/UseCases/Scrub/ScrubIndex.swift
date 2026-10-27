@@ -211,6 +211,17 @@ public enum ScrubIndex {
     /// The text that takes the place of a value `length` bytes long, never
     /// longer than it: the reference by name, or by the start of the
     /// secret's listing fingerprint when the name does not fit.
+    /// The shortest value typed into a chat that is replaced.
+    public static let shortestTyped = 8
+
+    /// What takes the place of a new find too short for any reference:
+    /// asterisks, so the value is gone even though the text cannot say
+    /// which secret it was. Only a value typed into a chat is that short.
+    static func mask(length: Int, typed: Bool) -> [UInt8]? {
+        guard typed, length >= shortestTyped else { return nil }
+        return [UInt8](repeating: 0x2A, count: length)
+    }
+
     public static func reference(name: String, tag: String, length: Int) -> [UInt8]? {
         let full = Array("{{vault:\(name)}}".utf8)
         if full.count <= length { return full }

@@ -351,11 +351,38 @@ public actor SecretScrubber {
         // A one-off run takes its own patterns mode and reads every file;
         // the schedule and what the scheduled runs know stay as they are.
         let patterns = once?.patterns ?? settings.patterns
-        let scanner = ScrubScanner(entries: entries, key: key, patterns: patterns, except: once?.except ?? [])
+        let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
+        // Passwords and other credentials the human typed that only their
+        // label gives away: looked for in every file, whatever their format.
+        let records = ScrubTypedText(home: home, kanbanHome: kanbanHome)
+        let base = ScrubScanner(entries: entries, key: key, patterns: patterns)
+        var typedByName: [String: String] = [:]
+        var typedEntries: [ScrubFingerprint] = []
+        var literals: [ScrubLiteral] = []
+        if patterns != .off {
+            progress = "reading what was typed into the chats"
+            for file in files where records.isRecord(file.path) {
+                for secret in records.typedSecrets(path: file.path) {
+                    let value = secret.value
+                    guard !base.knows(value) else { continue }
+                    let tag = key.tagHex(value)
+                    let name = VaultSecretName(key: "\(SecretDetector.typedName(of: secret))_\(tag.prefix(8))",
+                                               project: ScrubScanner.foundProject, environment: ScrubScanner.foundEnvironment).canonical
+                    guard typedByName[name] == nil else { continue }
+                    typedByName[name] = value
+                    if let f = key.fingerprint(name: name, tag: tag, bytes: Array(value.utf8)) {
+                        typedEntries.append(f)
+                    } else {
+                        literals.append(ScrubLiteral(value: value, name: name, tag: tag))
+                    }
+                }
+            }
+        }
+        let scanner = ScrubScanner(entries: entries + typedEntries, key: key, patterns: patterns, except: once?.except ?? [],
+                                   literals: literals)
         var state = loadState()
         let known = once == nil && state.generation == scanner.generation ? state.files : [:]
-        let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
-        let typedText = patterns == .typed ? ScrubTypedText(home: home, kanbanHome: kanbanHome) : nil
+        let typedText = patterns == .typed ? records : nil
         report.filesSeen = files.count
 
         // Scan.
@@ -386,7 +413,10 @@ public actor SecretScrubber {
             }
             for _ in 0..<width { add() }
             var done = 0
-            for await plan in group {
+            for await var plan in group {
+                for i in plan.matches.indices where plan.matches[i].newValue == nil {
+                    plan.matches[i].newValue = typedByName[plan.matches[i].name]
+                }
                 done += 1
                 if done % 200 == 0 { setProgress("scanned \(done) of \(pending.count) files") }
                 report.filesScanned += 1
@@ -403,7 +433,7 @@ public actor SecretScrubber {
         }
         if patterns == .typed {
             // Only a key the human typed somewhere is taken, and then in every file.
-            let typed = plans.reduce(into: Set<String>()) { $0.formUnion($1.typed) }
+            let typed = plans.reduce(into: Set(typedByName.values)) { $0.formUnion($1.typed) }
             plans = plans.compactMap { plan in
                 var plan = plan
                 plan.matches.removeAll { $0.newValue.map { !typed.contains($0) } ?? false }
@@ -699,6 +729,19 @@ struct ScrubTypedText: Sendable {
 
     func isRecord(_ path: String) -> Bool {
         path.hasPrefix(kanbanRecords) || (path.hasPrefix(rushSessions) && path.hasSuffix("/human.jsonl"))
+    }
+
+    /// The credentials in a record's texts that only the words around them
+    /// give away (`password: ...`, a password under an email address).
+    func typedSecrets(path: String) -> [DetectedSecret] {
+        guard path.hasSuffix(".jsonl"), let data = FileManager.default.contents(atPath: path) else { return [] }
+        var out: [DetectedSecret] = []
+        for line in data.split(separator: 0x0A) {
+            guard let text = ((try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any])?["text"] as? String,
+                  !text.isEmpty else { continue }
+            out += SecretDetector.findTyped(in: text)
+        }
+        return out
     }
 
     /// The values of the new finds in `matches` that sit in a record's text.

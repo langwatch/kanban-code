@@ -48,6 +48,47 @@ Feature: Secret scrubber
     And it is replaced in my message and in every assistant and tool line that repeats it
     And the key the dev stack minted stays in the file and is not saved
 
+  Scenario: A password I typed is saved and replaced like a key
+    Given the patterns mode is "typed"
+    And I typed into a card's chat an email address with a password on the next line and a 2fa code after it
+    And an agent repeated the password in its reply
+    When the scrubber runs
+    Then the password is saved as "scrubbed/found/PASSWORD_<fingerprint>" with tier ask
+    And it is replaced in my message and in the agent's reply
+    And the 2fa code stays
+
+  Scenario Outline: The labels a typed password is found by
+    Given I typed "<text>" into a card's chat
+    When the scrubber runs
+    Then the password in it is saved and replaced
+
+    Examples:
+      | text                                   |
+      | password: <password>                   |
+      | pwd=<password>                         |
+      | a senha do facebook é <password>       |
+      | my facebook password is <password>.    |
+      | Facebook password, then on the next line <password> |
+      | someone@example.com:<password>         |
+      | postgres://app:<password>@db:5432/app  |
+
+  Scenario: Words next to a password label that are not a password
+    Given I typed "password: required", "password = req.body.password", "password: ${DB_PASSWORD}", "password: ********" or "your password should be long"
+    When the scrubber runs
+    Then nothing is saved and nothing is replaced
+
+  Scenario: A password only an agent wrote is left alone
+    Given an agent wrote "password: <password>" in a transcript
+    And I never typed it
+    When the scrubber runs
+    Then it stays in the file and is not saved
+
+  Scenario: A typed password too short for a reference
+    Given I typed a password of 8 to 15 bytes
+    When the scrubber runs
+    Then it is saved to the vault
+    And each copy that stands as a whole word becomes asterisks of the same length
+
   Scenario: Typed text comes only from the records of my messages
     When the scrubber looks for keys I typed
     Then it reads Kanban's "human-messages" record and rush's "human.jsonl"

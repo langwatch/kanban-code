@@ -568,6 +568,73 @@ struct SecretScrubberTests {
         #expect(try String(contentsOfFile: other, encoding: .utf8).contains(Self.langwatch))
     }
 
+    /// Made up, assembled at run time.
+    static let password = ["aK9", "mQ2x", "WpL7v", "TzR4", "#nB"].joined()
+    static let shortPassword = ["Qm7", "xW2#", "pL9v"].joined()
+
+    @Test("a password typed under an email address is saved and replaced wherever an agent repeated it")
+    func typedPassword() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        try write([
+            #"{"type":"user","message":{"content":"log in with someone@example.com\n\#(Self.password)\n2fa: 123456"}}"#,
+            #"{"type":"assistant","message":{"content":"Logging in with password \#(Self.password) now"}}"#,
+        ], to: other)
+        try record(f, "log in to facebook\\n\\nsomeone@example.com\\n\\n\(Self.password)\\n\\n2fa: 123456")
+
+        let dry = await f.scrubber.run(dryRun: true, targets: standard(f))
+        #expect(dry.newSecrets == 1)
+        #expect(dry.bySecret.keys.contains { $0.hasPrefix("scrubbed/found/PASSWORD_") })
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(report.newSecrets == 1)
+        #expect(try !String(contentsOfFile: other, encoding: .utf8).contains(Self.password))
+        #expect(try !String(contentsOfFile: f.home + "/.kanban-code/human-messages/card_1.jsonl", encoding: .utf8).contains(Self.password))
+        #expect(try String(contentsOfFile: other, encoding: .utf8).contains("123456"))
+        let saved = try await f.vault.store.list().filter { $0.name.hasPrefix("scrubbed/found/PASSWORD_") }
+        #expect(saved.count == 1)
+        let secret = try await f.vault.store.secret(try #require(saved.first).name)
+        #expect(secret?.value == Self.password && secret?.tier == .ask)
+        // The vault holds it now, so the next run finds nothing new.
+        let again = await f.scrubber.run(dryRun: true, targets: standard(f))
+        #expect(again.newSecrets == 0 && again.replacements == 0)
+    }
+
+    @Test("a typed password too short for a reference becomes asterisks, only where it stands as a word")
+    func shortTypedPassword() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        let inside = "x" + Self.shortPassword + "y"
+        try write([
+            #"{"type":"assistant","message":{"content":"using \#(Self.shortPassword) and \#(inside)"}}"#,
+        ], to: other)
+        try record(f, "senha: \(Self.shortPassword)")
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(report.newSecrets == 1)
+        let text = try String(contentsOfFile: other, encoding: .utf8)
+        #expect(text.contains("using \(String(repeating: "*", count: Self.shortPassword.utf8.count)) and \(inside)"))
+        let names = try await f.vault.store.list().map(\.name)
+        #expect(names.contains { $0.hasPrefix("scrubbed/found/SENHA_") })
+    }
+
+    @Test("a password only an agent wrote is left alone, and patterns off takes no typed password")
+    func passwordNeedsARecord() async throws {
+        let f = try await fixture(patterns: .typed)
+        defer { try? FileManager.default.removeItem(atPath: f.home) }
+        let other = f.home + "/.claude/projects/-p/other.jsonl"
+        try write([#"{"type":"assistant","message":{"content":"set password: \#(Self.password) in the seed"}}"#], to: other)
+        let report = await f.scrubber.run(dryRun: false, targets: standard(f))
+        #expect(report.newSecrets == 0)
+        #expect(try String(contentsOfFile: other, encoding: .utf8).contains(Self.password))
+
+        let g = try await fixture(patterns: .off)
+        defer { try? FileManager.default.removeItem(atPath: g.home) }
+        try record(g, "password: \(Self.password)")
+        let off = await g.scrubber.run(dryRun: true, targets: standard(g))
+        #expect(off.newSecrets == 0)
+    }
+
     @Test("the patterns setting of an older build reads as on or off")
     func oldPatternsSetting() throws {
         func mode(_ json: String) throws -> ScrubPatterns {

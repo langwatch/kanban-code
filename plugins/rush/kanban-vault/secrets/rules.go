@@ -420,6 +420,90 @@ var valueRules = []rule{
 			return isKeyMaterial(g[2])
 		},
 	},
+	{
+		// "password: X", "senha do gmail é X", "DB_PASS=X", `"password": "X"`.
+		id:          "labelled_password",
+		description: "Password written after its label",
+		re: regexp.MustCompile(`(?im)(?:^|[^\p{L}\p{N}])` + passwordLabel + passwordOf +
+			`["'` + "`" + `]?(?:[ \t]*(?:[:=]{1,2}|=>|->)[ \t]*|[ \t]+(?:is|é|eh|es|est|ist)[ \t]+)["'` + "`" + `]?` +
+			passwordValue + `(?:["'` + "`" + `\s]|$)`),
+		render:      true,
+		secretGroup: 1,
+		accept:      func(g []string) bool { return isTypedPassword(g[1]) },
+	},
+	{
+		// A label alone on its line and the password on the next one.
+		id:          "password_line",
+		description: "Password on the line after its label",
+		re: regexp.MustCompile(`(?im)^[ \t]*(?:[\p{L}\p{N}.@_-]{1,40}[ \t]+)?` + passwordLabel + passwordOf +
+			`[ \t]*:?[ \t]*\r?\n(?:[ \t]*\r?\n)?[ \t]*` + passwordValue + `[ \t]*\r?$`),
+		render:      true,
+		secretGroup: 1,
+		accept:      func(g []string) bool { return isTypedPassword(g[1]) },
+	},
+	{
+		// A login pasted as it is: the email address, then the password on
+		// the next line or after a colon, a slash or a bar.
+		id:          "credential_block",
+		description: "Password pasted under or after an email address",
+		re: regexp.MustCompile(`(?im)^[ \t]*(?:(?:e-?mail|user(?:name)?|login|usu[aá]rio)[ \t]*[:=]?[ \t]*)?` + emailAddress +
+			`[ \t]*(?:\r?\n(?:[ \t]*\r?\n)?[ \t]*|[ \t]*[|/:][ \t]*)` + passwordValue + `[ \t]*\r?$`),
+		render:      true,
+		secretGroup: 1,
+		accept:      func(g []string) bool { return isTypedPassword(g[1]) },
+	},
+}
+
+// Words that name a password, in the languages it gets typed in.
+const passwordLabel = `(?:password|passwd|passwort|passphrase|pwd|pass|senha|contrase(?:ñ|n)a|mot de passe|wachtwoord)`
+
+// "password for facebook", "senha do gmail".
+const passwordOf = `(?:[ \t]+(?:for|of|on|to|at|do|da|de|del|du|no|na|para|von|für)[ \t]+[\p{L}\p{N}.@_-]{1,40})?`
+
+// A password: one run with no space or quote, 8 to 128 characters, a
+// sentence's full stop or comma after it left out.
+const passwordValue = `([^\s"'` + "`" + `]{7,127}[^\s"'` + "`" + `.,;])[.,;]?`
+
+const emailAddress = `[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+`
+
+var (
+	wordWithPunctuation = regexp.MustCompile(`^\p{L}+[!?.,:;]*$`)
+	phoneLike           = regexp.MustCompile(`^\+?[0-9 ().-]{7,}$`)
+	dateLike            = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+	emailLike           = regexp.MustCompile(`^` + emailAddress + `$`)
+)
+
+// isTypedPassword: does a value next to a password label read as a
+// password? Not a placeholder, a reference, code, a path, an address, a
+// number, a date or a plain word, and at least two of lowercase, uppercase,
+// digits and symbols.
+func isTypedPassword(value string) bool {
+	if len(value) < 8 || len(value) > 128 {
+		return false
+	}
+	if isPlaceholderSecret(value, "labelled_password") || placeholderValue.MatchString(value) {
+		return false
+	}
+	if envReference.MatchString(value) || codeExpression.MatchString(value) || pathLike.MatchString(value) ||
+		urlLike.MatchString(value) || emailLike.MatchString(value) || versionString.MatchString(value) ||
+		dateLike.MatchString(value) || phoneLike.MatchString(value) || wordWithPunctuation.MatchString(value) {
+		return false
+	}
+	if strings.Contains(value, Marker) || strings.Contains(value, "{{vault:") || strings.ContainsAny(value, "()[]{}<>") {
+		return false
+	}
+	if strings.ContainsAny(value[:1], "-$%") {
+		return false
+	}
+	lower, upper, digit := countCharClasses(value)
+	other := len([]rune(value)) - lower - upper - digit
+	classes := 0
+	for _, n := range []int{lower, upper, digit, other} {
+		if n > 0 {
+			classes++
+		}
+	}
+	return classes >= 2
 }
 
 // Rule is one built-in rule, for listing.

@@ -140,3 +140,43 @@ func TestReplaceStacksUsageLines(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestFindTypedPasswords(t *testing.T) {
+	pw := "Qm7" + "xW2#" + "pL9v"
+	found := []string{
+		"password: " + pw,
+		"pwd=" + pw,
+		`{"password": "` + pw + `"}`,
+		"a senha do facebook é " + pw,
+		"my facebook password is " + pw + ".",
+		"Facebook password\n" + pw,
+		"log in\n\nsomeone.test@example.com\n\n" + pw + "\n\n2fa: 123456",
+		"someone.test@example.com:" + pw,
+	}
+	for _, text := range found {
+		ds := Find(text)
+		if len(ds) != 1 || ds[0].Value != pw || ds[0].SuggestedName != "PASSWORD" && ds[0].SuggestedName != "PWD" {
+			t.Errorf("Find(%q) = %+v, want the password", text, ds)
+		}
+	}
+	notPasswords := []string{
+		"your password should be long and memorable",
+		"password: required",
+		"password = req.body.password",
+		"password: ${DB_PASSWORD}",
+		"password = getpass()",
+		"password: ********",
+		"password: <your-password>",
+		"password: Obrigado!",
+		"password: 12345678",
+		"someone@example.com\n+55 11 99999-9999",
+		"someone@example.com\nThanks, talk tomorrow",
+		"password manager is 1Password",
+		"bypass: Ab12cd34Ef56",
+	}
+	for _, text := range notPasswords {
+		if ds := Find(text); len(ds) != 0 {
+			t.Errorf("Find(%q) = %+v, want nothing", text, ds)
+		}
+	}
+}
