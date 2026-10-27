@@ -198,6 +198,9 @@ struct ConversationChatView: View {
     @State private var messages: [RemoteConversationMessage] = []
     @State private var renaming = false
     @State private var focusToken = 0
+    /// The transcript line of each human message whose images this machine
+    /// cannot read from their paths.
+    @State private var imageLines: [String: Int] = [:]
 
     private var store: BoardStore { AppComposition.shared.store }
     private var drafts: ConversationDrafts { ConversationDrafts.shared }
@@ -226,6 +229,32 @@ struct ConversationChatView: View {
     private var pending: [QueuedPrompt] {
         let sent = store.state.conversationOutbox[card.id]?.filter { $0.conversation == conversation.id } ?? []
         return sent.filter { prompt in !messages.contains { ConversationOutbox.delivers($0, prompt) } }
+    }
+
+    private var transcriptPath: String? {
+        ConversationExportCommand.transcriptPath(for: card.link, kanbanHome: nil)
+    }
+
+    /// Human messages with images whose paths are not on this machine.
+    private var unreadableImageMessageIds: [String] {
+        messages.filter { message in
+            message.role == .human && (message.images ?? []).contains { !FileManager.default.isReadableFile(atPath: $0) }
+        }.map(\.id)
+    }
+
+    /// Finds those messages' prompts in the transcript, so their images load
+    /// from there as Main's do.
+    private func locateImages() async {
+        let wanted = unreadableImageMessageIds.filter { imageLines[$0] == nil }
+        guard !wanted.isEmpty, let path = transcriptPath,
+              let turns = try? await TranscriptReader.readTurns(from: path) else { return }
+        var found = imageLines
+        for message in messages where wanted.contains(message.id) {
+            if let turn = ConversationTranscriptImages.turn(for: message.text, conversationId: conversation.id, in: turns) {
+                found[message.id] = turn.lineNumber
+            }
+        }
+        imageLines = found
     }
 
     /// Prompts of this card still in its queue: the session has not taken them.
@@ -264,7 +293,8 @@ struct ConversationChatView: View {
                         }
                         ForEach(messages) { message in
                             ConversationMessageRow(message: message, cardId: card.id,
-                                                   waiting: queuedIds.contains(message.id))
+                                                   waiting: queuedIds.contains(message.id),
+                                                   transcript: imageLines[message.id].map { (transcriptPath, $0) })
                                 .id(message.id)
                         }
                         ForEach(pending, id: \.id) { prompt in
@@ -319,6 +349,7 @@ struct ConversationChatView: View {
                     if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
+            .task(id: unreadableImageMessageIds) { await locateImages() }
             ChatInputBar(
                 assistant: card.link.effectiveAssistant,
                 isReady: true,
@@ -403,13 +434,16 @@ private struct ConversationMessageRow: View {
     /// Logged but not taken by the session yet: faded, as the chat shows a
     /// message going out.
     var waiting = false
+    /// The transcript and the line holding this message's images, when
+    /// their paths are not on this machine.
+    var transcript: (path: String?, line: Int)?
 
     var body: some View {
         if message.role == .human {
             HStack {
                 Spacer(minLength: 60)
                 VStack(alignment: .trailing, spacing: 6) {
-                    ConversationImageStrip(paths: message.images ?? [])
+                    ConversationImageStrip(paths: message.images ?? [], transcript: transcript)
                     Text(message.text)
                         .font(.app(.body))
                         .textSelection(.enabled)
@@ -477,30 +511,51 @@ private struct PendingConversationBubble: View {
 }
 
 /// The images of a message: thumbnails when this machine can read them,
-/// a chip each otherwise (they live on the master that owns the card).
+/// otherwise the chat's image chips, which load from the transcript on hover.
 private struct ConversationImageStrip: View {
     let paths: [String]
+    var transcript: (path: String?, line: Int)? = nil
 
     var body: some View {
         if !paths.isEmpty {
             HStack(spacing: 6) {
                 ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
                     if let image = NSImage(contentsOfFile: path) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 72, height: 72)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .help((path as NSString).lastPathComponent)
+                        ImageThumbnail(image: image, path: path)
                     } else {
-                        Label("Image \(index + 1)", systemImage: "photo")
-                            .font(.app(.caption))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                        LazyImageChip(index: index, sessionPath: transcript?.path, byteOffset: transcript?.line ?? 0)
                     }
                 }
             }
         }
+    }
+}
+
+/// A readable image: a thumbnail that previews larger on hover and opens on
+/// click.
+private struct ImageThumbnail: View {
+    let image: NSImage
+    let path: String
+    @State private var hovering = false
+
+    var body: some View {
+        Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 72, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            .popover(isPresented: $hovering) {
+                let size = image.size
+                let scale = min(1.0, min(600.0 / max(size.width, 1), 400.0 / max(size.height, 1)))
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size.width * scale, height: size.height * scale)
+                    .padding(4)
+            }
+            .help((path as NSString).lastPathComponent)
     }
 }

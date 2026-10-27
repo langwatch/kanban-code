@@ -5,6 +5,15 @@ import KanbanCodeRemoteKit
 /// files that the app's own image flow (clipboard paste into tmux, rush
 /// `--image`) takes by path.
 public enum RemotePromptImages {
+    /// The media type of image bytes, from their first bytes; png when unknown.
+    public static func mimeType(of data: Data) -> String {
+        let head = [UInt8](data.prefix(12))
+        if head.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if head.starts(with: [0x47, 0x49, 0x46]) { return "image/gif" }
+        if head.count >= 12, head[0...3] == [0x52, 0x49, 0x46, 0x46], head[8...11] == [0x57, 0x45, 0x42, 0x50] { return "image/webp" }
+        return "image/png"
+    }
+
 
     public struct Decoded: Equatable, Sendable {
         public var bytes: Data

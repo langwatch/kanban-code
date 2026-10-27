@@ -87,6 +87,24 @@ struct ConversationLogTests {
         #expect(ConversationLog.fold(named)[0].summary.title == "Named at start")
     }
 
+    @Test("a conversation message's images are found on its prompt's line in the transcript")
+    func imagesInTranscript() {
+        func user(_ line: Int, _ text: String, images: Int) -> ConversationTurn {
+            ConversationTurn(index: line, lineNumber: line, role: "user", textPreview: text,
+                             contentBlocks: [.init(kind: .text, text: text)], imageCount: images)
+        }
+        let sent = ConversationPrompt.wrap("isn't it odd? [Image #1]\nsecond line", id: "smart-tiger", title: "Stop button")
+        let turns = [
+            user(10, ConversationPrompt.wrap("isn't it odd? [Image #1]\nsecond line", id: "cosy-koala", title: nil), images: 1),
+            user(20, sent, images: 1),
+            user(30, "isn't it odd? [Image #1]", images: 1),
+        ]
+        #expect(ConversationTranscriptImages.turn(for: "isn't it odd? [Image #1]\nsecond line", conversationId: "smart-tiger", in: turns)?.lineNumber == 20)
+        #expect(ConversationTranscriptImages.turn(for: "isn't it odd? [Image #1]  second line", conversationId: "smart-tiger", in: turns)?.lineNumber == 20)
+        #expect(ConversationTranscriptImages.turn(for: "something else", conversationId: "smart-tiger", in: turns) == nil)
+        #expect(ConversationTranscriptImages.turn(for: "isn't it odd?", conversationId: "calm-heron", in: turns) == nil)
+    }
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [
@@ -395,6 +413,31 @@ struct ConversationHostTests {
         try handle.close()
         let thread = try #require(engine.conversationStore.threads(cardId: "card_a", ownerMachine: nil).first)
         #expect(thread.summary.title == "My plan")
+    }
+
+    @Test("a message's image is served from the path the log keeps, and only that path")
+    func imageOfAMessage() async throws {
+        let (host, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let image = (dir as NSString).appendingPathComponent("shot.png")
+        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
+        try bytes.write(to: URL(fileURLWithPath: image))
+        let conv = try await engine.createConversation(cardId: "card_a", RemoteConversationCreate(), by: "human")
+        let prompt = QueuedPrompt(body: "look [Image #1]", sendAutomatically: true, imagePaths: [image],
+                                  humanWrittenAt: .now, conversation: conv.id)
+        store.dispatch(.addQueuedPrompt(cardId: "card_a", prompt: prompt, placement: .back))
+        await waitFor { (store.state.conversations["card_a"]?.first?.messageCount ?? 0) > 0 }
+        let message = try #require(engine.conversationStore.threads(cardId: "card_a", ownerMachine: nil).first?.messages.first)
+        #expect(try await host.conversationImage(cardId: "card_a", conversationId: conv.id, messageId: message.id, index: 0) == bytes)
+        await #expect(throws: RemoteHostError.self) {
+            _ = try await host.conversationImage(cardId: "card_a", conversationId: conv.id, messageId: message.id, index: 1)
+        }
+        await #expect(throws: RemoteHostError.self) {
+            _ = try await host.conversationImage(cardId: "card_a", conversationId: conv.id, messageId: "msg_other", index: 0)
+        }
+        #expect(RemotePromptImages.mimeType(of: bytes) == "image/png")
+        #expect(RemotePromptImages.mimeType(of: Data([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg")
     }
 
     @Test("start a conversation, send in it, the agent replies through the log, the human reads it")

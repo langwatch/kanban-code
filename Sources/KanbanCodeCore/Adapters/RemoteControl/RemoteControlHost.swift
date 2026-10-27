@@ -127,6 +127,9 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation
     /// The card's conversation log from `offset`, for a master that mirrors it.
     func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript
+    /// The bytes of image `index` of a human message of a conversation, read
+    /// on the master that owns the card.
+    func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data
 
     /// Keeps an image pasted into the card's terminal as a file on the
     /// master that owns the card, and returns where it is there.
@@ -238,6 +241,10 @@ extension RemoteControlHost {
     }
 
     public func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
+        throw RemoteHostError.notFound("this host has no conversations")
+    }
+
+    public func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data {
         throw RemoteHostError.notFound("this host has no conversations")
     }
 

@@ -51,6 +51,27 @@ extension MasterEngine {
         return thread.detail
     }
 
+    /// Image `index` of a human message, from the path the log keeps for it
+    /// on this master. Only paths the log names are read.
+    public func conversationImage(cardId: String, id: String, messageId: String, index: Int) async throws -> Data {
+        if let owner = await ownerClient(forCard: cardId) {
+            return try await Self.forwardedConversation {
+                try await owner.conversationImage(cardId: cardId, id: id, messageId: messageId, index: index)
+            }
+        }
+        try requireCard(cardId)
+        guard let thread = conversationStore.threads(cardId: cardId).first(where: { $0.summary.id == id }) else {
+            throw RemoteHostError.notFound("no conversation \(id) on card \(cardId)")
+        }
+        guard let message = thread.messages.first(where: { $0.id == messageId }),
+              let images = message.images, images.indices.contains(index),
+              case let path = images[index],
+              let data = FileManager.default.contents(atPath: path) else {
+            throw RemoteHostError.notFound("no image \(index + 1) on message \(messageId)")
+        }
+        return data
+    }
+
     /// Renames, marks read or archives a conversation.
     public func updateConversation(cardId: String, id: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
         if let owner = await ownerClient(forCard: cardId) {

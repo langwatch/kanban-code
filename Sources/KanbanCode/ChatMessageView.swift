@@ -625,7 +625,8 @@ struct ActionButton: View {
 
 // MARK: - Lazy Image Chip (loads on hover from JSONL)
 
-/// Shows "Image #N" chip; loads the actual image from the JSONL on hover.
+/// Shows "Image #N" chip; loads the actual image from the JSONL on hover,
+/// and opens it in the default viewer on click.
 struct LazyImageChip: View {
     let index: Int
     let sessionPath: String?
@@ -646,6 +647,8 @@ struct LazyImageChip: View {
         .padding(.vertical, 4)
         .background(Color.primary.opacity(0.06), in: Capsule())
         .foregroundStyle(.secondary)
+        .contentShape(Capsule())
+        .onTapGesture { openImage() }
         .onHover { hovering in
             if hovering && loadedImage == nil && !isLoading {
                 loadImage()
@@ -672,6 +675,23 @@ struct LazyImageChip: View {
                         height: size.height * scale
                     )
                     .padding(4)
+            }
+        }
+    }
+
+    private func openImage() {
+        guard let path = sessionPath else { return }
+        Task {
+            guard let images = try? await TranscriptReader.loadImagesAtOffset(from: path, byteOffset: byteOffset),
+                  let data = images[safe: index] else { return }
+            let ext = NSImage(data: data).flatMap { _ in data.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "png" : "jpg" } ?? "png"
+            let file = (NSTemporaryDirectory() as NSString)
+                .appendingPathComponent("kanban-image-\(byteOffset)-\(index).\(ext)")
+            do {
+                try data.write(to: URL(fileURLWithPath: file))
+                NSWorkspace.shared.open(URL(fileURLWithPath: file))
+            } catch {
+                KanbanCodeLog.warn("chat", "could not open image \(index + 1): \(error)")
             }
         }
     }

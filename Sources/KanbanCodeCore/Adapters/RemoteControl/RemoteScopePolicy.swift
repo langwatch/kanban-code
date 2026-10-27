@@ -45,7 +45,7 @@ enum RemoteScopePolicy {
         "POST cards/*/side-chat", "GET cards/*/side-chat/*", "DELETE cards/*/side-chat/*",
         "GET cards/*/slash-commands", "POST cards/*/pasted-image",
         "GET cards/*/conversations", "POST cards/*/conversations", "GET cards/*/conversations/*",
-        "PATCH cards/*/conversations/*", "GET cards/*/conversations-raw",
+        "PATCH cards/*/conversations/*", "GET cards/*/conversations-raw", "GET cards/*/conversations/*/images",
     ]
 
     /// What `kanban remote attach` calls to show a terminal.

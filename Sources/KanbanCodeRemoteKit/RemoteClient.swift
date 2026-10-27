@@ -224,6 +224,25 @@ public struct RemoteClient: Sendable {
         try await send(makeRequest("PATCH", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))", body: body))
     }
 
+    /// GET /v1/cards/{id}/conversations/{conv}/images?message=&index=: the
+    /// bytes of one image of a human message, read on the owning master.
+    public func conversationImage(cardId: String, id: String, messageId: String, index: Int) async throws -> Data {
+        var request = makeRequest("GET", "v1/cards/\(Self.escape(cardId))/conversations/\(Self.escape(id))/images",
+                                  query: [URLQueryItem(name: "message", value: messageId),
+                                          URLQueryItem(name: "index", value: String(index))])
+        request.timeoutInterval = 30
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw RemoteClientError.transport(error.localizedDescription)
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw RemoteClientError.from(status: status, body: data) }
+        return data
+    }
+
     /// GET /v1/cards/{id}/conversations-raw?offset=: the conversation log's
     /// bytes from `offset`, for a master that mirrors it.
     public func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript {

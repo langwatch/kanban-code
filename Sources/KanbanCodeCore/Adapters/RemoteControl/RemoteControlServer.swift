@@ -554,6 +554,15 @@ public final class RemoteControlServer: Sendable {
                 }
                 return .response(.json(try await host.updateConversation(cardId: id, conversationId: rest[3], body)))
 
+            case ("GET", "cards/*/conversations/*/images"):
+                guard let message = request.query["message"], !message.isEmpty,
+                      let index = Int(request.query["index"] ?? ""), index >= 0 else {
+                    return .response(.error(400, "query must be ?message=<id>&index=<n>"))
+                }
+                let image = try await host.conversationImage(cardId: id, conversationId: rest[3], messageId: message, index: index)
+                return .response(RemoteHTTPResponse(
+                    status: 200, headers: [("Content-Type", RemotePromptImages.mimeType(of: image))], body: image))
+
             case ("GET", "cards/*/conversations-raw"):
                 let offset = max(Int(request.query["offset"] ?? "") ?? 0, 0)
                 let raw = try await host.rawConversations(cardId: id, offset: offset)
@@ -718,7 +727,7 @@ public final class RemoteControlServer: Sendable {
         "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
         "cards/*/slash-commands", "cards/*/pasted-image",
-        "cards/*/conversations", "cards/*/conversations/*", "cards/*/conversations-raw",
+        "cards/*/conversations", "cards/*/conversations/*", "cards/*/conversations-raw", "cards/*/conversations/*/images",
     ]
 
     static func response(for error: Error) -> RemoteHTTPResponse {

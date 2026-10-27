@@ -522,6 +522,10 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         try await engine.updateConversation(cardId: cardId, id: conversationId, update)
     }
 
+    public func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data {
+        try await engine.conversationImage(cardId: cardId, id: conversationId, messageId: messageId, index: index)
+    }
+
     public func rawConversations(cardId: String, offset: Int) async throws -> RemoteRawTranscript {
         try await engine.rawConversations(cardId: cardId, offset: offset)
     }

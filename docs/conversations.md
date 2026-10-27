@@ -83,6 +83,7 @@ All routes forward to the master that owns the card. The feature name in `GET /v
 | `POST /v1/cards/{id}/conversations` | `{"title"?, "quote"?}` → `RemoteConversation`, 201 |
 | `GET /v1/cards/{id}/conversations/{conv}` | `RemoteConversationDetail`: the conversation and its messages, oldest first |
 | `PATCH /v1/cards/{id}/conversations/{conv}` | `{"title"?, "read"?, "archived"?}` → `RemoteConversation` |
+| `GET /v1/cards/{id}/conversations/{conv}/images?message=&index=` | the bytes of one image of a human message, read from the path the log keeps on the owning master |
 | `GET /v1/cards/{id}/conversations-raw?offset=` | log bytes from `offset`, `X-Log-Size` header |
 
 - `POST /v1/cards/{id}/prompt` takes `conversation`: the id the prompt belongs to. The owner adds the header.
