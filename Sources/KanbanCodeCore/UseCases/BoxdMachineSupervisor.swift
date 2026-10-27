@@ -250,6 +250,33 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         return "\(appVersion)-\(digest)"
     }
 
+    /// When the newest compiled file of the bundle was written, which is when
+    /// the app's CLI was built.
+    public nonisolated static func bundleBuiltAt(cliBundlePath: String) -> Date? {
+        let distPath = (cliBundlePath as NSString).appendingPathComponent("dist")
+        let manager = FileManager.default
+        let files = manager.enumerator(atPath: distPath)?.allObjects as? [String] ?? []
+        return files.filter { $0.hasSuffix(".js") }.compactMap { file in
+            try? manager.attributesOfItem(atPath: (distPath as NSString).appendingPathComponent(file))[.modificationDate] as? Date
+        }.max()
+    }
+
+    /// Whether the app replaces the CLI installed on a machine. A CLI that
+    /// `Scripts/kanban-code-server/deploy.sh` installed from source records
+    /// `deploy:<unix seconds>:<commit>` and stays until the app carries a
+    /// bundle built after that deploy; any other stamp is replaced when it
+    /// differs from the app's own.
+    public nonisolated static func shouldInstallCli(installed: String, stamp: String, bundleBuiltAt: Date?) -> Bool {
+        if stamp.isEmpty { return true }
+        if installed == stamp { return false }
+        let parts = installed.split(separator: ":")
+        if parts.count >= 2, parts[0] == "deploy", let seconds = TimeInterval(parts[1]) {
+            guard let bundleBuiltAt else { return false }
+            return bundleBuiltAt.timeIntervalSince1970 > seconds
+        }
+        return true
+    }
+
     /// Command the embedded terminal runs to attach to a remote tmux session.
     public nonisolated static func attachCommand(boxdPath: String, machineName: String, sessionName: String) -> String {
         "\(shellEscape(boxdPath)) machine exec --tty \(shellEscape(machineName)) -- tmux attach -t \(shellEscape(sessionName))"
@@ -1282,7 +1309,9 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
             throw BoxdSupervisorError.noCliBundle
         }
         let stamp = Self.bundleStamp(appVersion: appVersion, cliBundlePath: cliBundlePath)
-        if installed == stamp, !stamp.isEmpty { return }
+        guard Self.shouldInstallCli(
+            installed: installed, stamp: stamp,
+            bundleBuiltAt: Self.bundleBuiltAt(cliBundlePath: cliBundlePath)) else { return }
         log("Installing the kanban CLI \(appVersion) on \(machineName)")
         let archive = (NSTemporaryDirectory() as NSString).appendingPathComponent("kanban-cli-\(UUID().uuidString).tgz")
         defer { try? FileManager.default.removeItem(atPath: archive) }

@@ -283,6 +283,23 @@ struct BoxdMachineSupervisorTests {
             previous: busy, now: now, timeout: timeout, grace: grace) == busy)
     }
 
+    @Test("A CLI deployed from source stays until the app carries a newer bundle")
+    func deployedCliIsKeptUntilNewerBundle() {
+        let deployedAt: TimeInterval = 1_800_000_000
+        let deployed = "deploy:\(Int(deployedAt)):7c28911"
+        let older = Date(timeIntervalSince1970: deployedAt - 3600)
+        let newer = Date(timeIntervalSince1970: deployedAt + 3600)
+
+        #expect(!BoxdMachineSupervisor.shouldInstallCli(installed: deployed, stamp: "1.0.0-abc", bundleBuiltAt: older))
+        #expect(BoxdMachineSupervisor.shouldInstallCli(installed: deployed, stamp: "1.0.0-abc", bundleBuiltAt: newer))
+        #expect(!BoxdMachineSupervisor.shouldInstallCli(installed: deployed, stamp: "1.0.0-abc", bundleBuiltAt: nil))
+
+        // Bundles the app installed itself are replaced whenever they differ.
+        #expect(!BoxdMachineSupervisor.shouldInstallCli(installed: "1.0.0-abc", stamp: "1.0.0-abc", bundleBuiltAt: older))
+        #expect(BoxdMachineSupervisor.shouldInstallCli(installed: "1.0.0-old", stamp: "1.0.0-abc", bundleBuiltAt: older))
+        #expect(BoxdMachineSupervisor.shouldInstallCli(installed: "", stamp: "1.0.0-abc", bundleBuiltAt: older))
+    }
+
     @Test("The CLI stamp of a machine follows the content of the bundle")
     func bundleStampFollowsContent() throws {
         let root = NSTemporaryDirectory() + "boxd-stamp-\(UUID().uuidString)"

@@ -16,6 +16,10 @@ HOST="${1:-root@51.159.202.175}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REMOTE_DIR="Projects/kanban-server"
 
+# Stamp of the installed CLI: the Mac app keeps a CLI stamped this way until
+# its own bundle was built after this deploy (BoxdMachineSupervisor.shouldInstallCli).
+CLI_STAMP="deploy:$(date +%s):$(git -C "$ROOT" rev-parse --short HEAD)"
+
 TARBALL="/tmp/kanban-code-src-$$.tar"
 git -C "$ROOT" archive --format=tar HEAD | ssh "$HOST" "cat > $TARBALL"
 
@@ -51,6 +55,7 @@ pnpm install --frozen-lockfile
 pnpm build
 NEW=\$(mktemp -d ~/.kanban-code/cli.new.XXXXXX)
 cp -a dist package.json node_modules docs "\$NEW"/
+printf '%s' '$CLI_STAMP' > "\$NEW"/VERSION
 chmod 755 "\$NEW"
 rm -rf ~/.kanban-code/cli.old
 if [ -d ~/.kanban-code/cli ]; then mv ~/.kanban-code/cli ~/.kanban-code/cli.old; fi
