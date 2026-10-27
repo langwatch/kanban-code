@@ -87,7 +87,7 @@ struct ChatPane: View {
                     .onAppear { Task { await transcript.loadOlder() } }
                 }
                 ForEach(visibleMessages) { message in
-                    MessageView(message: message)
+                    MessageView(message: message, loadImage: imageLoader(for: message))
                         // Touch and hold an agent message: its edit menu
                         // offers to go on with it in a conversation of its own.
                         .environment(\.selectableTextMenuItem, continueItem(for: message))
@@ -227,6 +227,17 @@ struct ChatPane: View {
             await transcript.refresh()
         }
         .sensoryFeedback(.success, trigger: sentCount)
+    }
+
+    /// Loads the images of a sent message from the master that keeps them.
+    private func imageLoader(for message: RemoteMessage) -> ((Int) async throws -> Data)? {
+        guard (message.images ?? 0) > 0, let client = board.client else { return nil }
+        let cardId = card.id
+        return { index in
+            try await RemoteImageCache.data("transcript|\(cardId)|\(message.id)|\(index)") {
+                try await client.transcriptImage(cardId: cardId, messageId: message.id, index: index)
+            }
+        }
     }
 
     private func continueItem(for message: RemoteMessage) -> SelectableTextMenuItem? {
@@ -591,6 +602,8 @@ struct WorkingIndicator: View {
 
 struct MessageView: View {
     let message: RemoteMessage
+    /// The bytes of the message's image at an index, from the master.
+    var loadImage: ((Int) async throws -> Data)?
     @State private var expanded = false
     @State private var showsWhole = false
 
@@ -632,6 +645,9 @@ struct MessageView: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityIdentifier("promptConversation")
+            }
+            if let count = message.images, count > 0 {
+                RemoteImageRow(count: count, load: loadImage)
             }
             HStack {
                 Spacer(minLength: 48)

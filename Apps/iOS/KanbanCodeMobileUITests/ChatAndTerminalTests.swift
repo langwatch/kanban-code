@@ -260,9 +260,20 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(15) { message(containing: "Compare [Image #1] with the design").exists })
         XCTAssertFalse(message(containing: "[image]").exists)
         XCTAssertFalse(attachment.exists)
+        // The transcript lists it with its image, fetched from the master
+        // as a thumbnail that opens full screen.
+        let image = app.buttons.matching(identifier: "messageImage").firstMatch
+        XCTAssertTrue(waitFor(15) { image.exists && image.label == "Image" })
         tapConversation()
         sleep(1)
         shot("27-image-sent")
+        image.tap()
+        let viewer = app.descendants(matching: .any).matching(identifier: "imageViewer").firstMatch
+        XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        shot("27b-image-viewer")
+        app.buttons["imageViewerClose"].tap()
+        XCTAssertTrue(waitFor(5) { !viewer.exists })
+        XCTAssertTrue(composer.exists)
     }
 
     // MARK: Selection

@@ -29,8 +29,6 @@ final class ConversationModel {
     private(set) var error: String?
     private(set) var loadedOnce = false
     @ObservationIgnored private var isLoading = false
-    /// Images of sent messages already fetched, by message id and index.
-    @ObservationIgnored private var imageCache: [String: Data] = [:]
 
     init(cardId: String, id: String, board: BoardModel) {
         self.cardId = cardId
@@ -91,12 +89,11 @@ final class ConversationModel {
 
     /// The bytes of a sent message's image, from the master that keeps it.
     func image(messageId: String, index: Int) async throws -> Data {
-        let key = "\(messageId)#\(index)"
-        if let cached = imageCache[key] { return cached }
         guard let client else { throw URLError(.notConnectedToInternet) }
-        let data = try await client.conversationImage(cardId: cardId, id: id, messageId: messageId, index: index)
-        imageCache[key] = data
-        return data
+        let (cardId, id) = (cardId, id)
+        return try await RemoteImageCache.data("conversation|\(cardId)|\(id)|\(messageId)|\(index)") {
+            try await client.conversationImage(cardId: cardId, id: id, messageId: messageId, index: index)
+        }
     }
 
     func rename(_ title: String) async throws {

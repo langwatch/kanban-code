@@ -100,6 +100,10 @@ final class DemoHost: RemoteControlHost {
         var queuedConversations: [String: String] = [:]
         /// The bytes of each image sent in a conversation, by the path its log names.
         var images: [String: Data] = [:]
+        /// The images of each queued prompt, until it is sent.
+        var queuedImages: [String: [Data]] = [:]
+        /// The images of each prompt in the transcript, by its message id.
+        var transcriptImages: [String: [Data]] = [:]
 
         /// The card with the summaries of its conversations not archived.
         var listed: RemoteCard {
@@ -465,6 +469,13 @@ final class DemoHost: RemoteControlHost {
         return RemoteTranscript(cardId: cardId, messages: Array(all[start..<end]), olderCursor: start > 0 ? String(start) : nil)
     }
 
+    func transcriptImage(cardId: String, messageId: String, index: Int) async throws -> Data {
+        guard let images = try cardState(cardId).transcriptImages[messageId], images.indices.contains(index) else {
+            throw RemoteHostError.notFound("message \(messageId) has no image \(index)")
+        }
+        return images[index]
+    }
+
     // MARK: Slash commands
 
     func slashCommands(cardId: String) async throws -> [RemoteSlashCommand] {
@@ -603,11 +614,13 @@ final class DemoHost: RemoteControlHost {
                 c.card.queuedPrompts.append(prompt)
                 c.card.queuedPromptCount = c.card.queuedPrompts.count
                 if let conversation = request.conversation { c.queuedConversations[promptId] = conversation }
+                if !images.isEmpty { c.queuedImages[promptId] = images.map(\.bytes) }
             }
             deliverWhenIdle(cardId)
             return
         }
-        deliver(cardId, text: text, interrupting: c.card.isBusy, conversation: request.conversation)
+        deliver(cardId, text: text, interrupting: c.card.isBusy, conversation: request.conversation,
+                images: images.map(\.bytes))
     }
 
     // MARK: Conversations
@@ -675,7 +688,8 @@ final class DemoHost: RemoteControlHost {
         return [images, text].filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private func deliver(_ cardId: String, text: String, interrupting: Bool, conversation: String? = nil) {
+    private func deliver(_ cardId: String, text: String, interrupting: Bool, conversation: String? = nil,
+                         images: [Data] = []) {
         // The session gets the conversation's header, as the owner adds it.
         let summary = conversation.flatMap { id in (try? cardState(cardId)).flatMap { thread($0, id)?.summary } }
         let sent = summary.map { ConversationPrompt.wrap(text, conversation: $0) } ?? text
@@ -683,7 +697,10 @@ final class DemoHost: RemoteControlHost {
             if interrupting {
                 c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .system, text: "Interrupted", at: Date()))
             }
-            c.messages.append(RemoteMessage(id: "\(c.messages.count)", role: .user, text: sent, at: Date()))
+            let id = "\(c.messages.count)"
+            c.messages.append(RemoteMessage(id: id, role: .user, text: sent, at: Date(),
+                                            images: images.isEmpty ? nil : images.count))
+            if !images.isEmpty { c.transcriptImages[id] = images }
         }
         simulateTurn(cardId, reply: "Got it: \(text)", conversation: summary)
     }
@@ -693,12 +710,13 @@ final class DemoHost: RemoteControlHost {
         Task {
             while (try? self.cardState(cardId))?.card.isBusy == true { try? await Task.sleep(for: .milliseconds(200)) }
             guard let next = self.popQueued(cardId, promptId: nil) else { return }
-            let conversation = self.state.withLock { s -> String? in
-                guard let i = s.cards.firstIndex(where: { $0.card.id == cardId }) else { return nil }
-                return s.cards[i].queuedConversations.removeValue(forKey: next.id)
+            let (conversation, images) = self.state.withLock { s -> (String?, [Data]) in
+                guard let i = s.cards.firstIndex(where: { $0.card.id == cardId }) else { return (nil, []) }
+                return (s.cards[i].queuedConversations.removeValue(forKey: next.id),
+                        s.cards[i].queuedImages.removeValue(forKey: next.id) ?? [])
             }
             self.deliver(cardId, text: Self.promptText(next.text, imageCount: next.imageCount), interrupting: false,
-                         conversation: conversation)
+                         conversation: conversation, images: images)
         }
     }
 
@@ -719,7 +737,10 @@ final class DemoHost: RemoteControlHost {
         guard let prompt = popQueued(cardId, promptId: promptId) else {
             throw RemoteHostError.notFound("card \(cardId) has no queued prompt \(promptId); it may have been sent already")
         }
-        deliver(cardId, text: Self.promptText(prompt.text, imageCount: prompt.imageCount), interrupting: c.card.isBusy)
+        var images: [Data] = []
+        update(cardId) { c in images = c.queuedImages.removeValue(forKey: promptId) ?? [] }
+        deliver(cardId, text: Self.promptText(prompt.text, imageCount: prompt.imageCount), interrupting: c.card.isBusy,
+                images: images)
         if !(try cardState(cardId)).card.queuedPrompts.isEmpty { deliverWhenIdle(cardId) }
     }
 

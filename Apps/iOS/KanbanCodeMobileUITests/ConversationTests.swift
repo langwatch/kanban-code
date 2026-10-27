@@ -186,8 +186,8 @@ final class ConversationTests: KanbanUITestCase {
         shot("87-continued-conversation")
     }
 
-    /// An image goes with the message; the phone shows a chip for it once
-    /// the master lists the message, since the master keeps the file.
+    /// An image goes with the message; once the master lists the message,
+    /// the phone shows it as a thumbnail fetched from the master.
     func testAnImageGoesWithAConversationMessage() throws {
         startConversation()
         composer.tap()
@@ -206,10 +206,10 @@ final class ConversationTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(15) { image.exists && image.label == "Image" })
         shot("89-conversation-image-sent")
         image.tap()
-        XCTAssertTrue(element("conversationImageViewer").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("imageViewer").waitForExistence(timeout: 10))
         shot("94-conversation-image-viewer")
-        app.buttons["conversationImageViewerClose"].tap()
-        XCTAssertTrue(waitFor(5) { !self.element("conversationImageViewer").exists })
+        app.buttons["imageViewerClose"].tap()
+        XCTAssertTrue(waitFor(5) { !self.element("imageViewer").exists })
         XCTAssertTrue(composer.exists)
     }
 
