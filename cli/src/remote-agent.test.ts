@@ -9,7 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { RemoteAgent, deriveCwdFromProjectDirName, readCwdFromTranscript } from "./remote-agent.js";
+import { RemoteAgent, deriveCwdFromProjectDirName, readCwdFromTranscript, waitForDrain } from "./remote-agent.js";
 
 interface Harness {
   agent: RemoteAgent;
@@ -191,6 +191,87 @@ describe("remote agent protocol", () => {
       .map((m) => Buffer.from(String(m.data), "base64").toString("utf-8"))
       .join("");
     assert.equal(joined, `{"event":"short"}\n${long}{"event":"tail"}\n`);
+    await harness.end();
+  });
+
+  test("reads no further than the wire drains, so a slow Mac never piles transcripts up in memory", async () => {
+    const projects = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "-work-app");
+    mkdirSync(projects, { recursive: true });
+    const line = `{"cwd":"/work/app","text":"${"x".repeat(1000)}"}\n`;
+    const fileBytes = line.length * 1024;
+    const files = Array.from({ length: 16 }, (_, i) => join(projects, `s${i}.jsonl`));
+    for (const file of files) writeFileSync(file, line.repeat(1024));
+
+    // Nobody reads the wire until the end, like an ssh pipe to a busy Mac.
+    const wire = new PassThrough({ highWaterMark: 1024 });
+    const input = new PassThrough();
+    const messages: Record<string, unknown>[] = [];
+    let sentFileBytes = 0;
+    const agent = new RemoteAgent({
+      input,
+      send: (message) => {
+        messages.push(message);
+        if (message.type === "file") sentFileBytes += String(message.data).length;
+        return wire.write(`${JSON.stringify(message)}\n`);
+      },
+      ready: () => waitForDrain(wire),
+    });
+    agent.chunkBytes = 64 * 1024;
+    const finished = agent.run();
+    input.write(`${JSON.stringify({ type: "watch", roots: [{ path: join(process.env.CLAUDE_CONFIG_DIR!, "projects"), globs: ["**/*.jsonl"] }], offsets: {} })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.ok(messages.some((m) => m.type === "file"), "expected the first chunk");
+    assert.ok(
+      sentFileBytes <= 2 * agent.chunkBytes * 1.4,
+      `sent ${sentFileBytes} bytes of files while the wire was blocked`
+    );
+
+    // A ping still gets its pong while the files wait.
+    input.write(`${JSON.stringify({ type: "ping" })}\n`);
+    const deadline = Date.now() + 2_000;
+    while (!messages.some((m) => m.type === "pong") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(messages.some((m) => m.type === "pong"), "no pong while files were queued");
+
+    // Once the Mac reads, every file arrives whole.
+    wire.resume();
+    const doneBy = Date.now() + 10_000;
+    const complete = (): boolean =>
+      files.every((file) => messages.some((m) => m.type === "file" && m.path === file && m.eof === true));
+    while (!complete() && Date.now() < doneBy) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(complete(), "not every file reached its end");
+    for (const file of files) {
+      const bytes = messages
+        .filter((m) => m.type === "file" && m.path === file)
+        .reduce((sum, m) => sum + Buffer.from(String(m.data), "base64").length, 0);
+      assert.equal(bytes, fileBytes);
+    }
+    input.end();
+    await finished;
+  });
+
+  test("a non-jsonl file the Mac already holds at its size is not sent again on start", async () => {
+    const toolResults = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "-work-app", "s1", "tool-results");
+    mkdirSync(toolResults, { recursive: true });
+    const held = join(toolResults, "held.txt");
+    const fresh = join(toolResults, "fresh.txt");
+    writeFileSync(held, "already on the Mac");
+    writeFileSync(fresh, "new");
+    const harness = startAgent();
+    harness.send({
+      type: "watch",
+      roots: [{ path: toolResults }],
+      offsets: { [held]: statSync(held).size },
+    });
+    await harness.waitFor((m) => m.type === "file" && m.path === fresh, "fresh file");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(harness.messages.filter((m) => m.type === "file" && m.path === held).length, 0);
+
+    writeFileSync(held, "changed on the machine");
+    await harness.waitFor((m) => m.type === "file" && m.path === held, "changed file");
     await harness.end();
   });
 

@@ -54,6 +54,12 @@ export interface RemoteAgentIO {
   log?: (text: string) => void;
   /** Injectable clock so activity throttling is testable. */
   now?: () => number;
+  /**
+   * Resolves when the wire can take another file chunk. File bytes are only
+   * read from disk once the previous chunk left the process, so a slow reader
+   * on the Mac side never makes the agent buffer transcripts in memory.
+   */
+  ready?: () => Promise<void>;
 }
 
 const ACTIVITY_THROTTLE_MS = 1_000;
@@ -153,8 +159,16 @@ export class RemoteAgent {
   private readonly digests = new Map<string, string>();
   /** Files the Mac is writing itself right now: their bytes are not sent back. */
   private readonly held = new Set<string>();
-  /** Upper bound of one `file` message, cut at a newline. */
-  chunkBytes = 4 * 1024 * 1024;
+  /**
+   * Upper bound of one `file` message, cut at a newline. Small enough that a
+   * pong queued behind one chunk still reaches the Mac before its ping times
+   * out on a slow link.
+   */
+  chunkBytes = 512 * 1024;
+  private readonly ready: () => Promise<void>;
+  /** Files with bytes to send, served round robin one chunk at a time. */
+  private readonly dirty = new Set<string>();
+  private pumping = false;
   private readonly watchers: FSWatcher[] = [];
   private readonly lastActivity = new Map<string, number>();
   private stopped = false;
@@ -164,6 +178,7 @@ export class RemoteAgent {
     this.send = io.send;
     this.log = io.log ?? (() => undefined);
     this.now = io.now ?? (() => Date.now());
+    this.ready = io.ready ?? (() => Promise.resolve());
   }
 
   /** Runs until stdin ends. Resolves after the watchers are closed. */
@@ -318,26 +333,57 @@ export class RemoteAgent {
     this.pump(path);
   }
 
-  /** Send everything appended to `path` since the offset the Mac already has. */
+  /**
+   * Queue `path` to send everything appended since the offset the Mac already
+   * has. One loop drains the queue, one chunk per file per turn, and waits for
+   * the wire before reading the next chunk, so memory stays at about one chunk
+   * however many files changed and however slow the Mac reads.
+   */
   pump(path: string): void {
-    if (this.held.has(path)) return;
+    if (this.held.has(path) || this.stopped) return;
+    this.dirty.add(path);
+    if (this.pumping) return;
+    this.pumping = true;
+    void this.drainQueue()
+      .catch((error) => this.log(`pump failed: ${String(error)}`))
+      .finally(() => {
+        this.pumping = false;
+      });
+  }
+
+  private async drainQueue(): Promise<void> {
+    while (this.dirty.size > 0 && !this.stopped) {
+      await this.ready();
+      const path = this.dirty.values().next().value as string;
+      this.dirty.delete(path);
+      if (this.held.has(path)) continue;
+      // Back of the queue: a live session is not starved behind the backlog
+      // of a transcript of hundreds of megabytes.
+      if (this.pumpOnce(path)) this.dirty.add(path);
+      // Let stdin (pings, execs) in between chunks.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  /** Sends one chunk of `path`. True when more of it is left to send. */
+  private pumpOnce(path: string): boolean {
     // Only `.jsonl` files grow by appending. The others, such as the
     // statusline context, are rewritten in place, so their new content has
     // nothing to do with the bytes the Mac already holds.
     if (!path.endsWith(".jsonl")) {
       this.pumpWholeFile(path);
-      return;
+      return false;
     }
     let size: number;
     try {
       size = statSync(path).size;
     } catch {
-      return;
+      return false;
     }
     let offset = this.offsets.get(path) ?? 0;
     // A rewritten file is shorter than what we already sent: start over.
     if (offset > size) offset = 0;
-    if (size === offset) return;
+    if (size === offset) return false;
 
     // One message carries at most `chunkBytes`, so an exec answer never
     // waits behind a transcript of a hundred megabytes.
@@ -350,17 +396,17 @@ export class RemoteAgent {
       chunk = buffer.subarray(0, read);
     } catch (error) {
       this.log(`could not read ${path}: ${String(error)}`);
-      return;
+      return false;
     }
-    if (chunk.length === 0) return;
+    if (chunk.length === 0) return false;
 
     const lastNewline = chunk.lastIndexOf(0x0a);
     if (lastNewline < 0) {
       // A partial last line stays on the machine until its newline arrives.
       // A single line longer than a chunk is sent whole.
-      if (offset + chunk.length >= size) return;
+      if (offset + chunk.length >= size) return false;
       const line = this.readLine(path, offset, size);
-      if (!line) return;
+      if (!line) return false;
       chunk = line;
     } else {
       chunk = chunk.subarray(0, lastNewline + 1);
@@ -379,22 +425,38 @@ export class RemoteAgent {
     if (cwd) message.cwd = cwd;
     this.send(message);
     this.reportActivity(path);
-    if (next < size) setImmediate(() => this.pump(path));
+    return next < size;
   }
 
-  /** The bytes of one line starting at `offset`, up to `size`. */
+  /**
+   * The bytes of the one line starting at `offset`, up to `size`. Reads until
+   * the first newline only, never the rest of the file.
+   */
   private readLine(path: string, offset: number, size: number): Buffer | undefined {
+    let fd: number | undefined;
     try {
-      const fd = openSync(path, "r");
-      const buffer = Buffer.alloc(size - offset);
-      const read = readSync(fd, buffer, 0, buffer.length, offset);
-      closeSync(fd);
-      const lastNewline = buffer.subarray(0, read).lastIndexOf(0x0a);
-      if (lastNewline < 0) return undefined;
-      return buffer.subarray(0, lastNewline + 1);
+      fd = openSync(path, "r");
+      const parts: Buffer[] = [];
+      let position = offset;
+      while (position < size) {
+        const buffer = Buffer.alloc(Math.min(size - position, this.chunkBytes));
+        const read = readSync(fd, buffer, 0, buffer.length, position);
+        if (read === 0) break;
+        const part = buffer.subarray(0, read);
+        const newline = part.indexOf(0x0a);
+        if (newline >= 0) {
+          parts.push(part.subarray(0, newline + 1));
+          return Buffer.concat(parts);
+        }
+        parts.push(part);
+        position += read;
+      }
+      return undefined;
     } catch (error) {
       this.log(`could not read ${path}: ${String(error)}`);
       return undefined;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   }
 
@@ -404,6 +466,26 @@ export class RemoteAgent {
    * reports a write even when the bytes are the same.
    */
   private pumpWholeFile(path: string): void {
+    // The Mac already holds this file at its current size (it sends the sizes
+    // it has on `watch`): trust that on a fresh start instead of reading and
+    // resending every tool result. A later write changes the size or the
+    // modification time and is then compared by content.
+    const previous = this.digests.get(path);
+    if (previous === undefined || previous.startsWith("stat:")) {
+      const known = this.offsets.get(path);
+      if (known !== undefined) {
+        try {
+          const stat = statSync(path);
+          const mark = `stat:${stat.size}:${stat.mtimeMs}`;
+          if (stat.size === known && (previous === undefined || previous === mark)) {
+            this.digests.set(path, mark);
+            return;
+          }
+        } catch {
+          return;
+        }
+      }
+    }
     let data: Buffer;
     try {
       data = readFileSync(path);
@@ -607,12 +689,29 @@ export function runCommand(
   });
 }
 
+/** Resolves once `stream` has flushed what it buffered, or can no longer write. */
+export function waitForDrain(stream: NodeJS.WritableStream & { writableNeedDrain?: boolean; writable?: boolean }): Promise<void> {
+  if (!stream.writableNeedDrain || stream.writable === false) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = (): void => {
+      stream.off("drain", done);
+      stream.off("close", done);
+      stream.off("error", done);
+      resolve();
+    };
+    stream.on("drain", done);
+    stream.on("close", done);
+    stream.on("error", done);
+  });
+}
+
 /** Entry point for `kanban remote-agent`. */
 export async function runRemoteAgent(): Promise<void> {
   const agent = new RemoteAgent({
     input: process.stdin,
     send: (message) => process.stdout.write(`${JSON.stringify(message)}\n`),
     log: (text) => process.stderr.write(`${text}\n`),
+    ready: () => waitForDrain(process.stdout),
   });
   await agent.run();
 }
