@@ -98,6 +98,8 @@ final class DemoHost: RemoteControlHost {
         var conversationLog = Data()
         /// The conversation of each queued prompt sent from one.
         var queuedConversations: [String: String] = [:]
+        /// The bytes of each image sent in a conversation, by the path its log names.
+        var images: [String: Data] = [:]
 
         /// The card with the summaries of its conversations not archived.
         var listed: RemoteCard {
@@ -590,6 +592,9 @@ final class DemoHost: RemoteControlHost {
             // The conversation shows the message from when it is queued.
             // Where the owner would keep the images, which only it can read.
             let paths = images.indices.map { "/demo/images/\(promptId)-\($0 + 1).jpg" }
+            update(cardId) { c in
+                for (path, image) in zip(paths, images) { c.images[path] = image.bytes }
+            }
             appendConversation(cardId, [.message(conversation, id: promptId, role: .human, text: request.text, images: paths)])
         }
         if c.card.isBusy && request.mode != .now {
@@ -634,6 +639,18 @@ final class DemoHost: RemoteControlHost {
             throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversationId)")
         }
         return found.detail
+    }
+
+    func conversationImage(cardId: String, conversationId: String, messageId: String, index: Int) async throws -> Data {
+        let c = try cardState(cardId)
+        guard let found = thread(c, conversationId) else {
+            throw RemoteHostError.notFound("card \(cardId) has no conversation \(conversationId)")
+        }
+        guard let paths = found.detail.messages.first(where: { $0.id == messageId })?.images,
+              paths.indices.contains(index), let bytes = c.images[paths[index]] else {
+            throw RemoteHostError.notFound("message \(messageId) has no image \(index)")
+        }
+        return bytes
     }
 
     func updateConversation(cardId: String, conversationId: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {

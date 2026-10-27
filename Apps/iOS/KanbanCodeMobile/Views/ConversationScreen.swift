@@ -63,7 +63,8 @@ struct ConversationScreen: View {
                                       reply: model.conversation?.quoteReply)
                     }
                     ForEach(model.shown) { message in
-                        ConversationMessageView(message: message, pendingImages: model.pendingImages[message.id] ?? [])
+                        ConversationMessageView(message: message, pendingImages: model.pendingImages[message.id] ?? [],
+                                                loadImage: { index in try await model.image(messageId: message.id, index: index) })
                             .id(message.id)
                     }
                     if model.isWorking(cardBusy: card?.isBusy == true) {
@@ -267,11 +268,12 @@ struct ConversationScreen: View {
 
 /// A message of a conversation, drawn as Main draws its messages. The
 /// human's images show over the bubble: the ones attached here while the
-/// message is pending, then a chip per image, since the master keeps them
-/// where the phone cannot read them.
+/// message is pending, then the ones the master keeps, fetched from it.
 struct ConversationMessageView: View {
     let message: RemoteConversationMessage
     var pendingImages: [Data] = []
+    /// The bytes of the message's image at an index, from the master.
+    var loadImage: ((Int) async throws -> Data)?
 
     var body: some View {
         VStack(alignment: message.role == .human ? .trailing : .leading, spacing: 6) {
@@ -311,17 +313,109 @@ struct ConversationMessageView: View {
                     .accessibilityIdentifier("conversationPendingImage")
                 }
             } else {
-                ForEach(Array((message.images ?? []).enumerated()), id: \.offset) { _, _ in
-                    Label("Image", systemImage: "photo")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color(.tertiarySystemFill), in: Capsule())
-                        .accessibilityIdentifier("conversationImage")
+                ForEach(Array((message.images ?? []).enumerated()), id: \.offset) { index, _ in
+                    ConversationImageThumbnail(load: loadImage.map { load in { try await load(index) } })
                 }
             }
         }
+    }
+}
+
+/// An image of a sent message: loaded from the master that keeps it, shown
+/// small, and full screen on a tap.
+struct ConversationImageThumbnail: View {
+    let load: (() async throws -> Data)?
+    @State private var image: UIImage?
+    @State private var failure: String?
+    @State private var viewing = false
+    @State private var showFailure = false
+
+    var body: some View {
+        Button {
+            if image != nil { viewing = true } else if failure != nil { showFailure = true }
+        } label: {
+            Group {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else if failure != nil || load == nil {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            }
+            .frame(width: 64, height: 64)
+            .background(Color(.tertiarySystemFill))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(image != nil ? "Image" : failure != nil ? "Image could not load" : "Image loading")
+        .accessibilityIdentifier("conversationImage")
+        .task { await fetch() }
+        .fullScreenCover(isPresented: $viewing) {
+            if let image { ImageViewer(image: image) }
+        }
+        .alert("Cannot show the image", isPresented: $showFailure) {
+            Button("Try again") { Task { await fetch() } }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure ?? "")
+        }
+    }
+
+    private func fetch() async {
+        guard image == nil, let load else { return }
+        failure = nil
+        do {
+            let data = try await load()
+            if let decoded = UIImage(data: data) {
+                image = decoded
+            } else {
+                failure = "The master sent something that is not an image."
+            }
+        } catch is CancellationError {
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+}
+
+/// One image full screen, with pinch and double tap to zoom.
+struct ImageViewer: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .scaleEffect(max(1, scale * pinch))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .gesture(MagnifyGesture()
+                    .updating($pinch) { value, state, _ in state = value.magnification }
+                    .onEnded { value in scale = min(max(1, scale * value.magnification), 5) })
+                .onTapGesture(count: 2) {
+                    withAnimation(.snappy) { scale = scale > 1 ? 1 : 2.5 }
+                }
+                .accessibilityLabel("Image")
+                .accessibilityIdentifier("conversationImageViewer")
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.headline)
+                    .padding(12)
+            }
+            .buttonStyle(.glass)
+            .padding()
+            .accessibilityLabel("Close")
+            .accessibilityIdentifier("conversationImageViewerClose")
+        }
+        .statusBarHidden()
     }
 }
 

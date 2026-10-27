@@ -201,7 +201,16 @@ final class ConversationTests: KanbanUITestCase {
         XCTAssertTrue(message(containing: "here is the screen").waitForExistence(timeout: 5))
         XCTAssertFalse(element("attachment").exists)
         XCTAssertTrue(message(containing: "Got it:").waitForExistence(timeout: 20))
+        // Listed by the master: the thumbnail comes from it, and opens full screen.
+        let image = app.buttons.matching(identifier: "conversationImage").firstMatch
+        XCTAssertTrue(waitFor(15) { image.exists && image.label == "Image" })
         shot("89-conversation-image-sent")
+        image.tap()
+        XCTAssertTrue(element("conversationImageViewer").waitForExistence(timeout: 10))
+        shot("94-conversation-image-viewer")
+        app.buttons["conversationImageViewerClose"].tap()
+        XCTAssertTrue(waitFor(5) { !self.element("conversationImageViewer").exists })
+        XCTAssertTrue(composer.exists)
     }
 
     /// A send the master refuses leaves the message in the composer with the
