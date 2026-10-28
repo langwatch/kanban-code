@@ -101,6 +101,7 @@ extension MasterEngine {
             }
         }
 
+        KanbanCodeLog.info("worktree", "Removed worktree \(worktree) of card=\(cardId.prefix(12)) on \(machine)")
         let deleted = store.state.links[cardId]?.sessionLink == nil
         if deleted {
             store.dispatch(.deleteCard(cardId: cardId))
