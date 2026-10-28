@@ -390,10 +390,11 @@ export class RemoteClient {
       let offset = 0;
       for (;;) {
         const read = readSync(fd, buffer, 0, buffer.length, offset);
-        const query = new URLSearchParams({ upload, name, size: String(size), offset: String(offset) });
+        // Percent-encoded, not form-encoded: the server reads "+" as a plus.
+        const query = [`upload=${upload}`, `name=${encodeURIComponent(name)}`, `size=${size}`, `offset=${offset}`].join("&");
         const answer = await this.requestBytes<RemotePromptFile>(
           "POST",
-          `/v1/cards/${encodeURIComponent(id)}/files?${query.toString()}`,
+          `/v1/cards/${encodeURIComponent(id)}/files?${query}`,
           buffer.subarray(0, read)
         );
         offset += read;

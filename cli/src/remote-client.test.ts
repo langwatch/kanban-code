@@ -550,7 +550,7 @@ describe("kanban remote task / send / interrupt / resume", () => {
 
   test("send uploads any file with --file and names its path on the owner", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kanban-remote-file-"));
-    const video = join(dir, "demo video.mp4");
+    const video = join(dir, "demo video+1.mp4");
     const bytes = Buffer.alloc(8 * 1024 * 1024 + 4321, 7);
     writeFileSync(video, bytes);
     try {
@@ -559,8 +559,8 @@ describe("kanban remote task / send / interrupt / resume", () => {
       r = await run(["send", "card_2abcF", "--file", video]);
       assert.equal(r.code, 0, r.err);
       const sent = state.prompts as Array<{ text: string }>;
-      assert.match(sent[0].text, /^what is wrong\?\n\n\[File: \/home\/box\/\.kanban-code\/files\/[0-9a-f-]+\/demo video\.mp4\]$/);
-      assert.match(sent[1].text, /^\[File: \/home\/box\/.+\/demo video\.mp4\]$/);
+      assert.match(sent[0].text, /^what is wrong\?\n\n\[File: \/home\/box\/\.kanban-code\/files\/[0-9a-f-]+\/demo video\+1\.mp4\]$/);
+      assert.match(sent[1].text, /^\[File: \/home\/box\/.+\/demo video\+1\.mp4\]$/);
       const uploads = [...state.files.values()];
       assert.equal(uploads.length, 2);
       assert.ok(uploads.every((u) => u.equals(bytes)));
