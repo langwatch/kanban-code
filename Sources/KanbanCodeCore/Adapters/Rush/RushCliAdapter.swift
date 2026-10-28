@@ -234,6 +234,10 @@ public final class RushCliAdapter: @unchecked Sendable {
     @discardableResult
     public func start(_ request: RushStartRequest, human: Bool = false) async throws -> RushSessionInfo {
         var request = request
+        if case .projectRoot(let root) = await ensureDirectory(request.cwd) {
+            // The conversation goes on in the project root rather than not at all.
+            request.cwd = root
+        }
         request.imagePaths = try await machinePaths(of: request.imagePaths)
         let prompt = request.prompt.flatMap { $0.isEmpty ? nil : $0 }
         let marksHuman = human && prompt != nil ? await supportsHumanRecord() : false
@@ -242,7 +246,11 @@ public final class RushCliAdapter: @unchecked Sendable {
             human: marksHuman)
         let result = try await exec(args, stdin: prompt, timeout: 60)
         guard result.succeeded else {
-            throw RushCommandFailed(arguments: Array(args.dropFirst()), message: Self.errorMessage(result))
+            let message = Self.errorMessage(result)
+            throw RushCommandFailed(
+                arguments: Array(args.dropFirst()),
+                message: SessionDirectory.isMissingCwdError(message)
+                    ? SessionDirectory.missingMessage(request.cwd, outcome: .missing) : message)
         }
         return try JSONDecoder().decode(RushSessionInfo.self, from: Data(result.stdout.utf8))
     }
@@ -257,10 +265,36 @@ public final class RushCliAdapter: @unchecked Sendable {
         if now { args.append("--now") }
         if human, await supportsHumanRecord() { args.append("--human") }
         for path in try await machinePaths(of: imagePaths) { args += ["--image", path] }
-        let result = try await exec(args, stdin: text, timeout: 60)
+        var result = try await exec(args, stdin: text, timeout: 60)
+        // A stopped host starts again in its cwd; a worktree deleted under it
+        // is added again from its branch, then the message goes once more.
+        if !result.succeeded, SessionDirectory.isMissingCwdError(Self.errorMessage(result)),
+           let cwd = (try? await info(id: id))?.cwd, !cwd.isEmpty {
+            let outcome = await ensureDirectory(cwd)
+            guard case .restored = outcome else {
+                throw RushCommandFailed(arguments: args, message: SessionDirectory.missingMessage(cwd, outcome: outcome))
+            }
+            result = try await exec(args, stdin: text, timeout: 60)
+        }
         guard result.succeeded else {
             throw RushCommandFailed(arguments: args, message: Self.errorMessage(result))
         }
+    }
+
+    /// Makes sure `dir` is there on the machine the hosts run on, adding a
+    /// deleted worktree again from its branch (see `SessionDirectory`).
+    public func ensureDirectory(_ dir: String, branch: String? = nil) async -> SessionDirectory.Outcome {
+        guard !dir.isEmpty else { return .present }
+        guard let remote else { return await SessionDirectory.ensureLocal(dir: dir, branch: branch) }
+        let script = SessionDirectory.ensureScript(dir: dir, branch: branch)
+        // A machine that did not answer is left to rush, which says why.
+        guard let result = try? await remote.exec(["/bin/sh", "-c", script], stdin: nil, cwd: nil, timeout: 120),
+              result.succeeded else {
+            return .present
+        }
+        let outcome = SessionDirectory.parse(result.stdout)
+        SessionDirectory.log(dir: dir, outcome: outcome)
+        return outcome
     }
 
     /// Settles what the session waits on: `text` answers its question, a

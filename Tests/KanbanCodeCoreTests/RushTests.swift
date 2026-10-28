@@ -311,10 +311,12 @@ struct RushTests {
         _ = try await rush.start(RushStartRequest(
             cwd: "/root/repo", sessionId: "0a1b2c3d-1111-2222-3333-444455556666", resume: true,
             prompt: "go on", imagePaths: [image]))
-        let start = try #require(runner.execCalls.first)
-        #expect(Array(start.prefix(3)) == ["/usr/local/bin/rush", "session", "start"])
+        // The worktree check runs first on the machine, then the start.
+        #expect(runner.execCalls.first?.prefix(2) == ["/bin/sh", "-c"])
+        let startIndex = try #require(runner.execCalls.firstIndex { $0.prefix(3) == ["/usr/local/bin/rush", "session", "start"] })
+        let start = runner.execCalls[startIndex]
         #expect(start.contains("--prompt-file") && start[start.firstIndex(of: "--prompt-file")! + 1] == "-")
-        #expect(runner.execStdins.first == "go on")
+        #expect(runner.execStdins[startIndex] == "go on")
         let copied = try #require(runner.files.keys.first)
         #expect(copied.hasPrefix("/root/.kanban-code/tmp/rush/") && copied.hasSuffix("/1.png"))
         #expect(start[start.firstIndex(of: "--image")! + 1] == copied)

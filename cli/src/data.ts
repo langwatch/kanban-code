@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, readdirSync } from "node:fs";
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, basename, matchesGlob } from "node:path";
 
@@ -28,6 +28,7 @@ import {
   KanbanColumn,
 } from "./types.js";
 import { linksPath, settingsPath, contextDir, claudeProjectsDir } from "./paths.js";
+import { ensureSessionDir, missingSessionDirMessage } from "./git.js";
 
 // ── Reading state files ──────────────────────────────────────────────
 
@@ -299,6 +300,28 @@ export function buildTmuxCommand(
   return options.quiet ? `${command} 2>/dev/null` : command;
 }
 
+/// A message sent to a resting rush host starts it again in its cwd, which
+/// rush cannot do when the directory is gone. A worktree deleted under the
+/// host is added again from its branch; otherwise the send stops here with
+/// an error naming the missing directory.
+function guardRushHostDir(rushId: string): void {
+  let cwd: string | undefined;
+  try {
+    const out = execFileSync(findRush(), ["session", "info", rushId, "--json"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 15_000,
+    });
+    cwd = JSON.parse(out)?.cwd;
+  } catch {
+    return;
+  }
+  if (!cwd) return;
+  const outcome = ensureSessionDir(cwd);
+  if (outcome.kind === "present" || outcome.kind === "restored") return;
+  throw new Error(missingSessionDirMessage(cwd, outcome));
+}
+
 /// Run a chain of tmux calls against a session, local or remote.
 export function runTmux(
   sessionName: string,
@@ -307,6 +330,8 @@ export function runTmux(
 ): string {
   const command = buildTmuxCommand(sessionName, steps, options);
   const detached = options.detached === true;
+  const rushId = rushIdFromSessionName(sessionName);
+  if (rushId && command.includes(" session send ")) guardRushHostDir(rushId);
   if (tmuxCommandRunner) return tmuxCommandRunner(command, { detached });
   if (detached) {
     const child = spawn("sh", ["-c", command], {

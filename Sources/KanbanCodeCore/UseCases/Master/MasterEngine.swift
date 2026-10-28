@@ -860,6 +860,26 @@ public final class MasterEngine {
                         }
                     }
                 }
+                // A worktree deleted under the card comes back from its
+                // branch; with the branch gone too, the session continues in
+                // the project root, its transcript moved along.
+                if !isRemote, boxdPreparation == nil, let worktree = card.link.worktreeLink,
+                   worktree.path == resumePath, !FileManager.default.fileExists(atPath: resumePath) {
+                    let outcome = await SessionDirectory.ensureLocal(
+                        dir: resumePath, branch: worktree.branch, repoRoot: card.link.projectPath)
+                    if case .projectRoot(let root) = outcome {
+                        progress.report("Worktree \((resumePath as NSString).lastPathComponent) and its branch are gone; continuing in \(root)")
+                        if assistant == .claude,
+                           let sessionPath = store.state.links[cardId]?.sessionLink?.sessionPath,
+                           FileManager.default.fileExists(atPath: sessionPath),
+                           let moved = try? SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: root) {
+                            var updated = store.state.links[cardId] ?? card.link
+                            updated.sessionLink = SessionLink(sessionId: sessionId, sessionPath: moved)
+                            store.dispatch(.createManualTask(updated))
+                        }
+                        resumePath = root
+                    }
+                }
                 let commandTemplate = settings?.commandTemplate(for: assistant, remote: isRemote)
 
                 let resumeServiceId = serviceIdOverride ?? card.link.apiServiceId ?? settings?.defaultAPIServiceIds[assistant.rawValue]

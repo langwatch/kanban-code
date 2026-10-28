@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { findRush } from "../data.js";
+import { ensureSessionDir, isMissingCwdError, missingSessionDirMessage } from "../git.js";
 
 /// Agents on a rush host are found by these host metas: the session name the
 /// card uses, and the slug of the agent that owns the host.
@@ -146,9 +147,21 @@ export function rushStartArgs(o: RushStartOptions): string[] {
   return args;
 }
 
-/// Start (or bring back) a host and return it as rush reports it.
+/// Start (or bring back) a host and return it as rush reports it. A worktree
+/// deleted under it is added again from its branch first; with the branch
+/// gone too, the host starts in the project root.
 export function startRushHost(o: RushStartOptions): RushHostInfo {
-  return parseJsonOut<RushHostInfo>(() => runRush(rushStartArgs(o)));
+  const dir = ensureSessionDir(o.cwd);
+  const start = dir.kind === "projectRoot" ? { ...o, cwd: dir.path } : o;
+  if (dir.kind === "projectRoot") {
+    process.stderr.write(`kanban: worktree ${o.cwd} and its branch are gone; starting in ${dir.path}\n`);
+  }
+  try {
+    return parseJsonOut<RushHostInfo>(() => runRush(rushStartArgs(start)));
+  } catch (e: any) {
+    if (isMissingCwdError(String(e?.message ?? e))) throw new Error(missingSessionDirMessage(start.cwd, dir));
+    throw e;
+  }
 }
 
 /// Stop a host. A host already stopped is fine.
