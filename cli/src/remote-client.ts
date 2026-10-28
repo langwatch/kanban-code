@@ -11,8 +11,9 @@
 import type { Command } from "commander";
 import { InvalidArgumentError, Option } from "commander";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { kanbanHome } from "./paths.js";
 import {
   REMOTE_DEFAULT_PORT,
@@ -152,6 +153,30 @@ export function readImages(paths: string[]): RemoteImage[] {
     }
     return { mediaType, data: bytes.toString("base64") };
   });
+}
+
+/** The largest file attached with --file, as the server takes it. */
+export const PROMPT_FILE_MAX_BYTES = 2 * 1024 ** 3;
+/** Bytes per upload request. */
+export const PROMPT_FILE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** The prompt line that points the assistant at a file. */
+export function promptFileLine(path: string): string {
+  return `[File: ${path}]`;
+}
+
+/** `text` with one file line per path after it. */
+export function appendPromptFiles(text: string, paths: string[]): string {
+  if (!paths.length) return text;
+  const lines = paths.map(promptFileLine).join("\n");
+  const trimmed = text.trim();
+  return trimmed ? `${trimmed}\n\n${lines}` : lines;
+}
+
+export interface RemotePromptFile {
+  path: string;
+  received: number;
+  size: number;
 }
 
 export interface RemoteProject {
@@ -342,6 +367,44 @@ export class RemoteClient {
     await this.request("POST", `/v1/cards/${encodeURIComponent(id)}/prompt`, body);
   }
 
+  /**
+   * Uploads a file for the card's prompt, a chunk at a time read from disk,
+   * to the master that owns the card. Returns its path on the machine where
+   * the card's assistant runs.
+   */
+  async uploadPromptFile(id: string, filePath: string): Promise<string> {
+    let size: number;
+    try {
+      size = statSync(filePath).size;
+    } catch {
+      throw new RemoteCliError(`Cannot read file ${filePath}.`);
+    }
+    if (size > PROMPT_FILE_MAX_BYTES) {
+      throw new RemoteCliError(`${filePath} is ${size} bytes, over the ${PROMPT_FILE_MAX_BYTES} byte limit for attachments.`);
+    }
+    const name = basename(filePath);
+    const upload = randomUUID();
+    const fd = openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(PROMPT_FILE_CHUNK_BYTES, Math.max(size, 1)));
+      let offset = 0;
+      for (;;) {
+        const read = readSync(fd, buffer, 0, buffer.length, offset);
+        const query = new URLSearchParams({ upload, name, size: String(size), offset: String(offset) });
+        const answer = await this.requestBytes<RemotePromptFile>(
+          "POST",
+          `/v1/cards/${encodeURIComponent(id)}/files?${query.toString()}`,
+          buffer.subarray(0, read)
+        );
+        offset += read;
+        if (answer.received >= answer.size) return answer.path;
+        if (read === 0) throw new RemoteCliError(`${filePath} ended at byte ${offset}, short of ${size}.`);
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
   async interrupt(id: string): Promise<void> {
     await this.request("POST", `/v1/cards/${encodeURIComponent(id)}/interrupt`, {});
   }
@@ -350,22 +413,29 @@ export class RemoteClient {
     return this.request("POST", `/v1/cards/${encodeURIComponent(id)}/resume`, {});
   }
 
+  /** A request whose body is raw bytes, with a long timeout. */
+  private requestBytes<T>(method: string, path: string, bytes: Uint8Array): Promise<T> {
+    return this.request<T>(method, path, bytes, {}, 600_000);
+  }
+
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
-    opts: { auth?: boolean } = {}
+    opts: { auth?: boolean } = {},
+    timeoutMs = this.timeoutMs
   ): Promise<T> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (opts.auth !== false && this.token) headers.authorization = `Bearer ${this.token}`;
-    if (body !== undefined) headers["content-type"] = "application/json";
+    const isBytes = body instanceof Uint8Array;
+    if (body !== undefined) headers["content-type"] = isBytes ? "application/octet-stream" : "application/json";
     let res: Response;
     try {
       res = await this.fetchImpl(this.baseUrl + path, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        body: body === undefined ? undefined : isBytes ? (body as unknown as BodyInit) : JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       throw new RemoteCliError(unreachableMessage(this.baseUrl, error));
@@ -929,13 +999,23 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
     .description("Send a prompt to a card, delivered when its turn ends ('-' reads the text from stdin)")
     .option("--now", "interrupt the current turn and send at once")
     .option("--image <path>", "attach an image (PNG, JPEG, GIF or WebP; repeat for more)", collectImage, [] as string[])
+    .option(
+      "--file <path>",
+      "attach any file (a video, a PDF, a zip; at most 2 GB): it is copied to the machine of the card's assistant and the prompt names its path there (repeat for more)",
+      collectImage,
+      [] as string[]
+    )
     .option("--json", "output as JSON")
     .action(
-      run(async (ref: string, parts: string[], opts: { now?: boolean; image: string[]; json?: boolean }) => {
+      run(async (ref: string, parts: string[], opts: { now?: boolean; image: string[]; file: string[]; json?: boolean }) => {
         const images = readImages(opts.image);
-        const text = images.length && parts.length === 0 ? "" : await readText(parts, "text");
+        const attachesOnly = (images.length > 0 || opts.file.length > 0) && parts.length === 0;
+        let text = attachesOnly ? "" : await readText(parts, "text");
         const c = client();
         const card = await findCard(c, ref);
+        const filePaths: string[] = [];
+        for (const file of opts.file) filePaths.push(await c.uploadPromptFile(card.id, file));
+        text = appendPromptFiles(text, filePaths);
         const mode = opts.now ? "now" : "queue";
         const body: RemotePromptRequest = { text, mode };
         if (images.length) body.images = images;

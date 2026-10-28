@@ -60,6 +60,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 | `DELETE /v1/cards/{id}/side-chat/{runId}` | any | 204, stops the run |
 | `GET /v1/cards/{id}/slash-commands` | any | `[RemoteSlashCommand]`: `name`, `description`, `source` |
 | `POST /v1/cards/{id}/pasted-image` | full, agent, peer | image bytes → `{"path"}`, 201 |
+| `POST /v1/cards/{id}/files?upload=&name=&size=&offset=` | full, agent, peer | file chunk bytes → `{"path", "received", "size"}`, 200 while chunks remain, 201 when whole |
 | `POST /v1/cards/{id}/interrupt` | any | 204 |
 | `POST /v1/cards/{id}/resume` | any | `RemoteCard` |
 | `PATCH /v1/cards/{id}` | any | `RemoteCardUpdate` (`name`, `column`, `archived`, `pinned`) → `RemoteCard` |
@@ -93,6 +94,7 @@ Behaviour:
 - `side-chat` starts a `/btw` or `/catchup` run (see [`side-chat.md`](side-chat.md)): `{"kind": "btw", "question", "history"}` or `{"kind": "catchup"}`. The run reads the session and writes nothing into it. Poll the run until `state` is `done` or `failed`; `text` grows while it is `running`. A catch-up run carries `since` (the human's last message) and `refs` (the messages it can cite, each with the transcript `offset` a `RemoteMessage.id` starts with). A `catchup` request for a card whose session has no message after the last one its previous catch-up covers returns that run again at once: `state` `done`, `reopened: true`, `finishedAt`, and `followUps` (the exchanges asked in its side chat); `fresh: true` in the request runs a new one. A `btw` request that follows up on a catch-up passes that run's id as `catchUpId`, so its exchange is kept with it. Other runs are kept for 15 minutes. A card another master owns is forwarded there. 409 for a card with no conversation or a session that is not Claude Code.
 - `slash-commands` lists what the chat composer offers after `/` (see [`slash-commands.md`](slash-commands.md)). The master that owns the card reads its disk; a card another master owns is forwarded there, and while that master does not answer the list is the last one it gave, else the chat's and the agent's commands. A list is kept for 30 seconds per card.
 - `pasted-image` takes the bytes of one image as the body (PNG, JPEG, GIF or WebP, read from the bytes, at most 20 MiB) and writes them to `~/.kanban-code/images/pasted/` on the master that owns the card; a card another master owns is forwarded there. `path` is the file on that master. It is for a paste into the card's terminal: the assistant runs on the owner and reads the owner's clipboard, so the Mac uploads the image and types its path into the terminal, which the assistant takes as a dropped image file. Files older than 7 days go when the next one is stored.
+- `files` takes any file attached to a prompt (a video, a PDF, a zip), in chunks of at most 8 MiB sent in order: `upload` is an id of the client's choosing (letters, digits, dashes), `name` the file name, `size` the whole file's byte count (at most 2 GiB), `offset` where the chunk starts. The master that owns the card (forwarded like `pasted-image`) writes it to `~/.kanban-code/files/<upload>/<name>`; when the card's session runs on a boxd or ssh machine, the whole file then goes to the same place on that machine (at most 512 MiB). A chunk that does not start where the upload stands gets 409. `path` is final once `received` equals `size`; the client puts a line `[File: <path>]` in the prompt and the assistant reads the file from there. Uploads older than 14 days go when the next one starts. Check the `files` feature first.
 - `human: true` on `prompt` and `tasks` says the human typed the text himself in a chat composer. The server records it per card and passes `--human` to rush. It is dropped for an agent-scope device.
 - `transcript` pages back with `before=<olderCursor>` of the previous page; `olderCursor` is null at the start of the conversation.
 - A user record the harness wrote is a `system` message, not a `user` one: the summary of a compaction is `{"role": "system", "text": "Conversation compacted", "detail": "<the summary>"}`, and the `/compact` command is a `system` message with the command as `text`. `detail` is absent on every other message. The chats show such a message as a centered note; one with `detail` opens to it. The rule is `HarnessNote` in `Sources/KanbanCodeRemoteKit/HarnessNotes.swift`, which the Mac chat applies to its own turns.
@@ -123,7 +125,7 @@ The Mac app and `kanban-code-server` (an always-on Linux box) are both masters: 
 The token a master holds for its peer has the `peer` scope, in both directions. It may call what pairing uses and nothing else (`RemoteScopePolicy`, an allow list: a route added later is refused until it is listed):
 
 - Card sync: `GET /v1/links`, `POST /v1/links/changed`, `GET /v1/peers`, `GET /v1/board`, `GET /v1/machines`, `GET /v1/events`, `GET /v1/me`.
-- What the human does to a card the peer owns: `POST /v1/tasks`, `GET /v1/cards/search`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `pasted-image`, `discover`, `worktree/remove`.
+- What the human does to a card the peer owns: `POST /v1/tasks`, `GET /v1/cards/search`, and on `/v1/cards/{id}`: `GET`, `PATCH`, `DELETE`, `transcript`, `transcript/raw`, `prompt`, `queue/{promptId}`, `interrupt`, `resume`, `side-chat`, `slash-commands`, `pasted-image`, `files`, `discover`, `worktree/remove`.
 - Moves between masters: `POST /v1/cards/{id}/move`, `GET /v1/cards/{id}/handover`.
 - Approvals: `GET /v1/attention`, `POST /v1/attention/presence`, `POST /v1/attention/{id}/resolve`, `POST /v1/attention/{id}/note` (the note of a refused vault request, see [vault.md](vault.md)).
 - Channels: `POST /v1/cli` (`kanban channel` and `dm` only), `GET` and `PUT /v1/channels/files`.
@@ -180,7 +182,7 @@ The command runs in a pseudo-terminal on the Mac.
   - `kanban remote cards [--all] [--search <text>]`
   - `kanban remote show <card>`
   - `kanban remote task --project <name|path> [--worktree [name]] [--name <n>] [--image <path>]... "<prompt>"`
-  - `kanban remote send <card> [--now] [--image <path>]... "<text>"`
+  - `kanban remote send <card> [--now] [--image <path>]... [--file <path>]... "<text>"` (`--file` attaches any file, see `files` above)
   - `kanban remote transcript <card> [--limit N] [--follow]`
   - `kanban remote wait <card> [--timeout 30m]`
   - `kanban remote interrupt <card>`

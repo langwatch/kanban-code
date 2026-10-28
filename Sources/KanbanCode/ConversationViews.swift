@@ -360,6 +360,7 @@ struct ConversationChatView: View {
                 onSend: { text, images in
                     ConversationActions.send(cardId: card.id, conversationId: conversation.id, text: text, imagePaths: images)
                 },
+                fileDraftKey: PromptFileDrafts.conversationKey(cardId: card.id, conversationId: conversation.id),
                 text: draftText,
                 pastedImages: draftImages
             )
@@ -442,14 +443,18 @@ private struct ConversationMessageRow: View {
         if message.role == .human {
             HStack {
                 Spacer(minLength: 60)
+                let split = PromptFiles.split(message.text)
                 VStack(alignment: .trailing, spacing: 6) {
                     ConversationImageStrip(paths: message.images ?? [], transcript: transcript)
-                    Text(message.text)
-                        .font(.app(.body))
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(RoundedRectangle(cornerRadius: 18).fill(Color.accentColor.opacity(0.15)))
+                    SentFileChips(paths: split.paths)
+                    if !split.text.isEmpty {
+                        Text(split.text)
+                            .font(.app(.body))
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(RoundedRectangle(cornerRadius: 18).fill(Color.accentColor.opacity(0.15)))
+                    }
                 }
                 .opacity(waiting ? 0.5 : 1)
                 .overlay(alignment: .leading) {
@@ -490,13 +495,17 @@ private struct PendingConversationBubble: View {
     var body: some View {
         HStack {
             Spacer(minLength: 60)
+            let split = PromptFiles.split(prompt.body)
             VStack(alignment: .trailing, spacing: 6) {
                 ConversationImageStrip(paths: prompt.imagePaths ?? [])
-                Text(prompt.body)
-                    .font(.app(.body))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                SentFileChips(paths: split.paths)
+                if !split.text.isEmpty {
+                    Text(split.text)
+                        .font(.app(.body))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                }
             }
             .opacity(0.5)
             .overlay(alignment: .leading) {

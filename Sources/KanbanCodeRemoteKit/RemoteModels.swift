@@ -36,9 +36,11 @@ public enum RemoteAPI {
         /// `/v1/cards/{id}/conversations`, `conversation` on prompts and
         /// `conversations` on cards (docs/conversations.md).
         public static let conversations = "conversations"
+        /// `POST /v1/cards/{id}/files`: any file for a prompt, by path.
+        public static let files = "files"
     }
 
-    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork, Feature.conversations]
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork, Feature.conversations, Feature.files]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.

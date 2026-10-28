@@ -198,8 +198,26 @@ struct ChatMessageView: View, Equatable {
         }
     }
 
+    /// The paths of the files the message names on `[File: ...]` lines.
+    private var userFilePaths: [String] {
+        turn.contentBlocks.flatMap { block -> [String] in
+            guard case .text = block.kind else { return [] }
+            return PromptFiles.split(ConversationPrompt.parse(block.text)?.text ?? block.text).paths
+        }
+    }
+
+    /// Whether the message has text left once its file lines are chips.
+    private var userBubbleHasText: Bool {
+        turn.contentBlocks.contains { block in
+            guard case .text = block.kind else { return false }
+            if ConversationPrompt.parse(block.text) != nil { return true }
+            return !PromptFiles.split(block.text).text.isEmpty
+        }
+    }
+
     private var userBubble: some View {
         VStack(alignment: .trailing, spacing: 4) {
+            SentFileChips(paths: userFilePaths)
             // Image attachment chips with on-demand hover preview
             if turn.imageCount > 0 {
                 HStack(spacing: 4) {
@@ -228,17 +246,23 @@ struct ChatMessageView: View, Equatable {
                                 .font(.app(.caption))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                            truncatedTextBlock(tagged.text, blockIndex: i, font: .app(.body))
+                            let shown = PromptFiles.split(tagged.text).text
+                            if !shown.isEmpty {
+                                truncatedTextBlock(shown, blockIndex: i, font: .app(.body))
+                            }
                         } else {
-                            truncatedTextBlock(block.text, blockIndex: i, font: .app(.body))
+                            let shown = PromptFiles.split(block.text).text
+                            if !shown.isEmpty {
+                                truncatedTextBlock(shown, blockIndex: i, font: .app(.body))
+                            }
                         }
                     }
                 }
             }
-            .padding(.horizontal, isInterruption ? 0 : 14)
-            .padding(.vertical, isInterruption ? 4 : 10)
+            .padding(.horizontal, isInterruption || !userBubbleHasText ? 0 : 14)
+            .padding(.vertical, isInterruption ? 4 : (userBubbleHasText ? 10 : 0))
             .background {
-                if !isInterruption {
+                if !isInterruption && userBubbleHasText {
                     RoundedRectangle(cornerRadius: 18)
                         .fill(Color.primary.opacity(0.06))
                 }

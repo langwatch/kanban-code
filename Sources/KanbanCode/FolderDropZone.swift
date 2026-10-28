@@ -76,6 +76,8 @@ final class FolderDropNSView: NSView {
 struct ImageDropZone: NSViewRepresentable {
     @Binding var isTargeted: Bool
     var onDrop: (Data) -> Void
+    /// Dropped files that are not images.
+    var onFileDrop: (([URL]) -> Void)? = nil
 
     func makeNSView(context: Context) -> ImageDropNSView {
         let view = ImageDropNSView()
@@ -83,17 +85,20 @@ struct ImageDropZone: NSViewRepresentable {
             Task { @MainActor in isTargeted = targeted }
         }
         view.onDrop = onDrop
+        view.onFileDrop = onFileDrop
         return view
     }
 
     func updateNSView(_ view: ImageDropNSView, context: Context) {
         view.onDrop = onDrop
+        view.onFileDrop = onFileDrop
     }
 }
 
 final class ImageDropNSView: NSView {
     var onTargetChanged: ((Bool) -> Void)?
     var onDrop: ((Data) -> Void)?
+    var onFileDrop: (([URL]) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -106,14 +111,22 @@ final class ImageDropNSView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard extractImageData(from: sender.draggingPasteboard) != nil else { return [] }
+        guard accepts(sender.draggingPasteboard) else { return [] }
         onTargetChanged?(true)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard extractImageData(from: sender.draggingPasteboard) != nil else { return [] }
-        return .copy
+        accepts(sender.draggingPasteboard) ? .copy : []
+    }
+
+    private func accepts(_ pasteboard: NSPasteboard) -> Bool {
+        if onFileDrop != nil, !PromptFileDrafts.partition(fileURLs(in: pasteboard)).files.isEmpty { return true }
+        return extractImageData(from: pasteboard) != nil
+    }
+
+    private func fileURLs(in pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
@@ -122,9 +135,26 @@ final class ImageDropNSView: NSView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onTargetChanged?(false)
+        if let onFileDrop {
+            let split = PromptFileDrafts.partition(fileURLs(in: sender.draggingPasteboard))
+            if !split.files.isEmpty {
+                onFileDrop(split.files)
+                for url in split.images {
+                    if let png = Self.pngData(contentsOf: url) { onDrop?(png) }
+                }
+                return true
+            }
+        }
         guard let data = extractImageData(from: sender.draggingPasteboard) else { return false }
         onDrop?(data)
         return true
+    }
+
+    private static func pngData(contentsOf url: URL) -> Data? {
+        guard let image = NSImage(contentsOf: url),
+              let tiffData = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiffData) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 
     private func extractImageData(from pasteboard: NSPasteboard) -> Data? {

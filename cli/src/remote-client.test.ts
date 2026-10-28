@@ -43,6 +43,8 @@ interface MockState {
   interrupts: string[];
   /** Card polls left before a busy card turns idle. */
   busyPolls: Map<string, number>;
+  /** Bytes received per file upload id. */
+  files: Map<string, Buffer>;
 }
 
 function card(partial: Partial<RemoteCard> & { id: string; title: string }): RemoteCard {
@@ -84,6 +86,7 @@ function freshState(): MockState {
     tasks: [],
     interrupts: [],
     busyPolls: new Map(),
+    files: new Map(),
   };
 }
 
@@ -183,6 +186,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const limit = Number(url.searchParams.get("limit") ?? 50);
       const all = state.transcripts.get(id) ?? [];
       return send(res, 200, { cardId: id, messages: all.slice(-limit), olderCursor: null });
+    }
+    if (action === "/files" && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const bytes = Buffer.concat(chunks);
+      const upload = url.searchParams.get("upload") ?? "";
+      const name = url.searchParams.get("name") ?? "";
+      const size = Number(url.searchParams.get("size"));
+      const offset = Number(url.searchParams.get("offset"));
+      const have = state.files.get(upload) ?? Buffer.alloc(0);
+      if (offset !== have.length) return send(res, 409, { error: `the upload stands at byte ${have.length}` });
+      const next = Buffer.concat([have, bytes]);
+      state.files.set(upload, next);
+      const path = `/home/box/.kanban-code/files/${upload}/${name}`;
+      return send(res, next.length >= size ? 201 : 200, { path, received: next.length, size });
     }
     if (action === "/prompt" && req.method === "POST") {
       if (!c.isLive) return send(res, 409, { error: "no live session" });
@@ -525,6 +543,30 @@ describe("kanban remote task / send / interrupt / resume", () => {
       assert.equal(r.code, 1);
       assert.match(r.err, /not a PNG, JPEG, GIF or WebP image/);
       assert.equal(state.prompts.length, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("send uploads any file with --file and names its path on the owner", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kanban-remote-file-"));
+    const video = join(dir, "demo video.mp4");
+    const bytes = Buffer.alloc(8 * 1024 * 1024 + 4321, 7);
+    writeFileSync(video, bytes);
+    try {
+      let r = await run(["send", "card_2abcF", "--file", video, "what", "is", "wrong?"]);
+      assert.equal(r.code, 0, r.err);
+      r = await run(["send", "card_2abcF", "--file", video]);
+      assert.equal(r.code, 0, r.err);
+      const sent = state.prompts as Array<{ text: string }>;
+      assert.match(sent[0].text, /^what is wrong\?\n\n\[File: \/home\/box\/\.kanban-code\/files\/[0-9a-f-]+\/demo video\.mp4\]$/);
+      assert.match(sent[1].text, /^\[File: \/home\/box\/.+\/demo video\.mp4\]$/);
+      const uploads = [...state.files.values()];
+      assert.equal(uploads.length, 2);
+      assert.ok(uploads.every((u) => u.equals(bytes)));
+      r = await run(["send", "card_2abcF", "--file", join(dir, "missing.bin"), "x"]);
+      assert.equal(r.code, 1);
+      assert.match(r.err, /Cannot read file/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

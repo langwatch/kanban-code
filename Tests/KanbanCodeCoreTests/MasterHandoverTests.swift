@@ -492,6 +492,60 @@ struct MasterHandoverTests {
         }
     }
 
+    @Test("a file attached on the Mac to a card another master owns is uploaded in chunks to that master")
+    func promptFileGoesToTheOwner() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("files-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: try box.devices.add(name: "mac", scope: .peer).token)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        box.store.dispatch(.createManualTask(Link(
+            id: "card_box", name: "On the box", projectPath: "/tmp/acme", column: .waiting,
+            sessionLink: SessionLink(sessionId: "sid-box"), tmuxLink: TmuxLink(sessionName: "box-session")
+        )))
+        mac.store.dispatch(.createManualTask(Link(id: "card_mac", name: "On the Mac", projectPath: "/tmp/acme", column: .waiting)))
+        await mac.peerSync.pullAll()
+        await box.peerSync.pullAll()
+
+        // Over one chunk, so the upload takes several requests.
+        let bytes = Data((0..<(PromptFiles.chunkBytes + 12345)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        let local = (root as NSString).appendingPathComponent("demo video.mp4")
+        try bytes.write(to: URL(fileURLWithPath: local))
+
+        let progress = ProgressLog()
+        let path = try await mac.engine.attachPromptFile(cardId: "card_box", fileURL: URL(fileURLWithPath: local)) { sent, total in
+            progress.add(sent, total)
+        }
+        #expect(path.hasPrefix(PromptFileStore.directory(kanbanHome: box.home) + "/"))
+        #expect(path.hasSuffix("/demo video.mp4"))
+        #expect(FileManager.default.contents(atPath: path) == bytes)
+        #expect(!FileManager.default.fileExists(atPath: path + ".part"))
+        #expect(progress.last == [Int64(bytes.count), Int64(bytes.count)])
+        #expect(progress.count >= 3)
+
+        // A device of the Mac uploading for the box's card is passed on to the box.
+        let phone = RemoteClient(baseURL: URL(string: mac.url)!, token: try mac.devices.add(name: "phone", scope: .full).token)
+        let forwarded = try await phone.uploadPromptFile(cardId: "card_box", fileURL: URL(fileURLWithPath: local))
+        #expect(forwarded.hasPrefix(PromptFileStore.directory(kanbanHome: box.home) + "/"))
+        #expect(forwarded != path)
+        // The Mac's own card keeps the file on the Mac.
+        let own = try await phone.uploadPromptFile(cardId: "card_mac", fileURL: URL(fileURLWithPath: local))
+        #expect(own.hasPrefix(PromptFileStore.directory(kanbanHome: mac.home) + "/"))
+        #expect(FileManager.default.contents(atPath: own) == bytes)
+        // A local card gets a copy in the Mac's store.
+        let copied = try await mac.engine.attachPromptFile(cardId: "card_mac", fileURL: URL(fileURLWithPath: local))
+        #expect(copied.hasPrefix(PromptFileStore.directory(kanbanHome: mac.home) + "/") && copied.hasSuffix("/demo video.mp4"))
+
+        // A chunk out of order is refused with where the upload stands.
+        let chunk = RemotePromptFileChunk(upload: "u-gap", name: "a.bin", size: 10, offset: 4, data: Data([1, 2]))
+        await #expect(throws: RemoteClientError.self) { try await phone.uploadPromptFileChunk(cardId: "card_mac", chunk) }
+    }
+
     @Test("renames, moves and archives from either master converge on both")
     func sharedEditsConverge() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("converge-\(UUID().uuidString)")
@@ -1306,4 +1360,14 @@ struct MasterRolesTests {
         #expect(Set(without.cards.map(\.id)) == ["card_box", "card_archived"])
         #expect(without.unreachable == ["mac"])
     }
+}
+
+/// Progress reports of an upload, from any thread.
+private final class ProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [[Int64]] = []
+
+    func add(_ sent: Int64, _ total: Int64) { lock.withLock { reports.append([sent, total]) } }
+    var last: [Int64]? { lock.withLock { reports.last } }
+    var count: Int { lock.withLock { reports.count } }
 }

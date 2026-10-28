@@ -277,7 +277,7 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         sendBracketedPaste(text: text ?? "")
     }
 
-    private func sendBracketedPaste(text: String) {
+    func sendBracketedPaste(text: String) {
         // Always send bracketed paste codes — Claude Code needs them for image detection.
         // Raw bytes for \e[200~ and \e[201~ to avoid Swift 6 concurrency issues
         // with EscapeSequences static properties.

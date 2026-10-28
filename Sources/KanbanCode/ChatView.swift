@@ -256,6 +256,7 @@ struct ChatView: View {
                     guard !cardId.isEmpty else { return }
                     AppComposition.shared.engine.refreshSlashCommands(cardId: cardId)
                 },
+                fileDraftKey: cardId.isEmpty ? nil : PromptFileDrafts.mainKey(cardId: cardId),
                 text: $draftText,
                 pastedImages: $draftImages
             )
@@ -850,7 +851,8 @@ private struct ChatMessageList: View {
                     if let pending = pendingMessage {
                         HStack {
                             Spacer(minLength: 0)
-                            Text(pending)
+                            let split = PromptFiles.split(pending)
+                            Text(([split.text] + split.paths.map { "File: " + PromptFiles.displayName(of: $0) }).filter { !$0.isEmpty }.joined(separator: "\n"))
                                 .font(.app(.body))
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)

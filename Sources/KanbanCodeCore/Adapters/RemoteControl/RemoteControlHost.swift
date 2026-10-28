@@ -136,6 +136,10 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// Keeps an image pasted into the card's terminal as a file on the
     /// master that owns the card, and returns where it is there.
     func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage
+
+    /// Keeps one chunk of a file for the card's prompt where the card's
+    /// assistant runs, and says how far the file is.
+    func storePromptFileChunk(cardId: String, _ chunk: RemotePromptFileChunk) async throws -> RemotePromptFile
 }
 
 extension RemoteControlHost {
@@ -260,6 +264,10 @@ extension RemoteControlHost {
 
     public func storePastedImage(cardId: String, image: Data) async throws -> RemotePastedImage {
         throw RemoteHostError.notFound("this host does not keep pasted images")
+    }
+
+    public func storePromptFileChunk(cardId: String, _ chunk: RemotePromptFileChunk) async throws -> RemotePromptFile {
+        throw RemoteHostError.notFound("this host does not keep files")
     }
 }
 

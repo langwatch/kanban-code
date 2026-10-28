@@ -719,6 +719,21 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         return RemotePastedImage(path: try PastedImages.store(image, kanbanHome: home))
     }
 
+    public func storePromptFileChunk(cardId: String, _ chunk: RemotePromptFileChunk) async throws -> RemotePromptFile {
+        if let owner = await ownerClient(cardId) {
+            return try await forwarded { try await owner.uploadPromptFileChunk(cardId: cardId, chunk) }
+        }
+        _ = try await MainActor.run { try card(cardId) }
+        do {
+            return try await engine.receivePromptFileChunk(cardId: cardId, chunk)
+        } catch let error as PromptFileError {
+            switch error {
+            case .badRequest(let message), .tooLarge(let message): throw RemoteHostError.badRequest(message)
+            case .offsetMismatch: throw RemoteHostError.conflict(error.localizedDescription)
+            }
+        }
+    }
+
     public func discoverBranches(cardId: String) async throws {
         if let owner = await ownerClient(cardId) {
             return try await forwarded { try await owner.discoverBranches(cardId: cardId) }

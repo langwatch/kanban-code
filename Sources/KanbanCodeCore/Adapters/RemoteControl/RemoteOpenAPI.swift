@@ -137,6 +137,16 @@ enum RemoteOpenAPI {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {"summary": "Keep an image pasted into the card's terminal as a file on the owning master. The body is the image bytes (PNG, JPEG, GIF or WebP, at most 20 MiB)", "requestBody": {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "responses": {"201": {"description": "{\"path\"}: the file on the owning master"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
     },
+    "/v1/cards/{id}/files": {
+      "parameters": [
+        {"$ref": "#/components/parameters/CardId"},
+        {"name": "upload", "in": "query", "required": true, "schema": {"type": "string"}, "description": "id of this upload, letters, digits and dashes, the same on every chunk"},
+        {"name": "name", "in": "query", "required": true, "schema": {"type": "string"}, "description": "file name, kept with its extension"},
+        {"name": "size", "in": "query", "required": true, "schema": {"type": "integer"}, "description": "the whole file's byte count, at most 2 GiB"},
+        {"name": "offset", "in": "query", "required": true, "schema": {"type": "integer"}, "description": "where this chunk starts; chunks go in order"}
+      ],
+      "post": {"summary": "One chunk of a file attached to the card's prompt, kept where the card's assistant runs (forwarded to the owning master). The body is the chunk's bytes, at most 8 MiB each. Put a line [File: <path>] in the prompt to point the assistant at it", "requestBody": {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "responses": {"200": {"description": "{\"path\", \"received\", \"size\"}: more chunks to go"}, "201": {"description": "{\"path\", \"received\", \"size\"}: the file is whole at path"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/cards/{id}/fork": {
       "parameters": [{"$ref": "#/components/parameters/CardId"}],
       "post": {"summary": "Copy the card's conversation into a new card in Waiting, on the owning master; {\"keepWorktree\": true} keeps the worktree, else the fork runs from the project root", "responses": {"200": {"description": "the new card", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Card"}}}}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
@@ -176,7 +186,7 @@ enum RemoteOpenAPI {
     "responses": {"Error": {"description": "refused", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}},
     "schemas": {
       "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
-      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}, "features": {"type": "array", "items": {"type": "string", "enum": ["images", "queue", "terminalScroll", "machines", "cardActions", "worktrees", "sideChat", "slashCommands"]}, "description": "what the server supports beyond apiVersion 1; missing on older servers"}}},
+      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}, "features": {"type": "array", "items": {"type": "string", "enum": ["images", "queue", "terminalScroll", "machines", "cardActions", "worktrees", "sideChat", "slashCommands", "cardSearch", "fork", "conversations", "files"]}, "description": "what the server supports beyond apiVersion 1; missing on older servers"}}},
       "Device": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "scope": {"type": "string", "enum": ["full", "agent"]}, "createdAt": {"type": "string", "format": "date-time"}, "lastSeenAt": {"type": ["string", "null"], "format": "date-time"}}},
       "PR": {"type": "object", "properties": {"number": {"type": "integer"}, "url": {"type": ["string", "null"]}, "title": {"type": ["string", "null"]}, "status": {"type": ["string", "null"], "description": "open, draft, merged or closed"}}},
       "Terminal": {"type": "object", "properties": {"sessionName": {"type": "string"}, "label": {"type": "string"}, "isPrimary": {"type": "boolean"}}},

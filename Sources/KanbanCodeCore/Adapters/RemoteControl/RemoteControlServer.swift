@@ -587,6 +587,15 @@ public final class RemoteControlServer: Sendable {
             case ("POST", "cards/*/pasted-image"):
                 return .response(.json(try await host.storePastedImage(cardId: id, image: request.body), status: 201))
 
+            case ("POST", "cards/*/files"):
+                switch RemotePromptFileChunk.parse(query: request.query, body: request.body) {
+                case .failure(let error):
+                    return .response(.error(400, error.localizedDescription))
+                case .success(let chunk):
+                    let stored = try await host.storePromptFileChunk(cardId: id, chunk)
+                    return .response(.json(stored, status: stored.isComplete ? 201 : 200))
+                }
+
             case ("DELETE", "cards/*/side-chat/*"):
                 try await host.cancelSideChat(cardId: id, runId: rest[3])
                 return .response(.noContent)
@@ -735,7 +744,7 @@ public final class RemoteControlServer: Sendable {
         "cards/*/interrupt", "cards/*/resume", "events", "cards/*/terminal",
         "cards/*/move", "cards/*/fork", "cards/*/handover", "cards/*/transcript/raw", "cards/*/transcript/images",
         "cards/*/worktree/remove", "cards/*/discover", "cards/*/side-chat", "cards/*/side-chat/*",
-        "cards/*/slash-commands", "cards/*/pasted-image",
+        "cards/*/slash-commands", "cards/*/pasted-image", "cards/*/files",
         "cards/*/conversations", "cards/*/conversations/*", "cards/*/conversations-raw", "cards/*/conversations/*/images",
     ]
 

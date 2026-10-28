@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeRemoteKit
 #if canImport(CryptoKit)
 import CryptoKit
 #else
@@ -728,6 +729,37 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
         let name = String(UUID().uuidString.lowercased().prefix(8))
         let remotePath = "\(runtime.remoteHome)/.kanban-code/images/pasted/\(name).png"
         try await upload(machineName: machineName, bridge: bridge, remotePath: remotePath, data: data)
+        return remotePath
+    }
+
+    /// The largest file sent to a machine for a prompt: the machine upload
+    /// takes its bytes whole.
+    public static let maxPromptFileBytes: Int64 = 512 << 20
+
+    /// A file attached to a prompt of a session on `machineName`, copied to
+    /// `~/.kanban-code/files/<upload>/<name>` there. Returns its path there.
+    public func uploadPromptFile(
+        machineName: String, localPath: String,
+        progress: @escaping @Sendable (Int64, Int64) -> Void = { _, _ in }
+    ) async throws -> String {
+        let name = PromptFiles.safeName((localPath as NSString).lastPathComponent)
+        let size = try PromptFileReader.size(of: URL(fileURLWithPath: localPath))
+        guard size <= Self.maxPromptFileBytes else {
+            throw PromptFileError.tooLarge(
+                "\(name) is \(PromptFiles.formattedSize(size)), over the \(PromptFiles.formattedSize(Self.maxPromptFileBytes)) limit for files sent to \(machineName)")
+        }
+        if machines[machineName]?.bridge == nil {
+            _ = await reconnectIfRunning(machineName: machineName)
+        }
+        guard let runtime = machines[machineName], let bridge = runtime.bridge else {
+            throw BoxdSupervisorError.notConnected(machineName)
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: localPath), options: .alwaysMapped)
+        let uploadId = UUID().uuidString.lowercased()
+        let remotePath = "\(runtime.remoteHome)/.kanban-code/files/\(uploadId)/\(name)"
+        try await upload(machineName: machineName, bridge: bridge, remotePath: remotePath, data: data) { event in
+            if case .progress(let sent, let total) = event { progress(Int64(sent), Int64(total)) }
+        }
         return remotePath
     }
 

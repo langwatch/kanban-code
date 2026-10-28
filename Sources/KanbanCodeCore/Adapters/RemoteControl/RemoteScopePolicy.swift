@@ -43,7 +43,7 @@ enum RemoteScopePolicy {
         "POST cards/*/worktree/remove", "POST cards/*/discover",
         "POST cards/*/queue/*", "PATCH cards/*/queue/*", "DELETE cards/*/queue/*",
         "POST cards/*/side-chat", "GET cards/*/side-chat/*", "DELETE cards/*/side-chat/*",
-        "GET cards/*/slash-commands", "POST cards/*/pasted-image",
+        "GET cards/*/slash-commands", "POST cards/*/pasted-image", "POST cards/*/files",
         "GET cards/*/conversations", "POST cards/*/conversations", "GET cards/*/conversations/*",
         "PATCH cards/*/conversations/*", "GET cards/*/conversations-raw", "GET cards/*/conversations/*/images",
     ]

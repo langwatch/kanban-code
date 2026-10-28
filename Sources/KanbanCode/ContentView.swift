@@ -816,7 +816,7 @@ struct ContentView: View {
             .overlay {
                 if let card = store.state.selectedCard,
                    let sessionName = card.link.tmuxLink?.sessionName {
-                    ImageDropZone(isTargeted: $isDroppingImage) { imageData in
+                    ImageDropZone(isTargeted: $isDroppingImage, onDrop: { imageData in
                         // With a conversation open, the image goes into its composer.
                         if let conversationId = store.state.openConversations[card.id] {
                             ConversationDrafts.shared.addImage(imageData, cardId: card.id, conversationId: conversationId)
@@ -842,7 +842,9 @@ struct ContentView: View {
                                 arguments: ["send-keys", "-t", sessionName, "Enter"]
                             )
                         }
-                    }
+                    }, onFileDrop: { urls in
+                        dropFiles(urls, card: card, sessionName: sessionName)
+                    })
                     .allowsHitTesting(isDroppingImage)
                 } else {
                     // No terminal open — don't show image drop zone
@@ -851,6 +853,46 @@ struct ContentView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: isDroppingImage)
+    }
+
+    /// Files dropped on a card that are not images. They attach to the
+    /// composer that shows: an open conversation's, else Main's in chat
+    /// view. In the terminal each goes where the assistant runs and its path
+    /// is typed, as a file dropped on a terminal is.
+    private func dropFiles(_ urls: [URL], card: KanbanCodeCard, sessionName: String) {
+        let drafts = PromptFileDrafts.shared
+        if let conversationId = store.state.openConversations[card.id] {
+            drafts.add(urls, cardId: card.id, key: PromptFileDrafts.conversationKey(cardId: card.id, conversationId: conversationId))
+            return
+        }
+        if UserDefaults.standard.bool(forKey: "preferChatView") {
+            drafts.add(urls, cardId: card.id, key: PromptFileDrafts.mainKey(cardId: card.id))
+            return
+        }
+        let engine = AppComposition.shared.engine
+        Task { @MainActor in
+            for url in urls {
+                do {
+                    let path = try await engine.attachPromptFile(cardId: card.id, fileURL: url)
+                    TerminalCache.shared.terminal(for: sessionName, frame: .zero)
+                        .sendBracketedPaste(text: Self.shellQuotedPath(path) + " ")
+                } catch {
+                    let message = "Could not attach \(url.lastPathComponent): \(error.localizedDescription)"
+                    KanbanCodeLog.warn("terminal", message)
+                    store.dispatch(.setError(message))
+                }
+            }
+        }
+    }
+
+    /// A path as a dropped file types it: spaces and quotes escaped.
+    static func shellQuotedPath(_ path: String) -> String {
+        var out = ""
+        for ch in path {
+            if " '\"\\()&;|<>$`!*?[]{}#~".contains(ch) { out.append("\\") }
+            out.append(ch)
+        }
+        return out
     }
 
     private var boardWithSheets: some View {

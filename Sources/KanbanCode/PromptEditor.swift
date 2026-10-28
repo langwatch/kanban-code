@@ -29,6 +29,8 @@ struct PromptEditor: NSViewRepresentable {
     /// selected suggestion instead of moving focus away from the composer.
     var onTabIntercept: (() -> String?)?
     var onImagePaste: ((Data) -> String?)?
+    /// Files pasted or dropped on the editor; true when it took them.
+    var onFilePaste: (([URL]) -> Bool)?
     var onEscape: (() -> Void)?
     var onHeightChange: (CGFloat) -> Void = { _ in }
     /// Bump this to take the keyboard, with the caret after the last character
@@ -73,6 +75,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onEnterIntercept = onEnterIntercept
         textView.onTabIntercept = onTabIntercept
         textView.onImagePaste = onImagePaste
+        textView.onFilePaste = onFilePaste
         textView.onEscape = onEscape
         textView.placeholderString = placeholder
 
@@ -133,6 +136,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.onEnterIntercept = onEnterIntercept
         textView.onTabIntercept = onTabIntercept
         textView.onImagePaste = onImagePaste
+        textView.onFilePaste = onFilePaste
         textView.onEscape = onEscape
         textView.font = font
 
@@ -290,6 +294,7 @@ final class SubmitTextView: NSTextView {
     var onEnterIntercept: (() -> String?)?
     var onTabIntercept: (() -> String?)?
     var onImagePaste: ((Data) -> String?)?
+    var onFilePaste: (([URL]) -> Bool)?
     var onEscape: (() -> Void)?
     var placeholderString: String = ""
 
@@ -324,6 +329,7 @@ final class SubmitTextView: NSTextView {
         onEnterIntercept = nil
         onTabIntercept = nil
         onImagePaste = nil
+        onFilePaste = nil
         onEscape = nil
     }
 
@@ -450,6 +456,7 @@ final class SubmitTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
+        if tryPasteFiles(NSPasteboard.general) { return }
         if tryPasteImage() { return }
         super.paste(sender)
         refreshEditorHeightAfterProgrammaticChange()
@@ -463,6 +470,7 @@ final class SubmitTextView: NSTextView {
         if window?.firstResponder === self,
            event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            event.charactersIgnoringModifiers == "v" {
+            if tryPasteFiles(NSPasteboard.general) { return true }
             if tryPasteImage() { return true }
         }
         return super.performKeyEquivalent(with: event)
@@ -493,6 +501,21 @@ final class SubmitTextView: NSTextView {
         guard let scrollView = enclosingScrollView as? PromptEditorScrollView else { return }
         scrollView.recalcIntrinsicHeight()
         scrollView.scheduleRecalcIntrinsicHeight()
+    }
+
+    /// Files copied in Finder that are not images: they attach as files. A
+    /// Finder copy also carries the file's icon as an image, so this runs
+    /// before the image paste.
+    private func tryPasteFiles(_ pasteboard: NSPasteboard) -> Bool {
+        guard let onFilePaste,
+              let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              !urls.isEmpty else { return false }
+        return onFilePaste(urls)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if tryPasteFiles(sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
     }
 
     /// Try to extract an image from the clipboard. Returns true if an image was handled.
