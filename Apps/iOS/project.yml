@@ -64,6 +64,22 @@ targets:
           - CFBundleURLName: io.kanbancode.mobile
             CFBundleURLSchemes:
               - kanbancode
+  KanbanCodeMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - KanbanCodeMobileTests
+    dependencies:
+      - target: KanbanCodeMobile
+      - package: KanbanCode
+        product: KanbanCodeRemoteKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.kanbancode.mobile.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/KanbanCodeMobile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KanbanCodeMobile
+        BUNDLE_LOADER: $(TEST_HOST)
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
   KanbanCodeMobileUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -82,10 +98,12 @@ schemes:
     build:
       targets:
         KanbanCodeMobile: all
+        KanbanCodeMobileTests: [test]
         KanbanCodeMobileUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
+        - KanbanCodeMobileTests
         - KanbanCodeMobileUITests

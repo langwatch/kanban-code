@@ -364,12 +364,12 @@ struct ChatPane: View {
 
     /// The most lines the composer text shows before it scrolls: eight,
     /// or fewer when the pane above the keyboard is too short for eight
-    /// plus the images and the button row. A composer taller than the
+    /// plus the images, the files and the button row. A composer taller than the
     /// pane draws its last line under the buttons.
     private var composerMaxLines: Int {
         let room = min(paneBottom, keyboardTop ?? paneBottom) - paneTop
         guard room > 0 else { return 8 }
-        let around: CGFloat = 96 + (draft.images.isEmpty ? 0 : 70)
+        let around: CGFloat = 96 + (draft.images.isEmpty ? 0 : 70) + (draft.files.isEmpty ? 0 : 56)
         let line = UIFont.preferredFont(forTextStyle: .body).lineHeight
         return min(8, max(2, Int((room - around) / line)))
     }
@@ -649,15 +649,23 @@ struct MessageView: View {
             if let count = message.images, count > 0 {
                 RemoteImageRow(count: count, load: loadImage)
             }
-            HStack {
-                Spacer(minLength: 48)
-                SelectableText(text: SelectableTextStyle.plain(fromConversation?.text ?? text, color: .white))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color.accentColor.opacity(message.id.hasPrefix("pending-") ? 0.5 : 0.9),
-                                in: RoundedRectangle(cornerRadius: 18))
-                    .foregroundStyle(.white)
+            // Attached files show as chips over the bubble, not as their
+            // [File: /path] lines.
+            let split = PromptFiles.split(fromConversation?.text ?? text)
+            if !split.paths.isEmpty {
+                SentFileRow(paths: split.paths)
+            }
+            if !split.text.isEmpty || split.paths.isEmpty {
+                HStack {
+                    Spacer(minLength: 48)
+                    SelectableText(text: SelectableTextStyle.plain(split.text, color: .white))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Color.accentColor.opacity(message.id.hasPrefix("pending-") ? 0.5 : 0.9),
+                                    in: RoundedRectangle(cornerRadius: 18))
+                        .foregroundStyle(.white)
+                }
             }
         case .assistant:
             MarkdownText(text: text)
@@ -726,6 +734,50 @@ struct MessageView: View {
                         .font(.caption.weight(.medium))
                 }
             }
+        }
+    }
+}
+
+/// The files a sent message names, one chip each, right aligned over its
+/// bubble. The files live on the machine the card runs on, so a tap copies
+/// the path.
+struct SentFileRow: View {
+    let paths: [String]
+    @State private var copied: String?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            ForEach(Array(paths.enumerated()), id: \.offset) { _, path in
+                Button {
+                    UIPasteboard.general.string = path
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.snappy) { copied = path }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: copied == path ? "checkmark" : FileIcon.symbol(for: path))
+                            .font(.footnote)
+                            .foregroundStyle(Color.accentColor)
+                        Text(copied == path ? "Path copied" : PromptFiles.displayName(of: path))
+                            .font(.footnote.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(PromptFiles.displayName(of: path))
+                .accessibilityHint("Copies the file's path")
+                .accessibilityIdentifier("sentFile")
+            }
+        }
+        .padding(.leading, 48)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .task(id: copied) {
+            guard copied != nil else { return }
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(.snappy) { copied = nil }
         }
     }
 }

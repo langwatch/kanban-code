@@ -10,6 +10,10 @@ import KanbanCodeRemoteKit
 /// Each image has an `[Image #N]` marker in the text where it goes, as in
 /// Claude Code and the Mac composer. Markers are numbered in text order,
 /// and deleting one drops its image.
+///
+/// Other files (a video, a PDF, a zip) upload as soon as they are picked to
+/// the machine where the card's assistant runs, and the prompt names each
+/// one on a `[File: /path]` line after the text.
 @Observable
 final class ComposerDraft {
     let key: String
@@ -24,9 +28,13 @@ final class ComposerDraft {
     @ObservationIgnored private var settling = false
     /// Messages set aside, oldest first.
     private(set) var stashes: [Stash]
+    /// Files attached, in the order picked.
+    private(set) var files: [DraftFile]
+    @ObservationIgnored private var uploads: [UUID: Task<Void, Never>] = [:]
 
     struct Stash: Codable, Identifiable, Equatable {
         let id: UUID
+        /// The text with a `[File: /path]` line per attached file.
         var text: String
         /// JPEGs, as in the composer.
         var images: [Data]
@@ -34,9 +42,11 @@ final class ComposerDraft {
 
         /// One line for a menu.
         var preview: String {
-            let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let split = PromptFiles.split(text)
+            let line = split.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
             let images = images.isEmpty ? "" : (images.count == 1 ? "1 image" : "\(images.count) images")
-            return [line.isEmpty ? nil : String(line.prefix(60)), images.isEmpty ? nil : images]
+            let files = split.paths.isEmpty ? "" : (split.paths.count == 1 ? "1 file" : "\(split.paths.count) files")
+            return [line.isEmpty ? nil : String(line.prefix(60)), images.isEmpty ? nil : images, files.isEmpty ? nil : files]
                 .compactMap { $0 }.joined(separator: " + ")
         }
     }
@@ -45,6 +55,27 @@ final class ComposerDraft {
         let id: UUID
         /// JPEG, already scaled down for sending.
         let data: Data
+    }
+
+    struct DraftFile: Identifiable, Equatable, Codable {
+        enum State: Equatable, Codable {
+            /// The share sent so far, 0 to 1.
+            case uploading(Double)
+            /// The file's path where the card's assistant runs.
+            case ready(String)
+            case failed(String)
+        }
+
+        let id: UUID
+        var name: String
+        /// Nil for a file that came back from a sent or stashed message.
+        var size: Int64?
+        var state: State
+
+        var remotePath: String? {
+            if case .ready(let path) = state { return path }
+            return nil
+        }
     }
 
     /// Images are scaled so their long side is at most this, then sent as JPEG.
@@ -62,6 +93,7 @@ final class ComposerDraft {
         text = Self.withMarkers(savedText, imageCount: savedImages.count)
         images = savedImages
         stashes = Self.loadStashes(from: directory)
+        files = Self.loadFiles(from: directory)
     }
 
     /// A draft that is never saved, for previews.
@@ -71,10 +103,105 @@ final class ComposerDraft {
         self.text = text
         images = []
         stashes = []
+        files = []
     }
 
     var isEmpty: Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty && files.isEmpty
+    }
+
+    /// Every file is uploaded, so the message can go.
+    var filesReady: Bool { files.allSatisfy { $0.remotePath != nil } }
+
+    /// The paths of the uploaded files, in the order picked.
+    var filePaths: [String] { files.compactMap(\.remotePath) }
+
+    /// The prompt as sent: `text` with a line per uploaded file.
+    func outgoingText(_ text: String) -> String {
+        PromptFiles.appending(paths: filePaths, to: text)
+    }
+
+    // MARK: Files
+
+    /// Adds a file being uploaded and returns its id.
+    @discardableResult
+    func addFile(name: String, size: Int64?) -> UUID {
+        let file = DraftFile(id: UUID(), name: name, size: size, state: .uploading(0))
+        files.append(file)
+        return file.id
+    }
+
+    func setFileProgress(_ id: UUID, sent: Int64, total: Int64) {
+        guard let index = files.firstIndex(where: { $0.id == id }), case .uploading = files[index].state else { return }
+        files[index].state = .uploading(total > 0 ? min(1, max(0, Double(sent) / Double(total))) : 1)
+    }
+
+    func finishFile(_ id: UUID, path: String) {
+        guard let index = files.firstIndex(where: { $0.id == id }) else { return }
+        files[index].state = .ready(path)
+        saveFiles()
+    }
+
+    func failFile(_ id: UUID, message: String) {
+        guard let index = files.firstIndex(where: { $0.id == id }) else { return }
+        files[index].state = .failed(message)
+    }
+
+    /// Drops a file, stopping its upload.
+    func removeFile(_ id: UUID) {
+        uploads.removeValue(forKey: id)?.cancel()
+        files.removeAll { $0.id == id }
+        saveFiles()
+    }
+
+    /// Attaches a file picked from Files and uploads it to where the card's
+    /// assistant runs. The file is first copied to a temporary folder, so
+    /// the picker's access ending does not cut the upload. Returns why it
+    /// cannot be attached, or nil once it is on its way.
+    func attachFile(at url: URL, client: RemoteClient, cardId: String) -> String? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let name = PromptFiles.safeName(url.lastPathComponent)
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
+        let size = values?.fileSize.map(Int64.init) ?? (try? PromptFileReader.size(of: url))
+        let refusal: String?
+        if values?.isDirectory == true {
+            refusal = "\(name) is a folder. Zip it to attach it."
+        } else if let size {
+            refusal = size > PromptFiles.maxBytes ? PromptFiles.tooLargeMessage(name: name, size: size) : nil
+        } else {
+            refusal = "\(name) could not be read."
+        }
+        if let refusal {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return refusal
+        }
+        let id = addFile(name: name, size: size)
+        uploads[id] = Task { [weak self] in
+            let folder = FileManager.default.temporaryDirectory
+                .appendingPathComponent("prompt-files", isDirectory: true)
+                .appendingPathComponent(id.uuidString, isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            do {
+                let copy = try await Task.detached {
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let copy = folder.appendingPathComponent(name)
+                    try FileManager.default.copyItem(at: url, to: copy)
+                    return copy
+                }.value
+                try Task.checkCancellation()
+                let path = try await client.uploadPromptFile(cardId: cardId, fileURL: copy, name: name) { sent, total in
+                    Task { @MainActor in self?.setFileProgress(id, sent: sent, total: total) }
+                }
+                guard !Task.isCancelled else { return }
+                self?.finishFile(id, path: path)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.failFile(id, message: error.localizedDescription)
+            }
+            self?.uploads[id] = nil
+        }
+        return nil
     }
 
     var canAddImages: Bool { images.count < RemoteImage.maxCount }
@@ -144,20 +271,45 @@ final class ComposerDraft {
 
     func clear() {
         replace(text: "", images: [])
+        for task in uploads.values { task.cancel() }
+        uploads = [:]
+        files = []
+        saveFiles()
     }
 
-    /// Puts a message into the composer, as if typed and attached.
+    /// Puts a message into the composer, as if typed and attached. Its
+    /// `[File: /path]` lines come back as uploaded files; files still
+    /// uploading stay.
     func load(text: String, images: [Data]) {
-        replace(text: Self.withMarkers(text, imageCount: images.count),
+        let split = PromptFiles.split(text)
+        replace(text: Self.withMarkers(split.text, imageCount: images.count),
                 images: images.map { DraftImage(id: UUID(), data: $0) })
+        files = files.filter { $0.remotePath == nil } + split.paths.map {
+            DraftFile(id: UUID(), name: PromptFiles.displayName(of: $0), size: nil, state: .ready($0))
+        }
+        saveFiles()
     }
 
-    /// Sets the composer's message aside and clears the composer.
+    /// The message a stash keeps: the text with its uploaded files.
+    private var stashedText: String {
+        filePaths.isEmpty ? text : PromptFiles.appending(paths: filePaths, to: text)
+    }
+
+    /// Whether there is anything a stash would keep: files still uploading
+    /// stay in the composer.
+    private var hasStashable: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !filePaths.isEmpty
+    }
+
+    /// Sets the composer's message aside and clears the composer. Files
+    /// still uploading stay in the composer.
     func stash() {
-        guard !isEmpty else { return }
-        stashes.append(Stash(id: UUID(), text: text, images: images.map(\.data), at: .now))
+        guard hasStashable else { return }
+        stashes.append(Stash(id: UUID(), text: stashedText, images: images.map(\.data), at: .now))
         saveStashes()
-        clear()
+        replace(text: "", images: [])
+        files.removeAll { $0.remotePath != nil }
+        saveFiles()
     }
 
     /// Brings a stash back into the composer (the latest when `id` is nil).
@@ -165,8 +317,8 @@ final class ComposerDraft {
     func restore(_ id: UUID? = nil) {
         guard let target = id.flatMap({ id in stashes.first { $0.id == id } }) ?? stashes.last else { return }
         stashes.removeAll { $0.id == target.id }
-        if !isEmpty {
-            stashes.append(Stash(id: UUID(), text: text, images: images.map(\.data), at: .now))
+        if hasStashable {
+            stashes.append(Stash(id: UUID(), text: stashedText, images: images.map(\.data), at: .now))
         }
         saveStashes()
         load(text: target.text, images: target.images)
@@ -267,6 +419,25 @@ final class ComposerDraft {
         for (index, image) in images.enumerated() {
             try? image.data.write(to: folder.appendingPathComponent(String(format: "%02d.jpg", index)))
         }
+    }
+
+    /// Keeps the uploaded files; one still uploading does not outlive the app.
+    private func saveFiles() {
+        guard let directory else { return }
+        let file = directory.appendingPathComponent("files.json")
+        let ready = files.filter { $0.remotePath != nil }
+        guard !ready.isEmpty else {
+            try? FileManager.default.removeItem(at: file)
+            return
+        }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(ready).write(to: file, options: .atomic)
+    }
+
+    private static func loadFiles(from directory: URL?) -> [DraftFile] {
+        guard let directory,
+              let data = try? Data(contentsOf: directory.appendingPathComponent("files.json")) else { return [] }
+        return ((try? JSONDecoder().decode([DraftFile].self, from: data)) ?? []).filter { $0.remotePath != nil }
     }
 
     private func saveStashes() {

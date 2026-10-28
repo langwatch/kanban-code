@@ -1,9 +1,10 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 import KanbanCodeRemoteKit
 
 /// The composer of a card's chat, for Main and for each conversation: one
-/// rounded container with the images, the text, then a row with + and the
+/// rounded container with the images and files, the text, then a row with + and the
 /// other buttons on the left and send on the right. Touch and hold send to
 /// send now or stash. Text that carries secrets first offers to save them
 /// in the vault. The draft is kept until the master takes the prompt.
@@ -37,11 +38,13 @@ struct PromptComposer<Extra: View>: View {
     @State private var showPhotoPicker = false
     @State private var showCamera = false
     @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showFileImporter = false
     @State private var selection: TextSelection?
     /// Where picked images put their markers, taken when + is used.
     @State private var imageInsertion: Int?
 
     private var supportsImages: Bool { board.supports(RemoteAPI.Feature.images) }
+    private var supportsFiles: Bool { board.supports(RemoteAPI.Feature.files) }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -64,6 +67,13 @@ struct PromptComposer<Extra: View>: View {
             CameraPicker { data in insertImage(data) }
                 .ignoresSafeArea()
         }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): Task { await addFiles(urls) }
+            case .failure(let error): sendError = error.localizedDescription
+            }
+        }
     }
 
     private var composer: some View {
@@ -72,6 +82,9 @@ struct PromptComposer<Extra: View>: View {
                 if !draft.images.isEmpty {
                     attachments
                 }
+                if !draft.files.isEmpty {
+                    fileAttachments
+                }
                 TextField("Message", text: composerText, selection: $selection, axis: .vertical)
                     .lineLimit(1...maxLines)
                     .focused(focused)
@@ -79,7 +92,7 @@ struct PromptComposer<Extra: View>: View {
                     .padding(.top, 4)
                     .accessibilityIdentifier("composer")
                 HStack(spacing: 8) {
-                    if supportsImages {
+                    if supportsImages || supportsFiles {
                         attachButton
                     }
                     if !draft.stashes.isEmpty {
@@ -181,7 +194,7 @@ struct PromptComposer<Extra: View>: View {
             .accessibilityLabel("Stop")
             .accessibilityIdentifier("stop")
         } else {
-            let enabled = !draft.isEmpty && !isSending
+            let enabled = !draft.isEmpty && !isSending && draft.filesReady
             Menu {
                 Button("Send now", systemImage: "bolt.fill") { send(.now) }
                 Button("Stash", systemImage: "tray.and.arrow.down") {
@@ -198,6 +211,7 @@ struct PromptComposer<Extra: View>: View {
             }
             .disabled(!enabled)
             .accessibilityLabel("Send")
+            .accessibilityValue(draft.filesReady ? "" : "Waiting for files to upload")
             .accessibilityHint(card.isBusy ? "Sends when this turn ends. Touch and hold to send now or stash." : "Touch and hold to send now or stash.")
             .accessibilityIdentifier("send")
         }
@@ -244,15 +258,26 @@ struct PromptComposer<Extra: View>: View {
 
     private var attachButton: some View {
         Menu {
-            Button("Photos", systemImage: "photo.on.rectangle") {
-                imageInsertion = caretOffset
-                showPhotoPicker = true
-            }
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                Button("Camera", systemImage: "camera") {
+            if supportsImages {
+                Button("Photos", systemImage: "photo.on.rectangle") {
                     imageInsertion = caretOffset
-                    showCamera = true
+                    showPhotoPicker = true
                 }
+                .disabled(!draft.canAddImages)
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button("Camera", systemImage: "camera") {
+                        imageInsertion = caretOffset
+                        showCamera = true
+                    }
+                    .disabled(!draft.canAddImages)
+                }
+            }
+            if supportsFiles {
+                Button("Choose File", systemImage: "doc") {
+                    imageInsertion = caretOffset
+                    showFileImporter = true
+                }
+                .accessibilityIdentifier("chooseFile")
             }
         } label: {
             Image(systemName: "plus")
@@ -262,8 +287,8 @@ struct PromptComposer<Extra: View>: View {
                 .background(Color(.tertiarySystemFill), in: Circle())
         }
         .tint(Color(.label))
-        .disabled(!draft.canAddImages || isSending)
-        .accessibilityLabel("Attach image")
+        .disabled(isSending || (!supportsFiles && !draft.canAddImages))
+        .accessibilityLabel(supportsFiles ? "Attach" : "Attach image")
         .accessibilityIdentifier("attach")
     }
 
@@ -312,6 +337,52 @@ struct PromptComposer<Extra: View>: View {
         }
     }
 
+    private var fileAttachments: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(draft.files) { file in
+                    DraftFileChip(file: file) {
+                        withAnimation(.snappy) { draft.removeFile(file.id) }
+                    }
+                }
+            }
+            .padding(.top, 6)
+            .padding(.trailing, 6)
+        }
+    }
+
+    /// Attaches files picked from Files: an image goes inline like a photo
+    /// when images can still be added, any other file uploads.
+    private func addFiles(_ urls: [URL]) async {
+        var refusals: [String] = []
+        for url in urls {
+            if supportsImages, draft.canAddImages, PromptFiles.isImage(fileName: url.lastPathComponent),
+               let data = Self.readImage(url), insertImage(data) {
+                continue
+            }
+            guard supportsFiles, let client = board.client else {
+                refusals.append("\(PromptFiles.displayName(of: url.path)) could not be attached.")
+                continue
+            }
+            if let refusal = draft.attachFile(at: url, client: client, cardId: card.id) {
+                refusals.append(refusal)
+            }
+        }
+        if !refusals.isEmpty {
+            sendError = refusals.joined(separator: "\n")
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
+    }
+
+    /// The bytes of a picked image, or nil past the size an image can be
+    /// read at, which then goes as a file.
+    private static func readImage(_ url: URL) -> Data? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let size = try? PromptFileReader.size(of: url), size <= 50 << 20 else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
     private func addPhotos(_ items: [PhotosPickerItem]) async {
         var failed = 0
         for item in items {
@@ -337,7 +408,7 @@ struct PromptComposer<Extra: View>: View {
     private func send(_ mode: RemotePromptRequest.Mode) {
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard secretOffer == nil, !isSending else { return }
-        if draft.images.isEmpty, let intercept, intercept(text) {
+        if draft.images.isEmpty, draft.files.isEmpty, let intercept, intercept(text) {
             draft.clear()
             return
         }
@@ -397,12 +468,14 @@ struct PromptComposer<Extra: View>: View {
         if replace { saveOfferedSecrets() }
     }
 
-    /// Sends the text with the draft's images. The draft stays until the
-    /// master took them, so a send that fails leaves everything to send again.
-    private func deliver(_ text: String, _ mode: RemotePromptRequest.Mode) {
+    /// Sends the text with the draft's images and a line per uploaded file.
+    /// The draft stays until the master took them, so a send that fails
+    /// leaves everything to send again.
+    private func deliver(_ typed: String, _ mode: RemotePromptRequest.Mode) {
         let images = draft.remoteImages
         let attached = draft.images.map(\.data)
-        guard !text.isEmpty || !images.isEmpty, let client = board.client, !isSending else { return }
+        let text = draft.outgoingText(typed)
+        guard !text.isEmpty || !images.isEmpty, draft.filesReady, let client = board.client, !isSending else { return }
         isSending = true
         sendError = nil
         Task {
@@ -416,6 +489,108 @@ struct PromptComposer<Extra: View>: View {
                 sendError = error.localizedDescription
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
+        }
+    }
+}
+
+/// A file attached in the composer: its kind's icon, name and size, the
+/// upload's progress or why it failed, and an x that drops it.
+struct DraftFileChip: View {
+    let file: ComposerDraft.DraftFile
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: FileIcon.symbol(for: file.name))
+                .font(.system(size: 18))
+                .foregroundStyle(isFailed ? Color.red : Color.accentColor)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(file.name)
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(isFailed ? Color.red : Color.secondary)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 180, alignment: .leading)
+            if case .uploading(let progress) = file.state {
+                ProgressRing(progress: progress)
+                    .frame(width: 18, height: 18)
+                    .accessibilityLabel("Uploading")
+                    .accessibilityValue("\(Int(progress * 100)) percent")
+            }
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isUploading ? "Cancel upload" : "Remove file")
+            .accessibilityIdentifier("removeFile")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 7)
+        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("fileAttachment")
+    }
+
+    private var isFailed: Bool {
+        if case .failed = file.state { return true }
+        return false
+    }
+
+    private var isUploading: Bool {
+        if case .uploading = file.state { return true }
+        return false
+    }
+
+    private var detail: String {
+        let size = file.size.map(PromptFiles.formattedSize)
+        switch file.state {
+        case .uploading(let progress):
+            return [size, "\(Int(progress * 100))%"].compactMap { $0 }.joined(separator: ", ")
+        case .ready:
+            return size ?? "Attached"
+        case .failed(let message):
+            return "Upload failed: \(message)"
+        }
+    }
+}
+
+/// A small ring that fills as an upload goes.
+struct ProgressRing: View {
+    let progress: Double
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color(.systemFill), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: max(0.02, progress))
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.2), value: progress)
+        }
+    }
+}
+
+/// The SF Symbol for a file, by its extension.
+enum FileIcon {
+    static func symbol(for name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "mov", "mp4", "m4v", "avi", "mkv", "webm": "film"
+        case "mp3", "m4a", "wav", "aac", "flac", "ogg": "waveform"
+        case "pdf": "doc.richtext"
+        case "zip", "gz", "tgz", "tar", "bz2", "xz", "7z", "rar": "doc.zipper"
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp": "photo"
+        case "txt", "md", "log", "csv", "json", "yaml", "yml", "xml": "doc.plaintext"
+        case "swift", "ts", "tsx", "js", "py", "go", "rs", "rb", "java", "kt", "c", "h", "cpp", "sh", "html", "css": "chevron.left.forwardslash.chevron.right"
+        default: "doc"
         }
     }
 }
