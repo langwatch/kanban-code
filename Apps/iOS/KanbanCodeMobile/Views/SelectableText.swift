@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import KanbanCodeRemoteKit
 
 /// Read-only text that selects like a text view: touch and hold, then drag
 /// the handles over any part of it, with the system Copy and Look Up menu.
@@ -127,6 +128,11 @@ enum SelectableTextStyle {
             }
             attributes[.font] = runFont
             out.append(NSAttributedString(string: piece, attributes: attributes))
+        }
+        for ref in IssueRefLinks.matches(in: out.string) {
+            let current = out.attributes(at: ref.range.location, effectiveRange: nil)
+            guard current[.link] == nil, current[.backgroundColor] == nil else { continue }
+            out.addAttribute(.link, value: ref.url, range: ref.range)
         }
         return out
     }
