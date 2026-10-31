@@ -181,6 +181,10 @@ Falls back to macOS native notifications if Pushover isn't configured. Just add 
 
 When Claude agents are actively working, Kanban Code spawns a lightweight companion process that keeps [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) triggered — preventing your Mac from sleeping mid-task. The companion quits automatically when all agents are idle. No more waking up to find Claude was interrupted by sleep mode.
 
+To set it up, add an Application trigger in Amphetamine (Settings > Triggers) and select `kanban-code-active-session`; Kanban Code's Settings > Amphetamine lists the same steps.
+
+With the lid closed, a Trigger session keeps the Mac awake only if Closed-Display Mode is enabled in that Trigger's own settings; the Closed-Display Mode choice in Amphetamine's session defaults does not apply to Trigger sessions ([Amphetamine's help text](https://github.com/x74353/Amphetamine_Localization/blob/4c796caf9e1d54fec37fb50b227b6a426718a780/English/en_Localizable.strings#L710)). On Apple silicon, a Closed-Display Mode session may end and the Mac sleep when a power adapter is connected or disconnected, unless Amphetamine's [Power Protect](https://x74353.github.io/Amphetamine-Power-Protect/) add-on is installed ([details](https://github.com/x74353/Amphetamine_Localization/blob/4c796caf9e1d54fec37fb50b227b6a426718a780/English/en_Localizable.strings#L190)).
+
 ### Multi-Project Support
 
 Configure multiple projects, each with its own GitHub filters, prompt templates, and repository settings. A global view combines everything — or focus on a single project. Exclude side projects from the global view to keep work and personal separate.
