@@ -673,6 +673,7 @@ final class DemoHost: RemoteControlHost {
         var events: [ConversationEvent] = []
         if let title = update.title { events.append(.title(conversationId, title)) }
         if update.read == true { events.append(.read(conversationId)) }
+        if update.read == false { events.append(.unread(conversationId)) }
         if let archived = update.archived { events.append(.archived(conversationId, archived)) }
         appendConversation(cardId, events)
         guard let found = thread(try cardState(cardId), conversationId) else {

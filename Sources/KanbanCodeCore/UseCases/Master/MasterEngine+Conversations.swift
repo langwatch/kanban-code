@@ -72,7 +72,7 @@ extension MasterEngine {
         return data
     }
 
-    /// Renames, marks read or archives a conversation.
+    /// Renames, marks read or unread, or archives a conversation.
     public func updateConversation(cardId: String, id: String, _ update: RemoteConversationUpdate) async throws -> RemoteConversation {
         if let owner = await ownerClient(forCard: cardId) {
             let updated = try await Self.forwardedConversation {
@@ -90,6 +90,7 @@ extension MasterEngine {
             events.append(.title(id, title, by: "human"))
         }
         if update.read == true, current.unread { events.append(.read(id)) }
+        if update.read == false, !current.unread { events.append(.unread(id)) }
         if let archived = update.archived, archived != current.archived { events.append(.archived(id, archived)) }
         if !events.isEmpty { try appendConversation(cardId: cardId, events) }
         return store.state.conversations[cardId]?.first { $0.id == id } ?? current

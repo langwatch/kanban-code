@@ -126,6 +126,19 @@ struct BoardScreen: View {
         }
         .disabled(!reachable)
         .accessibilityIdentifier("conversationRename")
+        Button(conversation.unread ? "Mark as Read" : "Mark as Unread",
+               systemImage: conversation.unread ? "envelope.open" : "envelope.badge") {
+            let markUnread = !conversation.unread
+            Task {
+                do {
+                    if markUnread { try await model.markUnread() } else { try await model.setRead() }
+                } catch {
+                    conversationError = "Could not mark the conversation \(markUnread ? "unread" : "read"): \(error.localizedDescription)"
+                }
+            }
+        }
+        .disabled(!reachable)
+        .accessibilityIdentifier("conversationToggleRead")
         Button("Archive", systemImage: "archivebox", role: .destructive) {
             Task {
                 do {

@@ -141,6 +141,28 @@ struct ConversationLogTests {
         #expect(summary.lastRole == .human)
     }
 
+    @Test("unread marks a read conversation unread until the next read; an old reader skips the line")
+    func readUnreadRead() throws {
+        var events: [ConversationEvent] = [
+            .created("swift-otter", at: t0),
+            .message("swift-otter", id: "m1", role: .agent, text: "Decide on the lease length", at: t0.addingTimeInterval(1)),
+            .read("swift-otter", at: t0.addingTimeInterval(2)),
+        ]
+        #expect(!ConversationLog.fold(log(events))[0].summary.unread)
+        events.append(.unread("swift-otter", at: t0.addingTimeInterval(3)))
+        #expect(ConversationLog.fold(log(events))[0].summary.unread)
+        events.append(.read("swift-otter", at: t0.addingTimeInterval(4)))
+        #expect(!ConversationLog.fold(log(events))[0].summary.unread)
+
+        // A build without the `unread` kind fails to decode the line and skips it.
+        struct OldEvent: Decodable {
+            enum Kind: String, Decodable { case created, message, title, read, retracted, archived }
+            var type: Kind
+        }
+        let line = ConversationEvent.unread("swift-otter", at: t0).line()
+        #expect((try? JSONDecoder.remote.decode(OldEvent.self, from: line)) == nil)
+    }
+
     @Test("an edited queued prompt replaces its text; a removed one leaves")
     func editAndRetract() {
         let threads = ConversationLog.fold(log([
@@ -433,6 +455,32 @@ struct ConversationHostTests {
         try handle.close()
         let thread = try #require(engine.conversationStore.threads(cardId: "card_a", ownerMachine: nil).first)
         #expect(thread.summary.title == "My plan")
+    }
+
+    @Test("mark unread through the API, then read again, as the board's menu and opening do")
+    func markUnreadThroughApi() async throws {
+        let (host, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let created = try await host.createConversation(cardId: "card_a", RemoteConversationCreate())
+        let logPath = engine.conversationStore.path(cardId: "card_a")
+        let handle = try #require(FileHandle(forWritingAtPath: logPath))
+        handle.seekToEndOfFile()
+        handle.write(ConversationEvent.message(created.id, id: "a1", role: .agent, text: "done",
+                                               at: Date().addingTimeInterval(-60)).line())
+        try handle.close()
+
+        #expect(try await host.updateConversation(cardId: "card_a", conversationId: created.id, .init(read: true)).unread == false)
+        let unread = try await host.updateConversation(cardId: "card_a", conversationId: created.id, .init(read: false))
+        #expect(unread.unread)
+        #expect(store.state.conversations["card_a"]?.first { $0.id == created.id }?.unread == true)
+        // Marking it unread again adds nothing to the log.
+        _ = try await host.updateConversation(cardId: "card_a", conversationId: created.id, .init(read: false))
+        let text = try String(contentsOfFile: logPath, encoding: .utf8)
+        #expect(text.components(separatedBy: "\"type\":\"unread\"").count - 1 == 1)
+
+        let read = try await host.updateConversation(cardId: "card_a", conversationId: created.id, .init(read: true))
+        #expect(!read.unread)
+        #expect(store.state.conversations["card_a"]?.first { $0.id == created.id }?.unread == false)
     }
 
     @Test("a message's image is served from the path the log keeps, and only that path")

@@ -149,6 +149,12 @@ struct SidebarConversationRows: View {
                 Button("Rename Conversation") {
                     ConversationActions.rename(cardId: cardId, conversationId: conversation.id)
                 }
+                Button(conversation.unread ? "Mark as Read" : "Mark as Unread") {
+                    let markUnread = !conversation.unread
+                    ConversationActions.update(cardId: cardId, conversationId: conversation.id, .init(read: !markUnread))
+                    // An open conversation marks itself read again, so it closes.
+                    if markUnread, openId == conversation.id { ConversationActions.open(cardId: cardId, conversationId: nil) }
+                }
                 Button("Archive Conversation") {
                     ConversationActions.update(cardId: cardId, conversationId: conversation.id, .init(archived: true))
                     if openId == conversation.id { ConversationActions.open(cardId: cardId, conversationId: nil) }

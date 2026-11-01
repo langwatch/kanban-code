@@ -82,9 +82,7 @@ final class ConversationModel {
     /// Marks it read on the master, which clears it on every device; the
     /// board here shows it at once.
     func markRead() async {
-        guard let client, let updated = try? await client.updateConversation(
-            cardId: cardId, id: id, RemoteConversationUpdate(read: true)) else { return }
-        apply(updated)
+        try? await setRead()
     }
 
     /// The bytes of a sent message's image, from the master that keeps it.
@@ -99,6 +97,18 @@ final class ConversationModel {
     func rename(_ title: String) async throws {
         guard let client else { return }
         apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(title: title)))
+    }
+
+    /// Marks it unread on the master until it is opened again.
+    func markUnread() async throws {
+        guard let client else { return }
+        apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(read: false)))
+    }
+
+    /// As `markRead`, reporting a failure.
+    func setRead() async throws {
+        guard let client else { return }
+        apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(read: true)))
     }
 
     func archive() async throws {

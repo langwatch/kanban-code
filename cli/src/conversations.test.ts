@@ -126,6 +126,18 @@ describe("foldConversations", () => {
     assert.equal(summarizeConversation(foldConversations(log)[0]).unread, false);
   });
 
+  test("unread marks a read conversation unread until the next read", () => {
+    const base = [
+      { type: "created", conv: "keen-owl", at: "2026-10-26T10:00:00.000Z", by: "human" },
+      { type: "message", conv: "keen-owl", id: "a1", role: "agent", text: "done", at: "2026-10-26T10:00:01.000Z" },
+      { type: "read", conv: "keen-owl", at: "2026-10-26T10:00:02.000Z" },
+      { type: "unread", conv: "keen-owl", at: "2026-10-26T10:00:03.000Z" },
+    ];
+    assert.equal(summarizeConversation(foldConversations(lines(...base))[0]).unread, true);
+    const reread = lines(...base, { type: "read", conv: "keen-owl", at: "2026-10-26T10:00:04.000Z" });
+    assert.equal(summarizeConversation(foldConversations(reread)[0]).unread, false);
+  });
+
   test("archived hides a conversation from the list unless all are asked for", () => {
     const log = lines(
       { type: "created", conv: "keen-owl", at: "2026-10-26T10:00:00.000Z", by: "human" },

@@ -157,7 +157,7 @@ public struct RemoteConversationCreate: Codable, Sendable, Equatable {
 /// PATCH /v1/cards/{id}/conversations/{conv}
 public struct RemoteConversationUpdate: Codable, Sendable, Equatable {
     public var title: String?
-    /// True marks it read by the human.
+    /// True marks it read by the human, false marks it unread again.
     public var read: Bool?
     public var archived: Bool?
 
@@ -173,7 +173,7 @@ public struct RemoteConversationUpdate: Codable, Sendable, Equatable {
 /// One line of `~/.kanban-code/conversations/<cardId>.jsonl`.
 public struct ConversationEvent: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
-        case created, message, title, read, retracted, archived
+        case created, message, title, read, unread, retracted, archived
     }
 
     public var type: Kind
@@ -230,6 +230,12 @@ public struct ConversationEvent: Codable, Sendable, Equatable {
 
     public static func read(_ conv: String, at: Date = .now) -> Self {
         .init(type: .read, conv: conv, at: at)
+    }
+
+    /// Marks it unread until the next `read`. A build that predates this
+    /// kind skips the line, as it does any line it cannot decode.
+    public static func unread(_ conv: String, at: Date = .now) -> Self {
+        .init(type: .unread, conv: conv, at: at)
     }
 
     public static func retracted(_ conv: String, id: String, at: Date = .now) -> Self {
@@ -292,6 +298,8 @@ public enum ConversationLog {
         var titledByHuman = false
         var archived = false
         var readAt: Date?
+        /// Marked unread by the human, until the next read.
+        var markedUnread = false
         var messages: [RemoteConversationMessage] = []
 
         init(id: String, createdAt: Date) {
@@ -329,6 +337,9 @@ public enum ConversationLog {
                 titledByHuman = !byAgent && !t.isEmpty
             case .read:
                 if readAt.map({ event.at > $0 }) ?? true { readAt = event.at }
+                markedUnread = false
+            case .unread:
+                markedUnread = true
             case .retracted:
                 messages.removeAll { $0.id == event.id }
             case .archived:
@@ -338,7 +349,7 @@ public enum ConversationLog {
 
         var thread: ConversationThread {
             let last = messages.last
-            let unread = messages.contains { message in
+            let unread = markedUnread || messages.contains { message in
                 message.role == .agent && (readAt.map { message.at > $0 } ?? true)
             }
             let summary = RemoteConversation(

@@ -32,6 +32,7 @@ export type ConversationEvent =
   | { type: "message"; conv: string; id: string; role: ConversationRole; text: string; at: string }
   | { type: "title"; conv: string; title: string; at: string; by: ConversationRole }
   | { type: "read"; conv: string; at: string }
+  | { type: "unread"; conv: string; at: string }
   | { type: "retracted"; conv: string; id: string; at: string }
   | { type: "archived"; conv: string; at: string; archived: boolean };
 
@@ -56,6 +57,8 @@ export interface Conversation {
   titledBy?: ConversationRole;
   archived: boolean;
   lastReadAt?: string;
+  /** Marked unread by the human, until the next read. */
+  markedUnread?: boolean;
   messages: ConversationMessage[];
 }
 
@@ -160,6 +163,11 @@ export function foldConversations(logText: string): Conversation[] {
       case "read": {
         const target = ensure(conv, at);
         if (!target.lastReadAt || at > target.lastReadAt) target.lastReadAt = at;
+        target.markedUnread = false;
+        break;
+      }
+      case "unread": {
+        ensure(conv, at).markedUnread = true;
         break;
       }
       case "retracted": {
@@ -193,7 +201,7 @@ export function previewText(text: string, limit = PREVIEW_LENGTH): string {
 
 export function summarizeConversation(conversation: Conversation): ConversationSummary {
   const last = conversation.messages[conversation.messages.length - 1];
-  const unread = conversation.messages.some(
+  const unread = conversation.markedUnread === true || conversation.messages.some(
     (message) => message.role === "agent" && (!conversation.lastReadAt || message.at > conversation.lastReadAt)
   );
   const summary: ConversationSummary = {
