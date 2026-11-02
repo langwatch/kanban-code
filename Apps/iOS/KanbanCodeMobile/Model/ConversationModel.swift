@@ -117,17 +117,28 @@ final class ConversationModel {
     }
 
     /// Shows a message the master took before it lists it, faded. Returns its id.
+    /// `sentId` is the id it was sent under, the one the master logs it by.
     @discardableResult
-    func appendPending(_ text: String, images: [Data] = []) -> String {
-        let id = "pending-\(UUID().uuidString)"
+    func appendPending(_ text: String, images: [Data] = [], id sentId: String? = nil) -> String {
+        let id = Self.pendingPrefix + (sentId ?? UUID().uuidString)
+        pending.removeAll { $0.id == id }
         pending.append(RemoteConversationMessage(id: id, role: .human, text: text, at: .now))
         if !images.isEmpty { pendingImages[id] = images }
         return id
     }
 
-    /// The master lists a message the human sent from here: the same text,
-    /// written no earlier than a minute before it was sent (clocks differ).
+    /// What a pending message's id starts with, before the id it was sent under.
+    static let pendingPrefix = "pending-"
+
+    /// The master lists a message the human sent from here: under the id
+    /// it was sent with, or, from a master that logs its own ids, the same
+    /// text written no earlier than a minute before it was sent (clocks
+    /// differ).
     static func lists(_ messages: [RemoteConversationMessage], sent: RemoteConversationMessage) -> Bool {
+        if sent.id.hasPrefix(pendingPrefix) {
+            let sentId = String(sent.id.dropFirst(pendingPrefix.count))
+            if messages.contains(where: { $0.id == sentId }) { return true }
+        }
         let text = sent.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return messages.contains { message in
             message.role == .human && message.text.trimmingCharacters(in: .whitespacesAndNewlines) == text

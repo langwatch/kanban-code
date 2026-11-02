@@ -111,8 +111,42 @@ extension MasterEngine {
     /// Reads the card's log again, its own or the copy of its owner's.
     public func reloadConversations(cardId: String) {
         let owner = isForeign(cardId) ? store.state.links[cardId]?.ownerMachine : nil
-        let summaries = conversationStore.threads(cardId: cardId, ownerMachine: owner).map(\.summary)
-        store.dispatch(.conversationsLoaded(cardId: cardId, conversations: summaries))
+        let threads = conversationStore.threads(cardId: cardId, ownerMachine: owner)
+        store.dispatch(.conversationsLoaded(cardId: cardId, conversations: threads.map(\.summary)))
+        settleSentMessages(cardId: cardId, threads: threads)
+    }
+
+    /// Takes the messages sent from here that the log now shows out of the
+    /// outbox, and out of the failed ones: a send whose answer was lost
+    /// landed after all.
+    func settleSentMessages(cardId: String, threads: [ConversationThread]) {
+        let sent = (store.state.conversationOutbox[cardId] ?? [])
+            + (store.state.failedPrompts[cardId] ?? []).map(\.prompt).filter { $0.conversation != nil }
+        guard !sent.isEmpty else { return }
+        var delivered: [String] = []
+        for thread in threads {
+            delivered += ConversationOutbox.delivered(sent.filter { $0.conversation == thread.summary.id }, in: thread.messages)
+        }
+        if !delivered.isEmpty {
+            store.dispatch(.conversationMessagesDelivered(cardId: cardId, promptIds: delivered))
+        }
+    }
+
+    /// Shows as failed, with Retry, each sent message the log has not shown
+    /// in `ConversationOutbox.unconfirmedAfter`, instead of a spinner that
+    /// never ends. Retry sends it under the same id, so the owner does not
+    /// take it twice if it landed.
+    public func failUnconfirmedMessages(now: Date = .now) {
+        let state = store.state
+        for (cardId, outbox) in state.conversationOutbox {
+            for prompt in ConversationOutbox.unconfirmed(outbox, sending: conversationSends,
+                                                         sentAt: state.conversationSentAt, now: now) {
+                let owner = isForeign(cardId) ? peerName(state.links[cardId]?.ownerMachine ?? "") : nil
+                let message = owner.map { "\($0) did not confirm it" } ?? "the conversation did not record it"
+                KanbanCodeLog.warn("conversations", "card \(cardId.prefix(12)): message \(prompt.id) unconfirmed: \(message)")
+                store.dispatch(.promptSendFailed(cardId: cardId, prompt: prompt, message: message))
+            }
+        }
     }
 
     /// Reloads every log that changed since the last pass: the CLI appends
@@ -133,6 +167,7 @@ extension MasterEngine {
             for cardId in changed {
                 reloadConversations(cardId: cardId)
             }
+            failUnconfirmedMessages()
             try? await Task.sleep(for: interval)
         }
     }

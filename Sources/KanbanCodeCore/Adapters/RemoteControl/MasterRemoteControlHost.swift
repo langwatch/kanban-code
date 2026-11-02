@@ -17,6 +17,7 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
     private let rushFor: @Sendable (String) throws -> RushCliAdapter
     private let queueWatch = QueueWatchFlag()
     private let searchIndex = CardSearchIndex()
+    private let sentPromptIds = SentPromptIds()
     /// How long a resume request waits for the start to succeed or fail
     /// before it answers with the card as it is. Below the clients' 30 s.
     public var resumeOutcomeWait: TimeInterval = 20
@@ -237,11 +238,42 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
             let encoded = images.map { RemoteImage(mediaType: Self.mediaType(ofExtension: $0.fileExtension), data: $0.bytes.base64EncodedString()) }
             try await forwarded {
                 try await owner.sendPrompt(cardId: cardId, text: request.text, mode: request.mode ?? .queue, images: encoded,
-                                           human: request.human == true, conversation: request.conversation)
+                                           human: request.human == true, conversation: request.conversation,
+                                           id: request.usableId)
             }
             if request.conversation != nil { await engine.mirrorConversations(cardId: cardId) }
             return
         }
+        let senderId = request.usableId
+        if let senderId {
+            let logged = await MainActor.run { tookPrompt(cardId: cardId, id: senderId, conversation: request.conversation) }
+            guard !logged, sentPromptIds.claim(cardId: cardId, id: senderId) else {
+                KanbanCodeLog.info("remote", "card \(cardId.prefix(12)): prompt \(senderId) was taken already; not sent again")
+                return
+            }
+        }
+        do {
+            try await sendOwnPrompt(cardId: cardId, request, images: images, senderId: senderId)
+        } catch {
+            if let senderId { sentPromptIds.release(cardId: cardId, id: senderId) }
+            throw error
+        }
+    }
+
+    /// Whether the card's log or queue has the prompt with this sender id.
+    @MainActor
+    private func tookPrompt(cardId: String, id: String, conversation: String?) -> Bool {
+        if store.state.links[cardId]?.queuedPrompts?.contains(where: { $0.id == id }) == true { return true }
+        guard let conversation else { return false }
+        return engine.conversationStore.threads(cardId: cardId)
+            .first { $0.summary.id == conversation }?
+            .messages.contains { $0.id == id } == true
+    }
+
+    /// Sends a prompt to a card this master owns; `senderId` names the
+    /// message in the conversation's log.
+    private func sendOwnPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded],
+                               senderId: String?) async throws {
         let conversation = try await MainActor.run { () throws -> RemoteConversation? in
             guard let id = request.conversation else { return nil }
             guard let found = store.state.conversations[cardId]?.first(where: { $0.id == id }) else {
@@ -262,7 +294,8 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
                 text = ConversationPrompt.wrap(request.text, conversation: conversation)
                 try await MainActor.run {
                     try engine.appendConversation(cardId: cardId, [
-                        .message(conversation.id, id: KSUID.generate(prefix: "msg"), role: .human, text: request.text, images: imagePaths)
+                        .message(conversation.id, id: senderId ?? KSUID.generate(prefix: "msg"), role: .human, text: request.text,
+                                 images: imagePaths)
                     ])
                 }
             }
@@ -280,7 +313,7 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
             try await interruptForPrompt(session: session)
         }
         await MainActor.run {
-            let prompt = QueuedPrompt(body: request.text, sendAutomatically: true,
+            let prompt = QueuedPrompt(id: senderId ?? KSUID.generate(prefix: "prompt"), body: request.text, sendAutomatically: true,
                                       imagePaths: imagePaths.isEmpty ? nil : imagePaths,
                                       humanWrittenAt: request.human == true ? .now : nil,
                                       conversation: conversation?.id)

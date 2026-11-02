@@ -176,10 +176,17 @@ extension MasterEngine {
             guard let client = await ownerClient(forCard: cardId) else {
                 return fail("\(ownerName) is not a configured peer")
             }
+            if prompt.conversation != nil { self.conversationSends.insert(prompt.id) }
+            defer { self.conversationSends.remove(prompt.id) }
             do {
+                // Under the prompt's id, so a retry after a lost answer is
+                // not sent twice and the log shows it under that id.
                 try await client.sendPrompt(cardId: cardId, text: prompt.body, mode: .queue, images: images,
-                                            human: prompt.isHuman, conversation: prompt.conversation)
-                if prompt.conversation != nil { await self.mirrorConversations(cardId: cardId) }
+                                            human: prompt.isHuman, conversation: prompt.conversation, id: prompt.id)
+                if prompt.conversation != nil {
+                    store.dispatch(.conversationMessageSendEnded(cardId: cardId, promptId: prompt.id))
+                    await self.mirrorConversations(cardId: cardId)
+                }
                 if let card = try? await client.card(id: cardId) {
                     store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
                 }

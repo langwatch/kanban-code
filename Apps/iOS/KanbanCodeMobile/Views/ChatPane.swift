@@ -324,7 +324,7 @@ struct ChatPane: View {
             if card.isLive, card.sessionStatus?.kind != .machine {
                 PromptComposer(card: card, board: board, draft: draft, sendError: $sendError, focused: $composerFocused,
                                maxLines: composerMaxLines, slashCommands: true, kanbanCommands: supportsSideChat,
-                               onInterrupt: onInterrupt, intercept: interceptSideChat, onSent: { text, images in
+                               onInterrupt: onInterrupt, intercept: interceptSideChat, onSent: { text, images, _ in
                                    follow.followsEnd = true
                                    sentCount += 1
                                    transcript.appendPending(text, imageCount: images.count)

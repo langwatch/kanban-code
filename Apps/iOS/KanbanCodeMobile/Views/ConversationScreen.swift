@@ -191,9 +191,9 @@ struct ConversationScreen: View {
             }
             if let card, card.isLive, card.sessionStatus?.kind != .machine {
                 PromptComposer(card: card, board: board, draft: draft, conversation: model.id, sendError: $sendError,
-                               focused: $composerFocused, maxLines: 6, onInterrupt: interrupt, onSent: { text, images in
+                               focused: $composerFocused, maxLines: 6, onInterrupt: interrupt, onSent: { text, images, id in
                                    sentCount += 1
-                                   model.appendPending(text, images: images)
+                                   model.appendPending(text, images: images, id: id)
                                    Task { await model.refresh() }
                                }) {
                     EmptyView()

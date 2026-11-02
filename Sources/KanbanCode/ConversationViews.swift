@@ -56,9 +56,18 @@ enum ConversationActions {
     /// Sends a message of the conversation through the card's queue, as the
     /// chat's send button does: the header goes on when it leaves.
     static func send(cardId: String, conversationId: String, text: String, imagePaths: [String]) {
-        let prompt = QueuedPrompt(
+        send(cardId: cardId, QueuedPrompt(
             body: text, sendAutomatically: true, imagePaths: imagePaths.isEmpty ? nil : imagePaths,
-            humanWrittenAt: .now, conversation: conversationId)
+            humanWrittenAt: .now, conversation: conversationId))
+    }
+
+    /// Sends a failed message again under its own id, so the card's owner
+    /// does not take it twice when the first send landed after all.
+    static func retry(cardId: String, _ failed: FailedPrompt) {
+        send(cardId: cardId, failed.prompt)
+    }
+
+    private static func send(cardId: String, _ prompt: QueuedPrompt) {
         // Shows faded in the conversation until its log has it; the send
         // itself is journalled like any chat prompt.
         store.dispatch(.conversationMessageSent(cardId: cardId, prompt: prompt))
@@ -234,7 +243,8 @@ struct ConversationChatView: View {
     /// Messages sent from here that the log does not show yet.
     private var pending: [QueuedPrompt] {
         let sent = store.state.conversationOutbox[card.id]?.filter { $0.conversation == conversation.id } ?? []
-        return sent.filter { prompt in !messages.contains { ConversationOutbox.delivers($0, prompt) } }
+        let delivered = Set(ConversationOutbox.delivered(sent, in: messages))
+        return sent.filter { !delivered.contains($0.id) }
     }
 
     private var transcriptPath: String? {
@@ -268,8 +278,11 @@ struct ConversationChatView: View {
         Set((card.link.queuedPrompts ?? []).map(\.id))
     }
 
+    /// Failed sends, but for one the log shows: it landed after all.
     private var failed: [FailedPrompt] {
-        store.state.failedPrompts[card.id]?.filter { $0.prompt.conversation == conversation.id } ?? []
+        let failed = store.state.failedPrompts[card.id]?.filter { $0.prompt.conversation == conversation.id } ?? []
+        let delivered = Set(ConversationOutbox.delivered(failed.map(\.prompt), in: messages))
+        return failed.filter { !delivered.contains($0.id) }
     }
 
     private var isWorking: Bool {
@@ -277,6 +290,10 @@ struct ConversationChatView: View {
     }
 
     var body: some View {
+        // Read here, in the view's own body, so a change to either redraws
+        // it: a send that fails or is confirmed changes only the store.
+        let pending = self.pending
+        let failed = self.failed
         VStack(spacing: 0) {
             header
             Divider()
@@ -312,11 +329,7 @@ struct ConversationChatView: View {
                                 Spacer(minLength: 0)
                                 FailedPromptBubble(
                                     failed: failed,
-                                    onRetry: {
-                                        store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
-                                        ConversationActions.send(cardId: card.id, conversationId: conversation.id,
-                                                                 text: failed.prompt.body, imagePaths: failed.prompt.imagePaths ?? [])
-                                    },
+                                    onRetry: { ConversationActions.retry(cardId: card.id, failed) },
                                     onEdit: {
                                         store.dispatch(.dismissFailedPrompt(cardId: card.id, promptId: failed.id))
                                         drafts.set(.init(text: failed.prompt.body,
@@ -374,8 +387,9 @@ struct ConversationChatView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: "\(card.id)/\(conversation.id)/\(conversation.updatedAt.timeIntervalSince1970)/\(conversation.messageCount)") {
             messages = ConversationActions.messages(cardId: card.id, conversationId: conversation.id)
-            let sent = store.state.conversationOutbox[card.id]?.filter { $0.conversation == conversation.id } ?? []
-            let delivered = sent.filter { prompt in messages.contains { ConversationOutbox.delivers($0, prompt) } }.map(\.id)
+            let sent = ((store.state.conversationOutbox[card.id] ?? []) + (store.state.failedPrompts[card.id] ?? []).map(\.prompt))
+                .filter { $0.conversation == conversation.id }
+            let delivered = ConversationOutbox.delivered(sent, in: messages)
             if !delivered.isEmpty {
                 store.dispatch(.conversationMessagesDelivered(cardId: card.id, promptIds: delivered))
             }

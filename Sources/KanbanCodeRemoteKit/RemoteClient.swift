@@ -196,11 +196,14 @@ public struct RemoteClient: Sendable {
 
     /// `human` marks a prompt the human typed and sent himself.
     /// `conversation` names the conversation of the card it belongs to.
+    /// `id` is the sender's id for it: sending the same id again after a
+    /// lost answer does not send it twice (`RemotePromptRequest.id`).
     public func sendPrompt(cardId: String, text: String, mode: RemotePromptRequest.Mode = .queue,
-                           images: [RemoteImage] = [], human: Bool = false, conversation: String? = nil) async throws {
+                           images: [RemoteImage] = [], human: Bool = false, conversation: String? = nil,
+                           id: String? = nil) async throws {
         var request = makeRequest("POST", "v1/cards/\(Self.escape(cardId))/prompt",
                                   body: RemotePromptRequest(text: text, mode: mode, images: images.isEmpty ? nil : images,
-                                                            human: human ? true : nil, conversation: conversation))
+                                                            human: human ? true : nil, conversation: conversation, id: id))
         if !images.isEmpty { request.timeoutInterval = 120 }
         try await sendEmpty(request)
     }

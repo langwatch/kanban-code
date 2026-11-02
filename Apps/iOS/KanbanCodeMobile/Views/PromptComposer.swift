@@ -29,7 +29,8 @@ struct PromptComposer<Extra: View>: View {
     /// Text with images always goes to the session.
     var intercept: ((String) -> Bool)? = nil
     /// The master took the prompt: its text and its images as attached.
-    var onSent: (String, [Data]) -> Void
+    /// The text and images sent, and the id they went under.
+    var onSent: (String, [Data], String) -> Void
     /// More buttons after + and the stash.
     @ViewBuilder var extra: () -> Extra
 
@@ -478,13 +479,14 @@ struct PromptComposer<Extra: View>: View {
         guard !text.isEmpty || !images.isEmpty, draft.filesReady, let client = board.client, !isSending else { return }
         isSending = true
         sendError = nil
+        let id = draft.sendId(for: text, images: attached)
         Task {
             defer { isSending = false }
             do {
                 try await client.sendPrompt(cardId: card.id, text: text, mode: mode, images: images, human: true,
-                                            conversation: conversation)
+                                            conversation: conversation, id: id)
                 draft.clear()
-                onSent(text, attached)
+                onSent(text, attached, id)
             } catch {
                 sendError = error.localizedDescription
                 UINotificationFeedbackGenerator().notificationOccurred(.error)

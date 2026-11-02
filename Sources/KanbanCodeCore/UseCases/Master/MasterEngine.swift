@@ -38,6 +38,8 @@ public final class MasterEngine {
     var releasedCards: [String: Link] = [:]
     /// Prompts added on a card another master owns and already sent there.
     var forwardedPromptIds: Set<String> = []
+    /// Conversation messages whose send to the card's owner is running.
+    var conversationSends: Set<String> = []
 
     /// Card sync with the other masters; nil when there are none.
     public var peerSync: PeerSync?

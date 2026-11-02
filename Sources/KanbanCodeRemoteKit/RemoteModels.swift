@@ -577,13 +577,31 @@ public struct RemotePromptRequest: Codable, Sendable, Equatable {
     /// The conversation of the card the prompt belongs to; the master that
     /// owns the card adds its header (docs/conversations.md).
     public var conversation: String?
+    /// The sender's id for this message. The owner logs a conversation
+    /// message under it and takes a second prompt with the same id as
+    /// already sent, so a retry after a lost answer is not sent twice.
+    /// Masters from before it ignore it.
+    public var id: String?
 
-    public init(text: String, mode: Mode? = nil, images: [RemoteImage]? = nil, human: Bool? = nil, conversation: String? = nil) {
+    /// The longest `id` an owner takes; a longer one is dropped.
+    public static let maxIdLength = 128
+
+    public init(text: String, mode: Mode? = nil, images: [RemoteImage]? = nil, human: Bool? = nil, conversation: String? = nil,
+                id: String? = nil) {
         self.text = text
         self.mode = mode
         self.images = images
         self.human = human
         self.conversation = conversation
+        self.id = id
+    }
+
+    /// `id` when it is one an owner can log: not empty, not too long, no
+    /// whitespace.
+    public var usableId: String? {
+        guard let id, !id.isEmpty, id.count <= Self.maxIdLength,
+              !id.contains(where: { $0.isWhitespace || $0.isNewline }) else { return nil }
+        return id
     }
 }
 

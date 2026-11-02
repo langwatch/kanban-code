@@ -31,6 +31,10 @@ final class ComposerDraft {
     /// Files attached, in the order picked.
     private(set) var files: [DraftFile]
     @ObservationIgnored private var uploads: [UUID: Task<Void, Never>] = [:]
+    /// The message last sent from here that got no answer, and the id it
+    /// went under: sending it again reuses the id, so the master does not
+    /// take it twice when the first send landed after all.
+    @ObservationIgnored private var unansweredSend: (key: String, id: String)?
 
     struct Stash: Codable, Identifiable, Equatable {
         let id: UUID
@@ -269,7 +273,18 @@ final class ComposerDraft {
         settling = false
     }
 
+    /// The id to send `text` with these images under: the unanswered
+    /// send's when it is the same message, else a new one.
+    func sendId(for text: String, images: [Data]) -> String {
+        let key = text + "\u{0}" + images.map { "\($0.count):\($0.hashValue)" }.joined(separator: ",")
+        if let unansweredSend, unansweredSend.key == key { return unansweredSend.id }
+        let id = "phone_" + UUID().uuidString.lowercased()
+        unansweredSend = (key, id)
+        return id
+    }
+
     func clear() {
+        unansweredSend = nil
         replace(text: "", images: [])
         for task in uploads.values { task.cancel() }
         uploads = [:]

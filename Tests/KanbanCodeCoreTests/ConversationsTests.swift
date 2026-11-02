@@ -508,6 +508,131 @@ struct ConversationHostTests {
         #expect(RemotePromptImages.mimeType(of: Data([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg")
     }
 
+    @Test("a prompt sent again under the same id after a lost answer is logged and sent once")
+    func senderIdDedups() async throws {
+        let (host, engine, store, tmux, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let created = try await host.createConversation(cardId: "card_a", RemoteConversationCreate())
+        let request = RemotePromptRequest(text: "ship it", human: true, conversation: created.id, id: "prompt_mac_1")
+
+        try await host.sendPrompt(cardId: "card_a", request, images: [])
+        await waitFor { !tmux.sent.isEmpty }
+        await waitFor { store.state.conversations["card_a"]?.first?.messageCount == 1 }
+        let logged = try #require(engine.conversationStore.threads(cardId: "card_a").first?.messages.first)
+        #expect(logged.id == "prompt_mac_1")
+
+        // The retry: the log has it, so it is not sent again.
+        try await host.sendPrompt(cardId: "card_a", request, images: [])
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(tmux.sent.count == 1)
+        #expect(engine.conversationStore.threads(cardId: "card_a").first?.messages.count == 1)
+
+        // Another id is another message.
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "ship it", human: true, conversation: created.id,
+                                                                       id: "prompt_mac_2"), images: [])
+        await waitFor { tmux.sent.count == 2 }
+        #expect(tmux.sent.count == 2)
+    }
+
+    @Test("a Main prompt sent again under the same id is sent once; an id the owner cannot log is ignored")
+    func senderIdDedupsMain() async throws {
+        let (host, _, _, tmux, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "go", id: "phone_1"), images: [])
+        try await host.sendPrompt(cardId: "card_a", RemotePromptRequest(text: "go", id: "phone_1"), images: [])
+        await waitFor { !tmux.sent.isEmpty }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(tmux.sent == ["go"])
+        #expect(RemotePromptRequest(text: "x", id: "has space").usableId == nil)
+        #expect(RemotePromptRequest(text: "x", id: String(repeating: "a", count: 200)).usableId == nil)
+        #expect(RemotePromptRequest(text: "x", id: "").usableId == nil)
+        #expect(RemotePromptRequest(text: "x", id: "prompt_3LYd").usableId == "prompt_3LYd")
+    }
+
+    @Test("a request from a sender without ids still decodes; one with an id round-trips")
+    func senderIdWire() throws {
+        let old = try JSONDecoder.remote.decode(RemotePromptRequest.self, from: Data(#"{"text":"hi","conversation":"swift-otter"}"#.utf8))
+        #expect(old.id == nil)
+        let sent = RemotePromptRequest(text: "hi", conversation: "swift-otter", id: "prompt_1")
+        let back = try JSONDecoder.remote.decode(RemotePromptRequest.self, from: JSONEncoder.remote.encode(sent))
+        #expect(back.id == "prompt_1")
+    }
+
+    @Test("a failed send whose message the log shows after reconnecting leaves the failed list and the outbox")
+    func failedSendThatLanded() async throws {
+        let (_, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let conv = try await engine.createConversation(cardId: "card_a", RemoteConversationCreate(), by: "human")
+        let prompt = QueuedPrompt(body: "Content\n4:24 PM\nwhy is it struggling?", sendAutomatically: true,
+                                  humanWrittenAt: .now, conversation: conv.id)
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: prompt))
+        store.dispatch(.promptSendFailed(cardId: "card_a", prompt: prompt, message: "The request timed out."))
+        #expect(store.state.failedPrompts["card_a"]?.map(\.id) == [prompt.id])
+
+        // The owner took it after all: its log has it under the prompt's id.
+        try engine.conversationStore.append(cardId: "card_a", [
+            .message(conv.id, id: prompt.id, role: .human, text: prompt.body)
+        ])
+        engine.reloadConversations(cardId: "card_a")
+        #expect(store.state.failedPrompts["card_a"] == nil)
+        #expect(store.state.conversationOutbox["card_a"] == nil)
+    }
+
+    @Test("Retry sends the failed message under its own id and takes it off the failed list")
+    func retryKeepsId() {
+        let (_, _, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let prompt = QueuedPrompt(body: "hello", sendAutomatically: true, humanWrittenAt: .now, conversation: "swift-otter")
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: prompt))
+        store.dispatch(.promptSendFailed(cardId: "card_a", prompt: prompt, message: "offline"))
+        #expect(store.state.conversationSentAt[prompt.id] == nil)
+
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: prompt))
+        #expect(store.state.failedPrompts["card_a"] == nil)
+        #expect(store.state.conversationOutbox["card_a"]?.map(\.id) == [prompt.id])
+        #expect(store.state.conversationSentAt[prompt.id] != nil)
+    }
+
+    @Test("a sent message the log never shows turns failed with Retry instead of spinning forever")
+    func unconfirmedTurnsFailed() async throws {
+        let (_, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let prompt = QueuedPrompt(body: "hello", sendAutomatically: true, humanWrittenAt: .now, conversation: "swift-otter")
+        store.dispatch(.conversationMessageSent(cardId: "card_a", prompt: prompt))
+
+        engine.failUnconfirmedMessages(now: .now.addingTimeInterval(10))
+        #expect(store.state.conversationOutbox["card_a"]?.count == 1)
+
+        engine.failUnconfirmedMessages(now: .now.addingTimeInterval(ConversationOutbox.unconfirmedAfter + 1))
+        #expect(store.state.conversationOutbox["card_a"] == nil)
+        #expect(store.state.failedPrompts["card_a"]?.map(\.id) == [prompt.id])
+    }
+
+    @Test("the unconfirmed clock runs from the last send's end and stops while a send runs")
+    func unconfirmedClock() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = QueuedPrompt(id: "p_old", body: "a", humanWrittenAt: now.addingTimeInterval(-600), conversation: "c")
+        let resent = QueuedPrompt(id: "p_resent", body: "b", humanWrittenAt: now.addingTimeInterval(-600), conversation: "c")
+        let running = QueuedPrompt(id: "p_running", body: "c", humanWrittenAt: now.addingTimeInterval(-600), conversation: "c")
+        let fresh = QueuedPrompt(id: "p_fresh", body: "d", humanWrittenAt: now.addingTimeInterval(-5), conversation: "c")
+        let stale = ConversationOutbox.unconfirmed([old, resent, running, fresh], sending: ["p_running"],
+                                                   sentAt: ["p_resent": now.addingTimeInterval(-10)], now: now)
+        #expect(stale.map(\.id) == ["p_old"])
+    }
+
+    @Test("a message is matched by the id it was sent under, else by text for a master that logs its own ids")
+    func deliveredById() {
+        let written = Date(timeIntervalSince1970: 1_800_000_000)
+        let byId = QueuedPrompt(id: "prompt_1", body: "edited on the way", humanWrittenAt: written, conversation: "c")
+        let byText = QueuedPrompt(id: "prompt_2", body: "ship it", humanWrittenAt: written, conversation: "c")
+        let waiting = QueuedPrompt(id: "prompt_3", body: "not yet", humanWrittenAt: written, conversation: "c")
+        let messages: [RemoteConversationMessage] = [
+            .init(id: "prompt_1", role: .human, text: "something else", at: written),
+            .init(id: "msg_owner", role: .human, text: "ship it", at: written.addingTimeInterval(1)),
+        ]
+        #expect(ConversationOutbox.delivered([byId, byText, waiting], in: messages) == ["prompt_1", "prompt_2"])
+    }
+
     @Test("start a conversation, send in it, the agent replies through the log, the human reads it")
     func roundTrip() async throws {
         let (host, engine, store, tmux, dir) = makeHost()

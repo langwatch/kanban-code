@@ -132,6 +132,10 @@ public final class AppState: @unchecked Sendable {
     /// Conversation messages sent from this app that the conversation's
     /// log does not show yet, per card: the view shows them faded.
     public var conversationOutbox: [String: [QueuedPrompt]] = [:]
+    /// When the last send of each outbox message started or ended, by
+    /// prompt id: the log has `ConversationOutbox.unconfirmedAfter` from
+    /// then to show it.
+    public var conversationSentAt: [String: Date] = [:]
 
     /// The sidebar highlights a card's row only while its Main chat shows;
     /// with one of its conversations open, only that conversation's row is.
@@ -805,6 +809,8 @@ public enum Action: Sendable {
     case conversationMessageSent(cardId: String, prompt: QueuedPrompt)
     /// The log shows these outbox messages now.
     case conversationMessagesDelivered(cardId: String, promptIds: [String])
+    /// The owner answered a conversation message's send: its log has it.
+    case conversationMessageSendEnded(cardId: String, promptId: String)
     /// The chat let go of a failed prompt: sent again, edited or discarded.
     case dismissFailedPrompt(cardId: String, promptId: String)
     /// Same banner as `setError`, but says what kind of news it is.
@@ -3022,12 +3028,31 @@ public enum Reducer {
             outbox.removeAll { $0.id == prompt.id }
             outbox.append(prompt)
             state.conversationOutbox[cardId] = outbox
+            state.conversationSentAt[prompt.id] = .now
+            // A retry goes out under the failed message's id.
+            if var failed = state.failedPrompts[cardId], failed.contains(where: { $0.id == prompt.id }) {
+                failed.removeAll { $0.id == prompt.id }
+                state.failedPrompts[cardId] = failed.isEmpty ? nil : failed
+            }
+            return []
+
+        case .conversationMessageSendEnded(let cardId, let promptId):
+            if state.conversationOutbox[cardId]?.contains(where: { $0.id == promptId }) == true {
+                state.conversationSentAt[promptId] = .now
+            }
             return []
 
         case .conversationMessagesDelivered(let cardId, let promptIds):
-            guard var outbox = state.conversationOutbox[cardId] else { return [] }
-            outbox.removeAll { promptIds.contains($0.id) }
-            state.conversationOutbox[cardId] = outbox.isEmpty ? nil : outbox
+            // Failed ones too: a send whose answer was lost landed after all.
+            if var outbox = state.conversationOutbox[cardId], outbox.contains(where: { promptIds.contains($0.id) }) {
+                outbox.removeAll { promptIds.contains($0.id) }
+                state.conversationOutbox[cardId] = outbox.isEmpty ? nil : outbox
+            }
+            if var failed = state.failedPrompts[cardId], failed.contains(where: { promptIds.contains($0.id) }) {
+                failed.removeAll { promptIds.contains($0.id) }
+                state.failedPrompts[cardId] = failed.isEmpty ? nil : failed
+            }
+            for id in promptIds where state.conversationSentAt[id] != nil { state.conversationSentAt[id] = nil }
             return []
 
         case .promptSendFailed(let cardId, let prompt, let message):
@@ -3035,6 +3060,7 @@ public enum Reducer {
                 outbox.removeAll { $0.id == prompt.id }
                 state.conversationOutbox[cardId] = outbox.isEmpty ? nil : outbox
             }
+            if state.conversationSentAt[prompt.id] != nil { state.conversationSentAt[prompt.id] = nil }
             var failed = state.failedPrompts[cardId] ?? []
             failed.removeAll { $0.id == prompt.id }
             failed.append(FailedPrompt(prompt: prompt, message: message))
