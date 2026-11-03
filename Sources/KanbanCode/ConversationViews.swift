@@ -216,6 +216,9 @@ struct ConversationChatView: View {
     /// The transcript line of each human message whose images this machine
     /// cannot read from their paths.
     @State private var imageLines: [String: Int] = [:]
+    /// Messages already looked up in the transcript, found or not, so a
+    /// redraw never searches the transcript for them again.
+    @State private var imageLookups: Set<String> = []
 
     private var store: BoardStore { AppComposition.shared.store }
     private var drafts: ConversationDrafts { ConversationDrafts.shared }
@@ -261,16 +264,24 @@ struct ConversationChatView: View {
     /// Finds those messages' prompts in the transcript, so their images load
     /// from there as Main's do.
     private func locateImages() async {
-        let wanted = unreadableImageMessageIds.filter { imageLines[$0] == nil }
-        guard !wanted.isEmpty, let path = transcriptPath,
-              let turns = try? await TranscriptReader.readTurns(from: path) else { return }
-        var found = imageLines
-        for message in messages where wanted.contains(message.id) {
-            if let turn = ConversationTranscriptImages.turn(for: message.text, conversationId: conversation.id, in: turns) {
-                found[message.id] = turn.lineNumber
-            }
+        let wanted = unreadableImageMessageIds.filter { imageLines[$0] == nil && !imageLookups.contains($0) }
+        guard !wanted.isEmpty, let path = transcriptPath else { return }
+        let wantedSet = Set(wanted)
+        let lookups = messages.filter { wantedSet.contains($0.id) }.map { (id: $0.id, text: $0.text) }
+        let conversationId = conversation.id
+        // Detached and cancellable: a transcript can be gigabytes, and the
+        // task restarts whenever the wanted ids change.
+        let reader = Task.detached(priority: .utility) {
+            try? ConversationTranscriptImages.lines(for: lookups, conversationId: conversationId, inTranscriptAt: path)
         }
-        imageLines = found
+        let found = await withTaskCancellationHandler {
+            await reader.value
+        } onCancel: {
+            reader.cancel()
+        }
+        guard !Task.isCancelled, let found else { return }
+        imageLookups.formUnion(wanted)
+        imageLines.merge(found) { _, new in new }
     }
 
     /// Prompts of this card still in its queue: the session has not taken them.

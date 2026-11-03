@@ -279,12 +279,68 @@ public enum TranscriptReader {
         }
     }
 
+    /// Whether `bytes` holds `needle` anywhere.
+    private static func contains(_ bytes: ArraySlice<UInt8>, _ needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty else { return true }
+        guard bytes.count >= needle.count else { return false }
+        return bytes.withUnsafeBytes { haystack in
+            needle.withUnsafeBytes { wanted in
+                memmem(haystack.baseAddress, haystack.count, wanted.baseAddress, wanted.count) != nil
+            }
+        }
+    }
+
+    /// Turns whose transcript line holds every one of `markers`, and that
+    /// `keep` accepts, oldest first.
+    ///
+    /// For finding a few known prompts in a transcript of any size: the file
+    /// is walked as bytes and only lines holding the first marker are decoded
+    /// and parsed, so the cost is one pass over the bytes and one chunk of
+    /// memory, never the whole history as turns. A cancelled task stops the
+    /// walk and gets what was found so far.
+    public static func readTurns(
+        from filePath: String, linesContaining markers: [String],
+        keep: (ConversationTurn) -> Bool = { _ in true }
+    ) throws -> [ConversationTurn] {
+        guard let first = markers.first else { return [] }
+        let rest = markers.dropFirst().map { Array($0.utf8) }
+        var newestFirst: [ConversationTurn] = []
+        try scanRecordsBackwards(filePath: filePath, marker: Array(first.utf8)) { offset, line in
+            if Task.isCancelled { return true }
+            let bytes = Array(line.utf8)
+            guard rest.allSatisfy({ contains(bytes[...], $0) }) else { return false }
+            // A matching line can carry megabytes of image data: drain the
+            // parser's objects per line, not at the end of the walk.
+            let turn = autoreleasepool { () -> ConversationTurn? in
+                guard let obj = candidateRecord(from: line),
+                    let turn = buildTurn(from: obj, index: 0, byteOffset: offset),
+                    keep(turn)
+                else { return nil }
+                return turn
+            }
+            if let turn { newestFirst.append(turn) }
+            return false
+        }
+        return newestFirst.reversed().enumerated().map { i, turn in
+            ConversationTurn(
+                index: i, lineNumber: turn.lineNumber, role: turn.role,
+                textPreview: turn.textPreview, timestamp: turn.timestamp,
+                contentBlocks: turn.contentBlocks, imageCount: turn.imageCount,
+                modelName: turn.modelName, endLineNumber: turn.endLineNumber,
+                isQueued: turn.isQueued)
+        }
+    }
+
     /// Walk a file's lines newest first, in chunks, carrying the byte offset
     /// each line starts at. The handler returns true to stop. `endOffset`
-    /// bounds the scan: only lines starting before it are visited.
+    /// bounds the scan: only lines starting before it are visited. With
+    /// `marker`, only lines holding those bytes are decoded and handed over;
+    /// a chunk without the marker is skipped as bytes, without a string or
+    /// a parse per line.
     static func scanRecordsBackwards(
         filePath: String,
         from endOffset: Int? = nil,
+        marker: [UInt8]? = nil,
         handler: (_ byteOffset: Int, _ line: String) -> Bool
     ) throws {
         guard FileManager.default.fileExists(atPath: filePath) else { return }
@@ -310,6 +366,20 @@ public enum TranscriptReader {
             let chunkCount = bytes.count
             bytes.append(contentsOf: carry)
 
+            if let marker, !contains(bytes[...], marker) {
+                // No line ending in this stretch holds the marker. Only the
+                // part before the first newline can still belong to a line
+                // that does, through bytes in an earlier chunk.
+                guard start > 0 else { return }
+                if let firstNewline = bytes[0..<chunkCount].firstIndex(of: newline) {
+                    carry = Array(bytes[0..<firstNewline])
+                } else {
+                    carry = bytes
+                }
+                end = start
+                continue
+            }
+
             var starts: [Int] = []
             for i in 0..<chunkCount where bytes[i] == newline { starts.append(i + 1) }
 
@@ -325,6 +395,7 @@ public enum TranscriptReader {
             for (k, lineStart) in starts.enumerated().reversed() {
                 let lineEnd = k + 1 < starts.count ? starts[k + 1] - 1 : bytes.count
                 guard lineEnd > lineStart,
+                    marker.map({ contains(bytes[lineStart..<lineEnd], $0) }) ?? true,
                     let line = String(bytes: bytes[lineStart..<lineEnd], encoding: .utf8)
                 else { continue }
                 if handler(start + lineStart, line) { return }
@@ -332,7 +403,8 @@ public enum TranscriptReader {
 
             if start == 0 {
                 let lineEnd = starts.first.map { $0 - 1 } ?? bytes.count
-                if lineEnd > 0, let line = String(bytes: bytes[0..<lineEnd], encoding: .utf8),
+                if lineEnd > 0, marker.map({ contains(bytes[0..<lineEnd], $0) }) ?? true,
+                    let line = String(bytes: bytes[0..<lineEnd], encoding: .utf8),
                     handler(0, line) {
                     return
                 }

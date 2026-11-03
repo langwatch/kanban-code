@@ -125,6 +125,44 @@ struct ConversationLogTests {
         #expect(try await TranscriptReader.loadImagesAtOffset(from: path, byteOffset: line) == [png])
     }
 
+    @Test("a conversation message's image line is found in a large transcript by its marker alone, across chunk boundaries")
+    func imagesInLargeTranscript() throws {
+        let dir = NSTemporaryDirectory() + "kc-transcript-marker-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 9, 9]).base64EncodedString()
+        func prompt(_ text: String, id: String, uuid: String, padding: Int = 0) -> String {
+            let body = ConversationPrompt.wrap(text, id: id, title: "Stop button")
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            let pad = String(repeating: "p", count: padding)
+            return #"{"type":"user","uuid":"\#(uuid)","pad":"\#(pad)","message":{"role":"user","content":[{"type":"text","text":"\#(body)"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(png)"}}]}}"#
+        }
+        let filler = #"{"type":"assistant","uuid":"a","message":{"role":"assistant","content":[{"type":"text","text":"\#(String(repeating: "x", count: 4000))"}]}}"#
+        var lines: [String] = []
+        // An old send of the same text: the latest one wins.
+        lines.append(prompt("isn't it odd? [Image #1]", id: "smart-tiger", uuid: "old"))
+        lines += Array(repeating: filler, count: 400)
+        // A line longer than one read chunk, so it spans several of them.
+        lines.append(prompt("isn't it odd? [Image #1]", id: "smart-tiger", uuid: "new", padding: 3 << 20))
+        lines += Array(repeating: filler, count: 400)
+        lines.append(prompt("isn't it odd? [Image #1]", id: "cosy-koala", uuid: "other"))
+        lines += Array(repeating: filler, count: 400)
+        let path = dir + "/s.jsonl"
+        try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+
+        let newOffset = lines.prefix(401).reduce(0) { $0 + $1.utf8.count + 1 }
+        let turns = try TranscriptReader.readTurns(
+            from: path, linesContaining: [ConversationPrompt.marker(id: "smart-tiger")])
+        #expect(turns.map(\.lineNumber) == [0, newOffset])
+
+        let found = try ConversationTranscriptImages.lines(
+            for: [(id: "m1", text: "isn't it odd? [Image #1]"), (id: "m2", text: "never sent")],
+            conversationId: "smart-tiger", inTranscriptAt: path)
+        #expect(found == ["m1": newOffset])
+    }
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [

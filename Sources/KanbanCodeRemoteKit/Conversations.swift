@@ -386,7 +386,7 @@ public enum ConversationPrompt {
     public static func wrap(_ text: String, id: String, title: String?, quote: String? = nil,
                             quoteRole: RemoteConversationRole? = nil, quoteReply: String? = nil) -> String {
         if parse(text) != nil { return text }
-        var header = "[conversation \(id)"
+        var header = marker(id: id)
         let named = title.map { !$0.isEmpty } ?? false
         if named, let title {
             header += " \"\(title.replacingOccurrences(of: "\"", with: "'"))\""
@@ -408,6 +408,12 @@ public enum ConversationPrompt {
             ? "(reply with: kanban reply \(id) \"<answer>\")"
             : "(reply with: kanban reply \(id) --title \"<3-6 word title>\" \"<answer>\")"
         return "\(header) \(text)\n\(reply)"
+    }
+
+    /// The text every prompt of conversation `id` starts with, and so what
+    /// its transcript line holds verbatim (slugs need no JSON escaping).
+    public static func marker(id: String) -> String {
+        "[conversation \(id)"
     }
 
     private static func excerpt(_ text: String) -> String {
