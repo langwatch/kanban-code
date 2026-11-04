@@ -62,7 +62,8 @@ extension MasterEngine {
             }
             let scope = try await CatchUpScope.read(
                 transcriptPath: transcript, sessionId: sessionId, record: record, rushRecord: rushRecord, queuedTexts: queued)
-            job.prompt = SideChatPrompt.catchUp(humanText: scope.since?.text, index: CatchUpIndex.text(scope.refs))
+            job.prompt = SideChatPrompt.catchUp(
+                humanText: scope.since?.text, index: CatchUpIndex.text(scope.refs), fromStart: scope.coversWholeSession)
             return SideChatPrepared(job: job, since: scope.since, refs: scope.refs)
         }.value
 
@@ -126,10 +127,14 @@ struct SideChatPrepared: Sendable {
 /// What a catch-up covers: the human's last message and the messages of
 /// the session since then.
 public struct CatchUpScope: Sendable, Equatable {
-    /// Nil when the human never wrote in the session (an agent started it):
-    /// the catch-up then covers the whole session.
+    /// Nil when the human never wrote in the session (an agent started it),
+    /// or not within the stretch searched: the catch-up then covers the
+    /// whole session, or its recent end when the session is long.
     public var since: RemoteSideChatSince?
     public var refs: [RemoteSideChatRef]
+    /// Whether the scope runs from the session's first line. False when
+    /// neither his message nor the start was within reach of the end.
+    public var coversWholeSession: Bool = true
 
     public static func read(
         transcriptPath: String,
@@ -137,17 +142,21 @@ public struct CatchUpScope: Sendable, Equatable {
         record: [HumanMessageRecord],
         rushRecord: [RushHumanMessage]?,
         queuedTexts: [String],
-        now: Date = .now
+        now: Date = .now,
+        scanBytes: Int = HumanMessageFinder.scanBytes
     ) async throws -> CatchUpScope {
         let last = HumanMessageFinder.find(
             transcriptPath: transcriptPath, sessionId: sessionId, record: record, rushRecord: rushRecord,
-            queuedTexts: queuedTexts, now: now)
+            queuedTexts: queuedTexts, now: now, scanBytes: scanBytes)
         let size = ((try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.size] as? Int) ?? 0
-        let start = last?.scopeStart ?? 0
+        // Without his message the scope is the stretch the search covered:
+        // the whole session when it is small, its recent end otherwise. A
+        // read starting inside a line skips that partial line.
+        let start = last?.scopeStart ?? max(0, size - scanBytes)
         let range = try await TranscriptReader.readRange(from: transcriptPath, startOffset: start, endOffset: size)
         let refs = CatchUpIndex.build(turns: range.turns, humanOffset: last?.offset)
         let since = last.map { RemoteSideChatSince(text: $0.text, at: $0.at, offset: $0.offset) }
-        return CatchUpScope(since: since, refs: refs)
+        return CatchUpScope(since: since, refs: refs, coversWholeSession: last != nil || start == 0)
     }
 }
 

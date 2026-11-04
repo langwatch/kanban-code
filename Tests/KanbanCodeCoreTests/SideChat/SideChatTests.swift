@@ -45,6 +45,26 @@ struct CatchUpScopeTests {
         #expect(report.preview.hasSuffix("…"))
     }
 
+    @Test func aLongStretchWithoutHisMessageIsCaughtUpFromItsRecentEndOnly() async throws {
+        var t = TranscriptBuilder()
+        t.user("fix the login redirect")                       // 0: beyond the window
+        for i in 0..<40 { t.assistant("step \(i) " + String(repeating: "w", count: 2_000)) }
+        let path = try t.write()
+        let size = try #require(try FileManager.default.attributesOfItem(atPath: path)[.size] as? Int)
+        let window = 10_000
+
+        #expect(HumanMessageFinder.find(transcriptPath: path, scanBytes: window) == nil)
+        let scope = try await CatchUpScope.read(
+            transcriptPath: path, sessionId: nil, record: [], rushRecord: nil, queuedTexts: [], scanBytes: window)
+        #expect(scope.since == nil)
+        #expect(!scope.coversWholeSession)
+        #expect(!scope.refs.isEmpty)
+        #expect(scope.refs.allSatisfy { $0.offset >= size - window })
+        #expect(!scope.refs.contains { $0.preview.contains("login redirect") })
+        let prompt = SideChatPrompt.catchUp(humanText: nil, index: CatchUpIndex.text(scope.refs), fromStart: scope.coversWholeSession)
+        #expect(!prompt.contains("since it started"))
+    }
+
     @Test func aSessionTheHumanNeverWroteInIsCaughtUpFromItsStart() async throws {
         var t = TranscriptBuilder()
         t.user("You are running as subagent card card_9.\nPost the summary")

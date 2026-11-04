@@ -127,8 +127,11 @@ public enum SideChatPrompt {
     /// The catch-up since the human's last message. `index` is
     /// `CatchUpIndex.text` of the messages since then.
     /// `humanText` is nil for a session the human never wrote in.
-    public static func catchUp(humanText: String?, index: String) -> String {
-        let since = humanText.map { "since I sent this message: \"\(quote($0))\"" } ?? "since it started"
+    /// `fromStart` false: the index covers only the session's recent end,
+    /// with no message of his in it.
+    public static func catchUp(humanText: String?, index: String, fromStart: Bool = true) -> String {
+        let since = humanText.map { "since I sent this message: \"\(quote($0))\"" }
+            ?? (fromStart ? "since it started" : "recently (the index covers only the latest part of a long session)")
         return """
         \(preamble)
 

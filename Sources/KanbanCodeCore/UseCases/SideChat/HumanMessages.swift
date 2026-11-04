@@ -137,6 +137,11 @@ public enum HumanMessageFinder {
     /// How far a record's time and the transcript's may differ and still
     /// be the same message.
     static let clockSlack: TimeInterval = 5
+    /// How far back from the end of the transcript his last message is
+    /// looked for. A session can run for weeks without one, and walking a
+    /// gigabyte of it took two minutes: a message further back than this is
+    /// too old to catch up from anyway.
+    public static let scanBytes = 32 << 20
 
     /// - Parameters:
     ///   - record: Kanban's record for the card, oldest first.
@@ -149,7 +154,8 @@ public enum HumanMessageFinder {
         record: [HumanMessageRecord] = [],
         rushRecord: [RushHumanMessage]? = nil,
         queuedTexts: [String] = [],
-        now: Date = .now
+        now: Date = .now,
+        scanBytes: Int = scanBytes
     ) -> LastHumanMessage? {
         let size = ((try? FileManager.default.attributesOfItem(atPath: transcriptPath))?[.size] as? Int) ?? 0
         let record = record.filter { $0.sessionId == nil || sessionId == nil || $0.sessionId == sessionId }
@@ -157,6 +163,7 @@ public enum HumanMessageFinder {
 
         var found: (offset: Int, text: String, at: Date?)?
         try? TranscriptReader.scanRecordsBackwards(filePath: transcriptPath) { offset, line in
+            if size - offset > scanBytes { return true }
             guard line.contains("\"user\""), !line.contains("\"toolUseResult\""),
                   let obj = jsonObject(line),
                   case .typed(let text)? = CardPromptReader.entry(record: obj) else { return false }
