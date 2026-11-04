@@ -4,6 +4,25 @@ import Foundation
 
 @Suite("CardReconciler")
 struct CardReconcilerTests {
+    @Test("a card another master runs keeps its owner's worktree and session path, whatever the local copy of its session says")
+    func foreignCardKeepsOwnerFields() {
+        let owned = WorktreeLink(path: "/root/repo/.claude/worktrees/swift-willow", branch: "feat/red-teaming")
+        let card = Link(
+            id: "card_box", projectPath: "/root/repo", column: .inReview, source: .manual,
+            sessionLink: SessionLink(sessionId: "s1", sessionPath: "/root/.claude/projects/r/s1.jsonl"),
+            worktreeLink: owned, ownerMachine: "BOX")
+        // This machine has its own copy of the session, filed under another folder.
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [Session(id: "s1", projectPath: "/Users/me/repo/.claude/worktrees/keen-falcon",
+                               messageCount: 5, modifiedTime: .now, jsonlPath: "/Users/me/.claude/projects/r/s1.jsonl")],
+            localMachineId: "MAC")
+
+        let result = CardReconciler.reconcile(existing: [card], snapshot: snapshot)
+        #expect(result.map(\.id) == ["card_box"])
+        #expect(result[0].worktreeLink == owned)
+        #expect(result[0].sessionLink?.sessionPath == "/root/.claude/projects/r/s1.jsonl")
+    }
+
 
     // MARK: - Session matching
 

@@ -123,6 +123,15 @@ public enum CardReconciler {
                     matchedSessionIds.insert(session.id)
                     continue
                 }
+                // A card another master runs takes its session, worktree and
+                // paths from that master. A copy of its session here sits in
+                // this machine's folders: writing those over the owner's
+                // values would be undone by the next sync and redone by the
+                // next pass, forever.
+                if let local = snapshot.localMachineId, let owner = link.ownerMachine, owner != local {
+                    matchedSessionIds.insert(session.id)
+                    continue
+                }
                 // Update existing card with session data
                 if link.sessionLink == nil {
                     KanbanCodeLog.info("reconciler", "Linking session \(session.id.prefix(8)) to existing card \(cardId.prefix(12))")
