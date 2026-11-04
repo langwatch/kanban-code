@@ -136,6 +136,7 @@ public final class PeerTranscriptMirror {
             isBusy: card.isBusy,
             queue: card.queuedPrompts.map { QueuedPrompt(id: $0.id, body: $0.text, sendAutomatically: true) },
             status: card.sessionStatus,
-            conversations: card.conversations)
+            conversations: card.conversations,
+            usageLimit: card.usageLimit)
     }
 }

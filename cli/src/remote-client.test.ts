@@ -14,6 +14,8 @@ import {
   remoteClientConfigPath,
   readImages,
   REMOTE_IMAGE_MAX_COUNT,
+  cardState,
+  queuedNote,
   type RemoteCard,
   type RemoteIO,
   type RemoteMessage,
@@ -649,6 +651,18 @@ describe("helpers", () => {
     assert.equal(parseColumn("In Progress"), "in_progress");
     assert.equal(parseColumn("waiting"), "requires_attention");
     assert.equal(parseColumn("requires_attention"), "requires_attention");
+  });
+
+  test("a card whose agent waits out a usage limit reads as limited, and send says so", () => {
+    const now = new Date("2026-11-04T18:00:00Z");
+    const limited = card({ id: "c1", title: "laze", isLive: true, isBusy: true,
+      usageLimit: { window: "seven_day", resetsAt: "2026-11-07T07:00:00Z" } });
+    assert.equal(cardState(limited, now), "limited");
+    assert.match(queuedNote(limited, now), /paused on its usage limit until/);
+
+    const lifted = { ...limited, usageLimit: { window: "seven_day", resetsAt: "2026-11-04T17:00:00Z" } };
+    assert.equal(cardState(lifted, now), "busy");
+    assert.equal(queuedNote(lifted, now), ", delivered when the turn ends");
   });
 
   test("normalizeUrl adds a scheme and trims slashes", () => {

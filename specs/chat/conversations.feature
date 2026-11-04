@@ -103,6 +103,18 @@ Feature: Conversations inside one card
     Then a new conversation opens with my message quoted as "Continued from your message", and the agent's reply below it if there is one
     And my first message in it tells the agent it continues the user's message, and its reply when there is one
 
+  # ── Usage limits ────────────────────────────────────────────────────
+
+  Scenario: A conversation says when the card's agent is paused on its usage limit
+    Given the card's agent runs on a rush host that stopped on its plan's weekly usage limit until Saturday 08:00
+    When I open one of the card's conversations on the Mac or the phone
+    Then where "Working" would show, it reads "Paused: Claude weekly usage limit reached, resets Sat 08:00" in my local time
+    And it keeps reading that while the messages I send wait for the limit to lift
+    And the card shows a "Usage limit" badge on the board, and the phone's status dot reads the same line
+    And `kanban remote cards` lists the card as limited
+    When the reset time passes or the host runs a turn again
+    Then the line and the badge go away
+
   # ── Devices and masters ─────────────────────────────────────────────
 
   Scenario: Every device sees the same conversations

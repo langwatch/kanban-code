@@ -76,7 +76,8 @@ public enum RemoteBoardMapper {
             machineId: owner,
             machineName: owner.flatMap { $0 == machine?.id ? machine?.name : machineNames[$0] },
             sessionStatus: card.sessionStatus.remote(for: link),
-            conversations: conversations.filter { !$0.archived }
+            conversations: conversations.filter { !$0.archived },
+            usageLimit: card.activeUsageLimit()
         )
     }
 

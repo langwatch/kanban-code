@@ -258,6 +258,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     public var sessionStatus: RemoteSessionStatus?
     /// The card's conversations that are not archived, most recent first.
     public var conversations: [RemoteConversation]
+    /// Its assistant stopped on a usage limit that still holds.
+    public var usageLimit: RemoteUsageLimit?
 
     public init(
         id: String, title: String, column: RemoteColumn, projectPath: String? = nil, projectName: String? = nil,
@@ -266,7 +268,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         prs: [RemotePR] = [], queuedPromptCount: Int = 0, queuedPrompts: [RemoteQueuedPrompt] = [],
         parentCardId: String? = nil, archived: Bool = false, pinned: Bool = false,
         lastActivity: Date? = nil, updatedAt: Date, machineId: String? = nil, machineName: String? = nil,
-        sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = []
+        sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = [],
+        usageLimit: RemoteUsageLimit? = nil
     ) {
         self.id = id
         self.title = title
@@ -293,6 +296,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.machineName = machineName
         self.sessionStatus = sessionStatus
         self.conversations = conversations
+        self.usageLimit = usageLimit
     }
 }
 
@@ -322,6 +326,74 @@ public struct RemoteSessionStatus: Codable, Sendable, Equatable {
     }
 }
 
+/// The card's assistant stopped on its plan's usage limit, as rush reports
+/// it: messages sent now wait until `resetsAt`.
+public struct RemoteUsageLimit: Codable, Sendable, Equatable {
+    /// The limit's window as rush names it: `five_hour`, `seven_day`, ...
+    public var window: String
+    /// When the limit lifts; nil when rush does not say.
+    public var resetsAt: Date?
+
+    public init(window: String, resetsAt: Date? = nil) {
+        self.window = window
+        self.resetsAt = resetsAt
+    }
+
+    /// The limit still holds at `now`.
+    public func isActive(at now: Date = Date()) -> Bool {
+        resetsAt.map { $0 > now } ?? true
+    }
+
+    /// The limit in words: "weekly", "5-hour", or nil for a window this
+    /// build does not know.
+    public var windowName: String? {
+        switch window {
+        case "five_hour": "5-hour"
+        case "seven_day", "seven_day_opus", "seven_day_sonnet": "weekly"
+        default: nil
+        }
+    }
+
+    /// The line a conversation and a card show while the limit holds, e.g.
+    /// "Paused: Claude weekly usage limit reached, resets Sat 08:00".
+    public func pausedLine(assistant: String = "Claude", now: Date = Date(),
+                           timeZone: TimeZone = .current, locale: Locale = .current) -> String {
+        let limit = [assistant, windowName, "usage limit reached"].compactMap { $0 }.joined(separator: " ")
+        guard let resetsAt else { return "Paused: \(limit)" }
+        return "Paused: \(limit), resets \(Self.resetText(resetsAt, now: now, timeZone: timeZone, locale: locale))"
+    }
+
+    /// "14:30" today, "Sat 08:00" within the week, "12 Nov 08:00" after.
+    static func resetText(_ date: Date, now: Date, timeZone: TimeZone, locale: Locale) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        let template: String
+        if calendar.isDate(date, inSameDayAs: now) {
+            template = "jmm"
+        } else if date.timeIntervalSince(now) < 6 * 24 * 3600 {
+            template = "EEEjmm"
+        } else {
+            template = "dMMMjmm"
+        }
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter.string(from: date)
+    }
+}
+
+extension RemoteCard {
+    /// What the card shows while its assistant waits out a usage limit,
+    /// e.g. "Paused: Claude weekly usage limit reached, resets Sat 08:00";
+    /// nil when no limit holds at `now`.
+    public func pausedLine(now: Date = Date(), timeZone: TimeZone = .current, locale: Locale = .current) -> String? {
+        guard let usageLimit, usageLimit.isActive(at: now) else { return nil }
+        let name = assistant.isEmpty ? "Claude" : assistant.prefix(1).uppercased() + assistant.dropFirst()
+        return usageLimit.pausedLine(assistant: name, now: now, timeZone: timeZone, locale: locale)
+    }
+}
+
 /// The JSON of a card leaves out what is false, zero or empty (`isLive`,
 /// `isBusy`, `archived`, `queuedPromptCount`, `queuedPrompts`, `terminals`, `prs`) and nil
 /// optionals; decoding reads a missing key as that default. A board of
@@ -330,7 +402,7 @@ extension RemoteCard {
     private enum CodingKeys: String, CodingKey {
         case id, title, column, projectPath, projectName, branch, worktreePath, assistant, runtime
         case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived, pinned
-        case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations
+        case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations, usageLimit
     }
 
     public init(from decoder: Decoder) throws {
@@ -361,7 +433,8 @@ extension RemoteCard {
             machineName: try c.decodeIfPresent(String.self, forKey: .machineName),
             // A kind this client does not know yet reads as no status.
             sessionStatus: (try? c.decodeIfPresent(RemoteSessionStatus.self, forKey: .sessionStatus)) ?? nil,
-            conversations: (try? c.decodeIfPresent([RemoteConversation].self, forKey: .conversations)) ?? []
+            conversations: (try? c.decodeIfPresent([RemoteConversation].self, forKey: .conversations)) ?? [],
+            usageLimit: (try? c.decodeIfPresent(RemoteUsageLimit.self, forKey: .usageLimit)) ?? nil
         )
     }
 
@@ -392,6 +465,7 @@ extension RemoteCard {
         try c.encodeIfPresent(machineName, forKey: .machineName)
         try c.encodeIfPresent(sessionStatus, forKey: .sessionStatus)
         if !conversations.isEmpty { try c.encode(conversations, forKey: .conversations) }
+        try c.encodeIfPresent(usageLimit, forKey: .usageLimit)
     }
 }
 

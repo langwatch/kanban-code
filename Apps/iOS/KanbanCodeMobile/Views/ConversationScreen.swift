@@ -67,7 +67,9 @@ struct ConversationScreen: View {
                                                 loadImage: { index in try await model.image(messageId: message.id, index: index) })
                             .id(message.id)
                     }
-                    if model.isWorking(cardBusy: card?.isBusy == true) {
+                    if let paused = card?.pausedLine() {
+                        UsageLimitIndicator(text: paused)
+                    } else if model.isWorking(cardBusy: card?.isBusy == true) {
                         WorkingIndicator()
                             .accessibilityIdentifier("conversationWorking")
                     }

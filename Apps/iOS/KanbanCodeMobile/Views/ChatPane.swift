@@ -113,7 +113,9 @@ struct ChatPane: View {
                     )
                     .id("queued-\(prompt.id)")
                 }
-                if card.isBusy {
+                if let paused = card.pausedLine() {
+                    UsageLimitIndicator(text: paused)
+                } else if card.isBusy {
                     WorkingIndicator()
                 }
                 // The last row reaches the end of the content, so scrolling
@@ -597,6 +599,26 @@ struct WorkingIndicator: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// The card's agent stopped on its plan's usage limit; shown in place of
+/// "Working" so a message sent meanwhile does not look like it is being
+/// worked on.
+struct UsageLimitIndicator: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("usageLimitPaused")
     }
 }
 

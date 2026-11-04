@@ -95,6 +95,25 @@ export interface RemoteCard {
   /** The master that owns the card and runs its session. */
   machineId?: string | null;
   machineName?: string | null;
+  /** Its assistant stopped on its plan's usage limit; present while it holds. */
+  usageLimit?: RemoteUsageLimit | null;
+}
+
+/** A plan usage limit a card's assistant stopped on, as rush reports it. */
+export interface RemoteUsageLimit {
+  /** "five_hour", "seven_day", ... */
+  window: string;
+  /** ISO 8601; missing when rush does not say. */
+  resetsAt?: string | null;
+}
+
+/** Whether the card waits out a usage limit at `now`. */
+export function isUsageLimited(card: RemoteCard, now: Date = new Date()): boolean {
+  const limit = card.usageLimit;
+  if (!limit) return false;
+  if (!limit.resetsAt) return true;
+  const resets = Date.parse(limit.resetsAt);
+  return Number.isNaN(resets) || resets > now.getTime();
 }
 
 /** One machine a task can run on (GET /v1/machines). */
@@ -596,10 +615,22 @@ export function filterCards(
 
 // ── Formatting ───────────────────────────────────────────────────────
 
-export function cardState(card: RemoteCard): string {
+export function cardState(card: RemoteCard, now: Date = new Date()): string {
+  if (isUsageLimited(card, now)) return "limited";
   if (card.isBusy) return "busy";
   if (card.isLive) return "idle";
   return "stopped";
+}
+
+/** What `send` adds after "Queued for <card>": when the message gets read. */
+export function queuedNote(card: RemoteCard, now: Date = new Date()): string {
+  if (isUsageLimited(card, now)) {
+    const resets = card.usageLimit?.resetsAt;
+    return resets
+      ? `, but its agent is paused on its usage limit until ${new Date(resets).toLocaleString()}`
+      : ", but its agent is paused on its usage limit";
+  }
+  return card.isBusy ? ", delivered when the turn ends" : "";
 }
 
 export function formatCardLine(card: RemoteCard, idWidth = card.id.length): string {
@@ -1025,7 +1056,7 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
         println(
           opts.now
             ? `Sent to ${card.id} "${card.title}".`
-            : `Queued for ${card.id} "${card.title}"${card.isBusy ? ", delivered when the turn ends" : ""}.`
+            : `Queued for ${card.id} "${card.title}"${queuedNote(card)}.`
         );
       })
     );

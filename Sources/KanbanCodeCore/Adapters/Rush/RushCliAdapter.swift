@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeRemoteKit
 
 /// One rush host as `rush session info|list|start --json` prints it.
 public struct RushSessionInfo: Decodable, Sendable, Equatable {
@@ -25,6 +26,9 @@ public struct RushSessionInfo: Decodable, Sendable, Equatable {
     public var needs: String?
     /// The model the hosted assistant runs, such as `claude-opus-5-5[1m]`.
     public var model: String?
+    /// The plan usage limit the assistant stopped on, as rush last saw it.
+    /// rush keeps it after it lifts: read it with `usageLimit(at:)`.
+    public var limit: RemoteUsageLimit?
 
     public init(id: String, sessionId: String, cwd: String, name: String? = nil, state: String, alive: Bool,
                 queue: [String] = []) {
@@ -38,7 +42,7 @@ public struct RushSessionInfo: Decodable, Sendable, Equatable {
         self.queue = queue
     }
 
-    enum CodingKeys: String, CodingKey { case id, sessionId, cwd, name, state, alive, sleeping, queue, hostPid, claudePid, meta, needs, model }
+    enum CodingKeys: String, CodingKey { case id, sessionId, cwd, name, state, alive, sleeping, queue, hostPid, claudePid, meta, needs, model, limit }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -55,6 +59,14 @@ public struct RushSessionInfo: Decodable, Sendable, Equatable {
         meta = try? c.decodeIfPresent([String: String].self, forKey: .meta)
         needs = try? c.decodeIfPresent(String.self, forKey: .needs)
         model = try? c.decodeIfPresent(String.self, forKey: .model)
+        limit = (try? c.decodeIfPresent(RushLimit.self, forKey: .limit))?.remote
+    }
+
+    /// The usage limit that holds at `now`: none once it lifted or while
+    /// a turn runs again (the account changed or the limit lifted early).
+    public func usageLimit(at now: Date = Date()) -> RemoteUsageLimit? {
+        guard let limit, limit.isActive(at: now), state != "working" else { return nil }
+        return limit
     }
 
     /// The session is open on its card: its host runs, or rush put it to
@@ -66,6 +78,25 @@ public struct RushSessionInfo: Decodable, Sendable, Equatable {
 
     /// Claude is running a turn or waiting on a permission answer.
     public var isBusy: Bool { alive && (state == "working" || state == "blocked" || state == "starting") }
+}
+
+/// `limit` as rush writes it: `{"resetsAt":"2026-11-07T07:00:00Z","window":"seven_day",...}`.
+private struct RushLimit: Decodable {
+    let window: String?
+    let resetsAt: String?
+
+    var remote: RemoteUsageLimit {
+        RemoteUsageLimit(window: window ?? "", resetsAt: resetsAt.flatMap(Self.date))
+    }
+
+    static func date(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = plain.date(from: text) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
+    }
 }
 
 /// What `rush session start` needs to run a card's Claude session.

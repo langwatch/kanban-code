@@ -364,6 +364,26 @@ struct RateLimitBadge: View {
     }
 }
 
+/// The card's agent stopped on its plan's usage limit; `text` says until when.
+struct UsageLimitBadge: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "pause.circle.fill")
+                .font(.app(size: 8))
+            Text("Usage limit")
+                .font(.app(size: 9, weight: .medium))
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.orange.opacity(0.15)))
+        .foregroundStyle(.orange)
+        .help(text)
+        .accessibilityLabel(text)
+    }
+}
+
 // MARK: - Card Badges Row (reused by CardView + SearchCardRow)
 
 /// Displays tmux, PR, rate limit, issue, image, and remote indicators for a card.
@@ -409,6 +429,11 @@ struct CardBadgesRow: View {
                     .font(.app(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
             }
+        }
+
+        // Its agent stopped on the plan's usage limit
+        if let limit = card.activeUsageLimit() {
+            UsageLimitBadge(text: limit.pausedLine(assistant: card.link.effectiveAssistant.displayName))
         }
 
         // Rate limit badge

@@ -26,6 +26,7 @@ struct StatusDot: View {
     private var color: Color {
         if unknown { return .gray.opacity(0.6) }
         if card.sessionStatus?.kind == .failed { return .red }
+        if card.pausedLine() != nil { return .orange }
         if card.isBusy { return .blue }
         if card.isLive { return .green }
         return .gray.opacity(0.6)
@@ -35,6 +36,7 @@ struct StatusDot: View {
         if unknown { return "Machine offline" }
         if card.sessionStatus?.kind == .moving { return "Moving" }
         if card.sessionStatus?.kind == .failed { return "Failed to start" }
+        if let paused = card.pausedLine() { return paused }
         if card.isBusy { return "Working" }
         if card.isLive { return "Live" }
         return "Not running"
@@ -121,6 +123,14 @@ struct CardRow: View {
                     .lineLimit(1)
                     .fixedSize()
                     .foregroundStyle(.secondary)
+            }
+            if card.pausedLine() != nil {
+                Label("Usage limit", systemImage: "pause.circle.fill")
+                    .labelStyle(CompactLabelStyle())
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(.orange)
             }
             if card.queuedPromptCount > 0 {
                 Label("\(card.queuedPromptCount) queued", systemImage: "tray.full")

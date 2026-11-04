@@ -300,6 +300,11 @@ struct ConversationChatView: View {
         card.activityState == .activelyWorking && messages.last?.role != .agent
     }
 
+    /// Why the agent will not answer for now: its plan's usage limit.
+    private var pausedLine: String? {
+        card.activeUsageLimit()?.pausedLine(assistant: card.link.effectiveAssistant.displayName)
+    }
+
     var body: some View {
         // Read here, in the view's own body, so a change to either redraws
         // it: a send that fails or is confirmed changes only the store.
@@ -354,7 +359,10 @@ struct ConversationChatView: View {
                             }
                             .id(failed.id)
                         }
-                        if isWorking {
+                        if let pausedLine {
+                            UsageLimitLine(text: pausedLine)
+                                .id("paused")
+                        } else if isWorking {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.small)
                                 Text("Working, see Main for the details")
@@ -597,5 +605,23 @@ private struct ImageThumbnail: View {
                     .padding(4)
             }
             .help((path as NSString).lastPathComponent)
+    }
+}
+
+/// A card's agent stopped on its plan's usage limit: shown where "Working"
+/// would be, so a message sent meanwhile does not look like it is being
+/// worked on.
+struct UsageLimitLine: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

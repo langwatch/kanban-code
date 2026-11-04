@@ -45,14 +45,17 @@ public struct PeerCardState: Sendable, Equatable {
     public var status: RemoteSessionStatus?
     /// Its conversations as the owner has them, most recent first.
     public var conversations: [RemoteConversation]
+    /// Its assistant stopped on a usage limit, as the owner reports it.
+    public var usageLimit: RemoteUsageLimit?
 
     public init(isLive: Bool, isBusy: Bool, queue: [QueuedPrompt] = [], status: RemoteSessionStatus? = nil,
-                conversations: [RemoteConversation] = []) {
+                conversations: [RemoteConversation] = [], usageLimit: RemoteUsageLimit? = nil) {
         self.isLive = isLive
         self.isBusy = isBusy
         self.queue = queue
         self.status = status
         self.conversations = conversations
+        self.usageLimit = usageLimit
     }
 }
 
@@ -117,6 +120,9 @@ public final class AppState: @unchecked Sendable {
     public var rushQueues: [String: [String]] = [:]
     /// What each blocked rush host waits on, by session name.
     public var rushNeeds: [String: String] = [:]
+    /// The usage limit each rush host's assistant stopped on, by session
+    /// name, while it holds.
+    public var rushLimits: [String: RemoteUsageLimit] = [:] { didSet { cardInputsVersion &+= 1 } }
     /// What each card's chat composer offers after `/`, as last read from
     /// the master that owns the card.
     public var slashCommands: [String: [RemoteSlashCommand]] = [:]
@@ -500,6 +506,9 @@ public final class AppState: @unchecked Sendable {
                 activity = .idleWaiting
             }
             let rateLimited = link.projectPath.map { rateLimitedRepos.contains($0) } ?? false
+            let usageLimit = owner != nil
+                ? peerCards[link.id]?.usageLimit
+                : link.tmuxLink.flatMap { rushLimits[$0.sessionName] }
             return KanbanCodeCard(
                 link: link,
                 session: session,
@@ -508,6 +517,7 @@ public final class AppState: @unchecked Sendable {
                 isRateLimited: rateLimited,
                 liveModel: link.sessionLink.flatMap { sessionModels[$0.sessionId] },
                 owner: owner,
+                usageLimit: usageLimit,
                 sessionStatus: CardSessionStatus.of(
                     link: link,
                     moving: handoverLine(cardId: link.id),
@@ -740,6 +750,8 @@ public enum Action: Sendable {
     case rushQueuesScanned([String: [String]])
     /// What every blocked rush host waits on, from the same scan.
     case rushNeedsScanned([String: String])
+    /// The usage limits of the rush hosts, by session name.
+    case rushLimitsScanned([String: RemoteUsageLimit])
     /// The slash commands of a card's chat, read from its owner.
     case slashCommandsLoaded(cardId: String, commands: [RemoteSlashCommand])
     /// One rush host's queue, read after acting on it.
@@ -2494,6 +2506,10 @@ public enum Reducer {
             if state.rushNeeds != needs { state.rushNeeds = needs }
             return []
 
+        case .rushLimitsScanned(let limits):
+            if state.rushLimits != limits { state.rushLimits = limits }
+            return []
+
         case .slashCommandsLoaded(let cardId, let commands):
             if state.slashCommands[cardId] != commands { state.slashCommands[cardId] = commands }
             return []
@@ -3239,6 +3255,15 @@ public final class BoardStore: @unchecked Sendable {
         return queues
     }
 
+    /// The usage limits rush hosts in a session scan stopped on, by session name.
+    nonisolated static func rushLimits(in sessions: [TmuxSession]) -> [String: RemoteUsageLimit] {
+        var limits: [String: RemoteUsageLimit] = [:]
+        for session in sessions {
+            if let limit = session.rushLimit { limits[session.name] = limit }
+        }
+        return limits
+    }
+
     /// What the blocked rush hosts in a session scan wait on, by session name.
     nonisolated static func rushNeeds(in sessions: [TmuxSession]) -> [String: String] {
         var needs: [String: String] = [:]
@@ -3489,6 +3514,7 @@ public final class BoardStore: @unchecked Sendable {
                 dispatch(.tmuxLivenessScanned(live: Set(live.map(\.name))))
                 dispatch(.rushQueuesScanned(Self.rushQueues(in: live)))
                 dispatch(.rushNeedsScanned(Self.rushNeeds(in: live)))
+                dispatch(.rushLimitsScanned(Self.rushLimits(in: live)))
             }
 
             let t1 = ContinuousClock.now
@@ -3673,6 +3699,7 @@ public final class BoardStore: @unchecked Sendable {
             if tmuxAdapter != nil {
                 dispatch(.rushQueuesScanned(Self.rushQueues(in: tmuxSessions)))
                 dispatch(.rushNeedsScanned(Self.rushNeeds(in: tmuxSessions)))
+                dispatch(.rushLimitsScanned(Self.rushLimits(in: tmuxSessions)))
                 let currentNames = Set(tmuxSessions.map(\.name))
                 let home = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
                 // The disk snapshot covers the first pass of a fresh app run:

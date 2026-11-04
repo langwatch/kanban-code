@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeRemoteKit
 import Observation
 
 /// A card on the Kanban board, combining Link + Session data for display.
@@ -34,6 +35,9 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
     /// Where its assistant session stands: running, starting, moving,
     /// failed, ended. The one value every surface renders.
     public let sessionStatus: CardSessionStatus
+    /// The plan usage limit its assistant stopped on, as last scanned. Check
+    /// `activeUsageLimit` before showing it: it lifts on its own.
+    public let usageLimit: RemoteUsageLimit?
 
     public init(
         link: Link,
@@ -43,6 +47,7 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
         isRateLimited: Bool = false,
         liveModel: String? = nil,
         owner: CardOwner? = nil,
+        usageLimit: RemoteUsageLimit? = nil,
         sessionStatus: CardSessionStatus? = nil
     ) {
         self.id = link.id
@@ -53,8 +58,14 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
         self.isRateLimited = isRateLimited
         self.liveModel = liveModel
         self.owner = owner
+        self.usageLimit = usageLimit
         self.sessionStatus = sessionStatus
             ?? CardSessionStatus.of(link: link, moving: nil, report: nil, machineState: nil)
+    }
+
+    /// The usage limit, while it holds at `now`.
+    public func activeUsageLimit(at now: Date = Date()) -> RemoteUsageLimit? {
+        usageLimit.flatMap { $0.isActive(at: now) ? $0 : nil }
     }
 
     /// Whether Claude is confirmed actively working right now (not just waiting).

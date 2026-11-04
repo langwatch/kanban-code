@@ -217,7 +217,8 @@ enum RemoteOpenAPI {
           "lastActivity": {"type": ["string", "null"], "format": "date-time"},
           "updatedAt": {"type": "string", "format": "date-time"},
           "machineId": {"type": ["string", "null"], "description": "the master that owns the card; send its prompts, transcript and terminal calls there"},
-          "machineName": {"type": ["string", "null"]}
+          "machineName": {"type": ["string", "null"]},
+          "usageLimit": {"type": "object", "description": "the card's assistant stopped on its plan's usage limit; present only while it holds", "required": ["window"], "properties": {"window": {"type": "string", "description": "five_hour, seven_day, ... as rush names it"}, "resetsAt": {"type": "string", "format": "date-time"}}}
         }
       },
       "MachineList": {"type": "object", "properties": {"machines": {"type": "array", "items": {"type": "object", "required": ["name", "kind"], "properties": {"id": {"type": "string", "description": "machine id of a master"}, "name": {"type": "string", "description": "what TaskRequest.machine accepts"}, "kind": {"type": "string", "enum": ["this", "master", "ssh"]}, "online": {"type": "boolean"}, "alwaysOn": {"type": "boolean"}}}}}},

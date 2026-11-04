@@ -62,7 +62,7 @@ public final class RoutingTmuxAdapter: TmuxManagerPort, @unchecked Sendable {
         var result = try await local.listSessions()
         if rush.isAvailable, let hosts = try? await rush.list() {
             for host in hosts where host.isOpen {
-                result.append(TmuxSession(name: RushSessionName.name(for: host), path: host.cwd, rushQueue: host.queue, rushNeeds: host.blockedOn))
+                result.append(TmuxSession(name: RushSessionName.name(for: host), path: host.cwd, rushQueue: host.queue, rushNeeds: host.blockedOn, rushLimit: host.usageLimit()))
             }
         }
         var seen = Set(result.map(\.name))
@@ -77,7 +77,7 @@ public final class RoutingTmuxAdapter: TmuxManagerPort, @unchecked Sendable {
                     for host in hosts where host.isOpen {
                         let name = RushSessionName.name(for: host)
                         if ours.contains(name) {
-                            live.append(TmuxSession(name: name, path: host.cwd, rushQueue: host.queue, rushNeeds: host.blockedOn))
+                            live.append(TmuxSession(name: name, path: host.cwd, rushQueue: host.queue, rushNeeds: host.blockedOn, rushLimit: host.usageLimit()))
                         }
                     }
                 }
