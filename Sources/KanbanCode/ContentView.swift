@@ -1840,6 +1840,13 @@ struct ContentView: View {
             onSelectChannel: { name in
                 store.dispatch(.selectChannel(name: name))
             },
+            conversations: store.state.conversations,
+            onSelectConversation: { cardId, conversationId in
+                if let card = store.state.cards.first(where: { $0.id == cardId }) {
+                    switchToProjectIfNeeded(for: card)
+                }
+                ConversationActions.open(cardId: cardId, conversationId: conversationId)
+            },
             commands: paletteCommands,
             initialQuery: searchInitialQuery,
             deepSearchTrigger: deepSearchTrigger

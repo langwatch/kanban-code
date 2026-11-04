@@ -8,7 +8,8 @@ struct BoardScreen: View {
     /// The board's rows while a card is open on top of it. A list that
     /// changes while covered reloads when focus comes back to one of its
     /// cells, which UIKit refuses with a crash; so it waits for the card to close.
-    @State private var covered: (sections: [BoardSection], down: [BoardModel], older: [FleetCard])?
+    @State private var covered: (sections: [BoardSection], down: [BoardModel], older: [FleetCard],
+                                 conversations: [ConversationSearch.Hit])?
     @State private var search = ""
     /// Matches among the cards the phone does not hold, from the masters.
     @State private var older: CardSearchModel
@@ -45,7 +46,7 @@ struct BoardScreen: View {
             content
                 .navigationTitle(title)
                 .navigationSubtitle(subtitle)
-                .searchable(text: $search, prompt: "Search cards")
+                .searchable(text: $search, prompt: "Search cards and conversations")
                 .refreshable { await refreshAll() }
                 .toolbar { toolbar }
                 .navigationDestination(for: BoardRoute.self) { route in
@@ -78,7 +79,7 @@ struct BoardScreen: View {
         }
         .onChange(of: search) { _, text in older.update(text) }
         .onChange(of: path.isEmpty) { _, isEmpty in
-            covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters, olderRows)
+            covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters, olderRows, conversationHits)
         }
         .sheet(isPresented: $showNewTask) {
             NewTaskSheet(fleet: fleet) { card, master in
@@ -198,10 +199,12 @@ struct BoardScreen: View {
         } else if fleet.hasBoard {
             let sections = covered?.sections ?? sections(of: fleet.cards)
             let olderCards = covered?.older ?? olderRows
+            let conversations = covered?.conversations ?? conversationHits
             if sections.isEmpty && fleet.isMulti && search.isEmpty {
                 List { machineStatusSection }
                     .listStyle(.insetGrouped)
-            } else if sections.isEmpty && (!isSearching || (olderCards.isEmpty && older.phase == .loaded)) {
+            } else if sections.isEmpty && conversations.isEmpty
+                        && (!isSearching || (olderCards.isEmpty && older.phase == .loaded)) {
                 if search.isEmpty {
                     ContentUnavailableView {
                         Label("No cards", systemImage: "rectangle.stack")
@@ -218,6 +221,7 @@ struct BoardScreen: View {
                 List {
                     attentionSection
                     machineStatusSection
+                    if isSearching && !conversations.isEmpty { conversationSection(conversations) }
                     ForEach(sections, id: \.id) { section in
                         Section {
                             let collapsed = search.isEmpty && !expandedSections.contains(section.id)
@@ -296,6 +300,46 @@ struct BoardScreen: View {
             let card = entry.card
             return projectFilter.isEmpty || card.projectPath == projectFilter
                 || (card.projectName != nil && card.projectName == filterName)
+        }
+    }
+
+    /// Conversations of the cards the phone holds that match the search, by
+    /// their title or last message, narrowed to the project filter.
+    private var conversationHits: [ConversationSearch.Hit] {
+        guard isSearching else { return [] }
+        let filterName = filteredProjectName
+        var titles: [String: String] = [:]
+        var lists: [String: [RemoteConversation]] = [:]
+        for entry in fleet.cards where !entry.card.conversations.isEmpty {
+            let card = entry.card
+            if !projectFilter.isEmpty, card.projectPath != projectFilter, card.projectName == nil || card.projectName != filterName {
+                continue
+            }
+            titles[card.id] = card.title
+            lists[card.id] = card.conversations
+        }
+        return ConversationSearch.search(ConversationSearch.entries(conversations: lists, cardTitles: titles),
+                                         query: CardSearchQuery(search), limit: 50)
+    }
+
+    private func conversationSection(_ hits: [ConversationSearch.Hit]) -> some View {
+        Section {
+            ForEach(hits) { hit in
+                Button {
+                    path = [.conversation(ConversationRoute(cardId: hit.entry.cardId, id: hit.entry.conversation.id))]
+                } label: {
+                    ConversationSearchRow(hit: hit)
+                }
+                .tint(.primary)
+                .accessibilityIdentifier("found-conversation-\(hit.entry.cardId)-\(hit.entry.conversation.id)")
+            }
+        } header: {
+            HStack {
+                Text("Conversations")
+                Spacer()
+                Text("\(hits.count)")
+                    .monospacedDigit()
+            }
         }
     }
 

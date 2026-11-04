@@ -431,3 +431,59 @@ struct ConversationRow: View {
                            model: ConversationModel(preview: detail, cardId: "c1", board: board))
     }
 }
+
+/// A conversation found by the board's search: its title, the card it
+/// belongs to, whether it is unread and when it last had a message.
+struct ConversationSearchRow: View {
+    let hit: ConversationSearch.Hit
+
+    private var conversation: RemoteConversation { hit.entry.conversation }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.displayTitle)
+                    .font(.body.weight(conversation.unread ? .semibold : .regular))
+                    .foregroundStyle(conversation.title == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if conversation.unread {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                    }
+                    Text(hit.entry.cardTitle)
+                        .lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if !hit.inTitle, let preview = conversation.preview, !preview.isEmpty {
+                    Text(preview)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            Text(conversation.updatedAt.relativeShort)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize()
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        var parts = ["Conversation", conversation.displayTitle, "in", hit.entry.cardTitle]
+        if conversation.unread { parts.append("unread") }
+        return parts.joined(separator: ", ")
+    }
+}

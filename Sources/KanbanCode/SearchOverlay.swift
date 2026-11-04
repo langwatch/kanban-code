@@ -1,5 +1,6 @@
 import SwiftUI
 import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 struct SearchOverlay: View {
     @Binding var isPresented: Bool
@@ -18,6 +19,10 @@ struct SearchOverlay: View {
     /// "3m ago" subtitle on the channel row.
     var channelLastActivity: [String: Date] = [:]
     var onSelectChannel: (String) -> Void = { _ in }
+    /// Each card's conversations, archived ones included, by card id.
+    var conversations: [String: [RemoteConversation]] = [:]
+    /// Opens a card with one of its conversations: card id, conversation id.
+    var onSelectConversation: (String, String) -> Void = { _, _ in }
 
     // Command palette actions
     var commands: [CommandItem] = []
@@ -28,6 +33,11 @@ struct SearchOverlay: View {
     @State private var snapshotCards: [KanbanCodeCard] = []
     @State private var recentItems: [RecentItem] = []
     @State private var cardSearchIndex: [CardSearchIndexItem] = []
+    @State private var snapshotConversations: [String: [RemoteConversation]] = [:]
+    @State private var conversationEntries: [ConversationSearch.Entry]?
+    /// Conversations a deep search found by title or last message, archived
+    /// ones included, shown above the transcript matches.
+    @State private var conversationDeepHits: [ConversationSearch.Hit] = []
     @State private var query = ""
     @State private var searchResults: [SearchResultItem] = []
     @State private var filteredItems: [RecentItem] = []
@@ -84,7 +94,7 @@ struct SearchOverlay: View {
                         commandsView
                     } else if query.isEmpty {
                         recentCardsView
-                    } else if !searchResults.isEmpty {
+                    } else if !searchResults.isEmpty || !conversationDeepHits.isEmpty {
                         deepSearchResultsView
                     } else if !isDeepSearching {
                         filteredCardsView
@@ -110,6 +120,15 @@ struct SearchOverlay: View {
     }
 
     private var deepSearchResultsView: some View {
+        Group {
+            ForEach(conversationDeepHits) { hit in
+                conversationRow(hit, queryTerms: queryTerms)
+            }
+            deepSearchSessionRows
+        }
+    }
+
+    private var deepSearchSessionRows: some View {
         ForEach(searchResults) { result in
             SearchResultRow(result: result, queryTerms: queryTerms, isHighlighted: result.id == selectedId)
                 .onTapGesture {
@@ -129,6 +148,7 @@ struct SearchOverlay: View {
     private func handleAppear() {
         let started = RenderDiagnostics.mark()
         snapshotCards = cards  // Freeze cards at open time
+        snapshotConversations = conversations
         recentItems = computeMergedRecent()
 
         requestSearchFocus()
@@ -184,6 +204,18 @@ struct SearchOverlay: View {
         return index
     }
 
+    /// The conversations of the cards the palette lists, built on first use.
+    private func indexedConversations() -> [ConversationSearch.Entry] {
+        if let conversationEntries { return conversationEntries }
+        var titles: [String: String] = [:]
+        for card in snapshotCards where snapshotConversations[card.id] != nil {
+            titles[card.id] = card.displayTitle
+        }
+        let entries = ConversationSearch.entries(conversations: snapshotConversations, cardTitles: titles)
+        conversationEntries = entries
+        return entries
+    }
+
     private func handleQueryChange(_ newValue: String) {
         updateFilter(newValue)
         if newValue.hasPrefix(">") {
@@ -228,11 +260,13 @@ struct SearchOverlay: View {
     enum RecentItem: Identifiable {
         case channel(Channel, opened: Date?, lastActivity: Date?)
         case card(KanbanCodeCard)
+        case conversation(ConversationSearch.Hit)
 
         var id: String {
             switch self {
             case .channel(let ch, _, _): return "channel:\(ch.name)"
             case .card(let c): return c.id
+            case .conversation(let hit): return hit.id
             }
         }
 
@@ -242,6 +276,8 @@ struct SearchOverlay: View {
                 return opened ?? activity ?? .distantPast
             case .card(let c):
                 return c.link.lastOpenedAt ?? c.link.lastActivity ?? c.link.updatedAt
+            case .conversation(let hit):
+                return hit.entry.conversation.updatedAt
             }
         }
     }
@@ -357,8 +393,8 @@ struct SearchOverlay: View {
             return filteredCommands.map(\.id)
         } else if query.isEmpty {
             return recentItems.map(\.id)
-        } else if !searchResults.isEmpty {
-            return searchResults.map(\.id)
+        } else if !searchResults.isEmpty || !conversationDeepHits.isEmpty {
+            return conversationDeepHits.map(\.id) + searchResults.map(\.id)
         } else {
             return filteredItems.map(\.id)
         }
@@ -370,12 +406,21 @@ struct SearchOverlay: View {
     /// When the user types a query, match against channel names + card fields and
     /// interleave both in a single recency-ordered list. This is materialized
     /// during query changes so selection and rendering use the same snapshot.
+    ///
+    /// Conversations found by title take their place among them by when
+    /// they last had a message; those found only by their last message
+    /// follow the rest. Archived conversations wait for a deep search.
     private func computeFilteredItems(query: String, cards: [KanbanCodeCard]) -> [RecentItem] {
         let channelMatches = matchedChannelsForQuery(query).map {
             RecentItem.channel($0, opened: channelLastOpened[$0.name], lastActivity: channelLastActivity[$0.name])
         }
         let cardMatches = cards.map(RecentItem.card)
-        return Array((channelMatches + cardMatches).sorted { $0.sortKey > $1.sortKey }.prefix(Self.maxQuickResults))
+        let conversationHits = ConversationSearch.search(
+            indexedConversations(), query: CardSearchQuery(query), limit: Self.maxQuickResults)
+        let titled = conversationHits.filter(\.inTitle).map(RecentItem.conversation)
+        let byMessage = conversationHits.filter { !$0.inTitle }.map(RecentItem.conversation)
+        let ranked = (channelMatches + cardMatches + titled).sorted { $0.sortKey > $1.sortKey } + byMessage
+        return Array(ranked.prefix(Self.maxQuickResults))
     }
 
     private func moveSelection(by offset: Int) {
@@ -402,6 +447,12 @@ struct SearchOverlay: View {
         if currentId.hasPrefix("channel:") {
             let name = String(currentId.dropFirst("channel:".count))
             onSelectChannel(name)
+            isPresented = false
+            return
+        }
+
+        if let target = ConversationSearch.Hit.parse(id: currentId) {
+            onSelectConversation(target.cardId, target.conversationId)
             isPresented = false
             return
         }
@@ -460,7 +511,18 @@ struct SearchOverlay: View {
                     isPresented = false
                 }
                 .contextMenu { searchCardContextMenu(for: card) }
+        case .conversation(let hit):
+            conversationRow(hit, queryTerms: queryTerms)
         }
+    }
+
+    private func conversationRow(_ hit: ConversationSearch.Hit, queryTerms: [String]) -> some View {
+        ConversationSearchRow(hit: hit, queryTerms: queryTerms, isHighlighted: hit.id == selectedId)
+            .id(hit.id)
+            .onTapGesture {
+                onSelectConversation(hit.entry.cardId, hit.entry.conversation.id)
+                isPresented = false
+            }
     }
 
     private var commandsView: some View {
@@ -641,6 +703,7 @@ struct SearchOverlay: View {
         // the two then compete for the same disk.
         searchTask?.cancel()
         searchResults = []
+        conversationDeepHits = []
         isDeepSearching = false
     }
 
@@ -666,6 +729,10 @@ struct SearchOverlay: View {
         KanbanCodeLog.info("search", "deepSearch START query='\(currentQuery)' cards=\(currentCards.count)")
 
         let searchQuery = SessionSearchQuery(currentQuery)
+        conversationDeepHits = ConversationSearch.search(
+            indexedConversations(), query: CardSearchQuery(currentQuery), includeArchived: true,
+            limit: Self.maxDeepResults)
+        selectedId = conversationDeepHits.first?.id ?? selectedId
 
         // Build path→card lookup once, preserving a search order that checks
         // direct PR matches and active/recent cards before archived history.
@@ -992,14 +1059,7 @@ struct ChannelSearchRow: View {
     let isHighlighted: Bool
 
     private var relativeTime: String? {
-        guard let ts = lastActivity else { return nil }
-        let secs = Date().timeIntervalSince(ts)
-        switch secs {
-        case ..<60: return "just now"
-        case ..<3600: return "\(Int(secs / 60))m ago"
-        case ..<86400: return "\(Int(secs / 3600))h ago"
-        default: return "\(Int(secs / 86400))d ago"
-        }
+        lastActivity.map { SearchRelativeTime.text(since: $0) }
     }
 
     // Mirrors `SearchCardRow`: two-line layout, title on top, metadata
@@ -1039,6 +1099,99 @@ struct ChannelSearchRow: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
             }
+        }
+    }
+}
+
+/// A conversation of a card: its title, then the card it belongs to, whether
+/// it is unread and when it last had a message. Found only by its last
+/// message, it shows that message too.
+struct ConversationSearchRow: View {
+    let hit: ConversationSearch.Hit
+    let queryTerms: [String]
+    var isHighlighted: Bool = false
+
+    private var conversation: RemoteConversation { hit.entry.conversation }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                HighlightedText(text: conversation.displayTitle, terms: queryTerms, fuzzyInitials: false)
+                    .font(.app(.body, weight: conversation.unread ? .semibold : .regular))
+                    .foregroundStyle(conversation.title == nil ? .secondary : .primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left")
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .opacity(0.6)
+
+                    HighlightedText(text: hit.entry.cardTitle, terms: queryTerms, fuzzyInitials: false)
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    if conversation.unread {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
+                        Text("Unread")
+                            .font(.app(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if conversation.archived {
+                        Text("Archived")
+                            .font(.app(.caption))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Text(SearchRelativeTime.text(since: conversation.updatedAt))
+                        .font(.app(.caption))
+                        .foregroundStyle(.tertiary)
+                }
+
+                if !hit.inTitle, let preview = conversation.preview, !preview.isEmpty {
+                    HighlightedText(text: preview, terms: queryTerms, fuzzyInitials: false)
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            HStack(spacing: 4) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.app(.caption2))
+                Text("Conversation")
+                    .font(.app(.caption2))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .background(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.accentColor.opacity(0.45), lineWidth: 1)
+            }
+        }
+    }
+}
+
+enum SearchRelativeTime {
+    static func text(since date: Date, now: Date = Date()) -> String {
+        let secs = now.timeIntervalSince(date)
+        switch secs {
+        case ..<60: return "just now"
+        case ..<3600: return "\(Int(secs / 60))m ago"
+        case ..<86400: return "\(Int(secs / 3600))h ago"
+        default: return "\(Int(secs / 86400))d ago"
         }
     }
 }
