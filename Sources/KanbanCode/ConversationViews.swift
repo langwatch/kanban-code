@@ -204,6 +204,25 @@ struct ConversationRenameSheet: View {
 
 // MARK: - Conversation chat
 
+/// Where conversation images were found in each transcript, for the app's
+/// life. A lookup walks the whole transcript, which can be gigabytes: a
+/// conversation opened again, or another one of the same card, reuses what
+/// earlier lookups found and never walks the file for the same message twice.
+@MainActor
+enum ConversationImageLines {
+    private static var lines: [String: [String: Int]] = [:]
+    private static var looked: [String: Set<String>] = [:]
+
+    static func known(in path: String) -> (lines: [String: Int], looked: Set<String>) {
+        (lines[path] ?? [:], looked[path] ?? [])
+    }
+
+    static func record(looked ids: [String], found: [String: Int], in path: String) {
+        looked[path, default: []].formUnion(ids)
+        lines[path, default: [:]].merge(found) { _, new in new }
+    }
+}
+
 /// One conversation of the card: the human's messages and the agent's
 /// replies through `kanban reply`, with its own composer. The agent's tool
 /// calls and plain text stay in Main.
@@ -216,9 +235,6 @@ struct ConversationChatView: View {
     /// The transcript line of each human message whose images this machine
     /// cannot read from their paths.
     @State private var imageLines: [String: Int] = [:]
-    /// Messages already looked up in the transcript, found or not, so a
-    /// redraw never searches the transcript for them again.
-    @State private var imageLookups: Set<String> = []
 
     private var store: BoardStore { AppComposition.shared.store }
     private var drafts: ConversationDrafts { ConversationDrafts.shared }
@@ -264,8 +280,11 @@ struct ConversationChatView: View {
     /// Finds those messages' prompts in the transcript, so their images load
     /// from there as Main's do.
     private func locateImages() async {
-        let wanted = unreadableImageMessageIds.filter { imageLines[$0] == nil && !imageLookups.contains($0) }
-        guard !wanted.isEmpty, let path = transcriptPath else { return }
+        guard let path = transcriptPath else { return }
+        let known = ConversationImageLines.known(in: path)
+        imageLines.merge(known.lines) { _, new in new }
+        let wanted = unreadableImageMessageIds.filter { imageLines[$0] == nil && !known.looked.contains($0) }
+        guard !wanted.isEmpty else { return }
         let wantedSet = Set(wanted)
         let lookups = messages.filter { wantedSet.contains($0.id) }.map { (id: $0.id, text: $0.text) }
         let conversationId = conversation.id
@@ -280,7 +299,7 @@ struct ConversationChatView: View {
             reader.cancel()
         }
         guard !Task.isCancelled, let found else { return }
-        imageLookups.formUnion(wanted)
+        ConversationImageLines.record(looked: wanted, found: found, in: path)
         imageLines.merge(found) { _, new in new }
     }
 

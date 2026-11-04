@@ -289,6 +289,28 @@ public enum TranscriptReader {
         #endif
     }
 
+    /// Reads up to `count` bytes as a byte array. The Data a FileHandle read
+    /// returns is autoreleased: without a pool drained per read, a walk that
+    /// runs as one synchronous job keeps every chunk it read until the walk
+    /// ends, which on a gigabyte transcript is the whole file in memory.
+    static func readChunk(_ handle: FileHandle, upToCount count: Int) throws -> [UInt8] {
+        #if canImport(ObjectiveC)
+        var failure: Error?
+        let bytes = autoreleasepool { () -> [UInt8] in
+            do {
+                return [UInt8](try handle.read(upToCount: count) ?? Data())
+            } catch {
+                failure = error
+                return []
+            }
+        }
+        if let failure { throw failure }
+        return bytes
+        #else
+        return [UInt8](try handle.read(upToCount: count) ?? Data())
+        #endif
+    }
+
     /// Whether `bytes` holds `needle` anywhere.
     private static func contains(_ bytes: ArraySlice<UInt8>, _ needle: [UInt8]) -> Bool {
         guard !needle.isEmpty else { return true }
@@ -324,16 +346,11 @@ public enum TranscriptReader {
             if Task.isCancelled { return true }
             let bytes = Array(line.utf8)
             guard rest.allSatisfy({ contains(bytes[...], $0) }) else { return false }
-            // A matching line can carry megabytes of image data: drain the
-            // parser's objects per line, not at the end of the walk.
-            let turn = drainingObjects { () -> ConversationTurn? in
-                guard let obj = candidateRecord(from: line),
-                    let turn = buildTurn(from: obj, index: 0, byteOffset: offset),
-                    keep(turn)
-                else { return nil }
-                return turn
+            if let obj = candidateRecord(from: line),
+                let turn = buildTurn(from: obj, index: 0, byteOffset: offset),
+                keep(turn) {
+                newestFirst.append(turn)
             }
-            if let turn { newestFirst.append(turn) }
             return false
         }
         return newestFirst.reversed().enumerated().map { i, turn in
@@ -351,7 +368,9 @@ public enum TranscriptReader {
     /// bounds the scan: only lines starting before it are visited. With
     /// `marker`, only lines holding those bytes are decoded and handed over;
     /// a chunk without the marker is skipped as bytes, without a string or
-    /// a parse per line.
+    /// a parse per line, and a cancelled task stops the walk. Each chunk and
+    /// each handler call drains its own autoreleased objects, so the walk
+    /// holds one chunk at a time whatever the file's size.
     static func scanRecordsBackwards(
         filePath: String,
         from endOffset: Int? = nil,
@@ -374,10 +393,13 @@ public enum TranscriptReader {
         var carry: [UInt8] = []
 
         while end > 0 {
+            // A marker walk covers the whole file when the marker is rare:
+            // a cancelled task stops it, even through chunks that never
+            // reach the handler.
+            if marker != nil, Task.isCancelled { return }
             let start = max(0, end - chunkSize)
             try handle.seek(toOffset: UInt64(start))
-            let chunkData = try handle.read(upToCount: end - start) ?? Data()
-            var bytes = [UInt8](chunkData)
+            var bytes = try readChunk(handle, upToCount: end - start)
             let chunkCount = bytes.count
             bytes.append(contentsOf: carry)
 
@@ -413,14 +435,14 @@ public enum TranscriptReader {
                     marker.map({ contains(bytes[lineStart..<lineEnd], $0) }) ?? true,
                     let line = String(bytes: bytes[lineStart..<lineEnd], encoding: .utf8)
                 else { continue }
-                if handler(start + lineStart, line) { return }
+                if drainingObjects({ handler(start + lineStart, line) }) { return }
             }
 
             if start == 0 {
                 let lineEnd = starts.first.map { $0 - 1 } ?? bytes.count
                 if lineEnd > 0, marker.map({ contains(bytes[0..<lineEnd], $0) }) ?? true,
                     let line = String(bytes: bytes[0..<lineEnd], encoding: .utf8),
-                    handler(0, line) {
+                    drainingObjects({ handler(0, line) }) {
                     return
                 }
             } else {
@@ -458,7 +480,7 @@ public enum TranscriptReader {
 
         while pos < fileSize {
             let readCount = min(chunkSize, fileSize - pos)
-            let chunkData = try handle.read(upToCount: readCount) ?? Data()
+            let chunkData = try readChunk(handle, upToCount: readCount)
             guard !chunkData.isEmpty else { break }
             pos += chunkData.count
 
@@ -472,7 +494,7 @@ public enum TranscriptReader {
                     if offset >= stop { return }
                     if i > lineStart,
                         let line = String(bytes: bytes[lineStart..<i], encoding: .utf8),
-                        handler(offset, line) {
+                        drainingObjects({ handler(offset, line) }) {
                         return
                     }
                     lineStart = i + 1
@@ -488,7 +510,7 @@ public enum TranscriptReader {
 
         if !carry.isEmpty, carryOffset < stop,
             let line = String(bytes: carry, encoding: .utf8) {
-            _ = handler(carryOffset, line)
+            _ = drainingObjects { handler(carryOffset, line) }
         }
     }
 
@@ -507,7 +529,7 @@ public enum TranscriptReader {
         while end > 0 {
             let start = max(0, end - chunkSize)
             try handle.seek(toOffset: UInt64(start))
-            let bytes = [UInt8](try handle.read(upToCount: end - start) ?? Data())
+            let bytes = try readChunk(handle, upToCount: end - start)
             if let i = bytes.lastIndex(of: UInt8(ascii: "\n")) { return start + i + 1 }
             end = start
         }

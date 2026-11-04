@@ -163,6 +163,64 @@ struct ConversationLogTests {
         #expect(found == ["m1": newOffset])
     }
 
+    @Test("a cancelled marker walk reads nothing more: switching conversations stops the lookup at once")
+    func cancelledMarkerWalk() async throws {
+        let dir = NSTemporaryDirectory() + "kc-transcript-cancel-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let line = #"{"type":"user","message":{"role":"user","content":"[conversation smart-tiger] hi"}}"#
+        let path = dir + "/s.jsonl"
+        try (Array(repeating: line, count: 20_000).joined(separator: "\n") + "\n")
+            .write(toFile: path, atomically: true, encoding: .utf8)
+
+        let task = Task.detached { () -> Int in
+            withUnsafeCurrentTask { $0?.cancel() }
+            var visited = 0
+            try? TranscriptReader.scanRecordsBackwards(
+                filePath: path, marker: Array("[conversation smart-tiger".utf8)) { _, _ in
+                visited += 1
+                return false
+            }
+            return visited
+        }
+        #expect(await task.value == 0)
+    }
+
+    #if canImport(Darwin)
+    @Test("walking a large transcript holds one chunk at a time, not every chunk it read")
+    func markerWalkMemoryStaysFlat() throws {
+        let dir = NSTemporaryDirectory() + "kc-transcript-memory-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let filler = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\#(String(repeating: "x", count: 8000))"}]}}"#
+        let head = #"{"type":"user","message":{"role":"user","content":"[conversation smart-tiger] first"}}"#
+        let path = dir + "/s.jsonl"
+        // 64 MB of lines without the marker, then (oldest) the one line with it.
+        try ([head] + Array(repeating: filler, count: 8_000)).joined(separator: "\n")
+            .appending("\n").write(toFile: path, atomically: true, encoding: .utf8)
+
+        let before = Self.footprint()
+        var grown = 0
+        try TranscriptReader.scanRecordsBackwards(filePath: path, marker: Array("[conversation smart-tiger".utf8)) { _, _ in
+            // Measured inside the walk: what it holds while it runs.
+            grown = Self.footprint() - before
+            return true
+        }
+        #expect(grown < 32 << 20, "walk held \(grown >> 20) MiB of a 64 MiB file")
+    }
+
+    private static func footprint() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+    }
+    #endif
+
     @Test("read clears unread but not waiting; a human answer clears waiting")
     func readAndWaiting() {
         var events: [ConversationEvent] = [
