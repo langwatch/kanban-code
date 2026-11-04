@@ -20,8 +20,11 @@ function writeRollout(dir: string, name: string, messages: string[]): string {
   return path;
 }
 
-function touch(path: string, atSeconds: number): void {
-  utimesSync(path, atSeconds, atSeconds);
+/// Sets mtime `step` seconds after now. Times stay after every file's birth:
+/// on macOS an mtime earlier than birthtime moves birthtime back with it.
+const T0 = Math.ceil(Date.now() / 1000) + 10;
+function touch(path: string, step: number): void {
+  utimesSync(path, T0 + step, T0 + step);
 }
 
 function unreadMessages(path: string, offset: number): string[] {
@@ -43,7 +46,7 @@ describe("switchTail", () => {
       const sessions = join(home, "sessions");
       const backlog = Array.from({ length: 500 }, (_, i) => `old review ${i}`);
       const old = writeRollout(join(sessions, "2026/08/03"), "rollout-2026-08-03T12-47-14-a.jsonl", backlog);
-      touch(old, 1000);
+      touch(old, 1);
 
       // Bridge starts: the August rollout is the only one, read from its end.
       const cursor = newTailCursor({ path: findCodexRollout(CWD) });
@@ -52,7 +55,7 @@ describe("switchTail", () => {
 
       // A new session starts: its rollout is born after the bridge followed the old one.
       const fresh = writeRollout(join(sessions, "2026/10/19"), "rollout-2026-10-19T09-49-26-b.jsonl", ["new session hello"]);
-      touch(fresh, 2000);
+      touch(fresh, 2);
       assert.equal(switchTail({ cursor, latest: findCodexRollout(CWD) }), true);
       assert.equal(cursor.path, fresh);
       assert.deepEqual(unreadMessages(fresh, cursor.offset), ["new session hello"]);
@@ -60,7 +63,7 @@ describe("switchTail", () => {
 
       // `codex resume --last` appends to the August rollout, which becomes newest again.
       appendFileSync(old, rolloutLine("resumed reply"));
-      touch(old, 3000);
+      touch(old, 3);
       assert.equal(switchTail({ cursor, latest: findCodexRollout(CWD) }), true);
       assert.equal(cursor.path, old);
       assert.deepEqual(unreadMessages(old, cursor.offset), ["resumed reply"]);
@@ -68,7 +71,7 @@ describe("switchTail", () => {
 
       // And back to the new one: only what it gained since we left it.
       appendFileSync(fresh, rolloutLine("second turn"));
-      touch(fresh, 4000);
+      touch(fresh, 4);
       switchTail({ cursor, latest: findCodexRollout(CWD) });
       assert.deepEqual(unreadMessages(fresh, cursor.offset), ["second turn"]);
     } finally {
