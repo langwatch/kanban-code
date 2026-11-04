@@ -279,15 +279,30 @@ public enum TranscriptReader {
         }
     }
 
+    /// Runs `body` in an autorelease pool where Foundation has one (Darwin);
+    /// Linux frees the parser's objects without it.
+    private static func drainingObjects<T>(_ body: () -> T) -> T {
+        #if canImport(ObjectiveC)
+        return autoreleasepool(invoking: body)
+        #else
+        return body()
+        #endif
+    }
+
     /// Whether `bytes` holds `needle` anywhere.
     private static func contains(_ bytes: ArraySlice<UInt8>, _ needle: [UInt8]) -> Bool {
         guard !needle.isEmpty else { return true }
         guard bytes.count >= needle.count else { return false }
+        #if canImport(Darwin)
         return bytes.withUnsafeBytes { haystack in
             needle.withUnsafeBytes { wanted in
                 memmem(haystack.baseAddress, haystack.count, wanted.baseAddress, wanted.count) != nil
             }
         }
+        #else
+        // Swift's Glibc module leaves out memmem (a GNU extension).
+        return bytes.firstRange(of: needle) != nil
+        #endif
     }
 
     /// Turns whose transcript line holds every one of `markers`, and that
@@ -311,7 +326,7 @@ public enum TranscriptReader {
             guard rest.allSatisfy({ contains(bytes[...], $0) }) else { return false }
             // A matching line can carry megabytes of image data: drain the
             // parser's objects per line, not at the end of the walk.
-            let turn = autoreleasepool { () -> ConversationTurn? in
+            let turn = drainingObjects { () -> ConversationTurn? in
                 guard let obj = candidateRecord(from: line),
                     let turn = buildTurn(from: obj, index: 0, byteOffset: offset),
                     keep(turn)
