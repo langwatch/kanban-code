@@ -17,6 +17,12 @@ public final class PeerTranscriptMirror {
     private let directory: String
     private var tick = 0
     private var inFlight: Set<String> = []
+    /// Copies made since the board last heard of them, by session id. A
+    /// board update rebuilds every card, so a pass that copies many
+    /// transcripts (the first one after launch copies them all) tells the
+    /// board in one action, not one per copy.
+    private var mirrored: [String: String] = [:]
+    private var lastFlush = ContinuousClock.now
 
     public init(engine: MasterEngine, kanbanHome: String = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")) {
         self.engine = engine
@@ -61,8 +67,20 @@ public final class PeerTranscriptMirror {
             inFlight.insert(link.id)
             defer { inFlight.remove(link.id) }
             await copy(cardId: link.id, owner: owner, sessionId: sessionId, path: path)
+            // The open card's chat shows its copy at once; the rest wait
+            // for the end of the pass, or a second at most.
+            if selected || ContinuousClock.now - lastFlush > .seconds(1) { flushMirrored() }
         }
+        flushMirrored()
         await mirrorConversations(state: state, local: local, online: online)
+    }
+
+    private func flushMirrored() {
+        lastFlush = .now
+        let paths = mirrored.filter { engine.store.state.peerTranscriptPaths[$0.key] != $0.value }
+        mirrored = [:]
+        guard !paths.isEmpty else { return }
+        engine.store.dispatch(.peerTranscriptsMirrored(paths: paths))
     }
 
     /// Copies the conversation logs of other masters' cards whose
@@ -80,30 +98,38 @@ public final class PeerTranscriptMirror {
 
     private func copy(cardId: String, owner: String, sessionId: String, path: String) async {
         guard let client = await engine.peerClient(machineId: owner) else { return }
-        let fm = FileManager.default
-        try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        var size = ((try? fm.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
+        // File work runs off the main actor: a slice is up to 8 MB, and a
+        // transcript copied from the start is many of them.
+        var size = await Task.detached(priority: .utility) { Self.prepare(path) }.value
         var restarted = false
         for _ in 0..<32 {
             guard let slice = try? await client.rawTranscript(cardId: cardId, offset: size) else { return }
             if slice.size < size, !restarted {
                 // The owner rewrote the transcript: copy it again.
-                try? fm.removeItem(atPath: path)
+                await Task.detached(priority: .utility) { try? FileManager.default.removeItem(atPath: path) }.value
                 size = 0
                 restarted = true
                 continue
             }
             if slice.data.isEmpty { break }
-            append(slice.data, to: path)
+            let data = slice.data
+            await Task.detached(priority: .utility) { Self.append(data, to: path) }.value
             size += slice.data.count
             if size >= slice.size { break }
         }
-        if fm.fileExists(atPath: path), engine.store.state.peerTranscriptPaths[sessionId] != path {
-            engine.store.dispatch(.peerTranscriptMirrored(sessionId: sessionId, path: path))
+        if engine.store.state.peerTranscriptPaths[sessionId] != path, FileManager.default.fileExists(atPath: path) {
+            mirrored[sessionId] = path
         }
     }
 
-    private func append(_ data: Data, to path: String) {
+    /// Makes the copy's folder and says how much of it there is.
+    private nonisolated static func prepare(_ path: String) -> Int {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        return ((try? fm.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
+    }
+
+    private nonisolated static func append(_ data: Data, to path: String) {
         if !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: data)
             return

@@ -436,6 +436,25 @@ public final class AppState: @unchecked Sendable {
     @ObservationIgnored var cardInputsVersion = 0
     @ObservationIgnored private var builtCardInputsVersion = -1
 
+    /// How many cards that are not archived use each worktree branch,
+    /// counted once per change to the board's inputs instead of on every
+    /// render.
+    public var activeWorktreeBranchCounts: [String: Int] {
+        // Read even when the memo answers, so a view using the counts
+        // still redraws when the links change.
+        let links = self.links
+        if let memo = branchCountsMemo, memo.version == cardInputsVersion { return memo.counts }
+        var counts: [String: Int] = [:]
+        for link in links.values {
+            guard !link.manuallyArchived, let branch = link.worktreeLink?.branch else { continue }
+            counts[branch, default: 0] += 1
+        }
+        branchCountsMemo = (cardInputsVersion, counts)
+        return counts
+    }
+
+    @ObservationIgnored private var branchCountsMemo: (version: Int, counts: [String: Int])?
+
     /// Project filter answers by card path, valid for `projectFilterMemoKey`.
     @ObservationIgnored private var projectFilterMemo: [String: Bool] = [:]
     @ObservationIgnored private var projectFilterMemoKey: [String]?
@@ -801,8 +820,9 @@ public enum Action: Sendable {
     /// of the old owner are dropped; the session, worktree and project are
     /// replaced when given (their paths differ per machine).
     case adoptCard(cardId: String, sessionLink: SessionLink?, worktreeLink: WorktreeLink?, projectPath: String?)
-    /// A transcript of a card another master owns was copied to `path`.
-    case peerTranscriptMirrored(sessionId: String, path: String)
+    /// Transcripts of cards other masters own were copied: the copy's
+    /// path by session id.
+    case peerTranscriptsMirrored(paths: [String: String])
     /// The cards other masters own that are in a turn right now.
     case peerActivityScanned(cards: [String: PeerCardState])
     /// One card another master owns, as its owner just reported it.
@@ -2965,8 +2985,9 @@ public enum Reducer {
             if state.peerStatuses[status.peerId] != status { state.peerStatuses[status.peerId] = status }
             return []
 
-        case .peerTranscriptMirrored(let sessionId, let path):
-            if state.peerTranscriptPaths[sessionId] != path { state.peerTranscriptPaths[sessionId] = path }
+        case .peerTranscriptsMirrored(let paths):
+            let merged = state.peerTranscriptPaths.merging(paths) { _, new in new }
+            if merged != state.peerTranscriptPaths { state.peerTranscriptPaths = merged }
             return []
 
         case .peerActivityScanned(let cards):

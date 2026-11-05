@@ -27,13 +27,7 @@ enum WorktreeCleanupEligibility {
 extension ContentView {
 
     var activeWorktreeBranchCounts: [String: Int] {
-        var counts: [String: Int] = [:]
-        for link in store.state.links.values {
-            guard !link.manuallyArchived,
-                  let branch = link.worktreeLink?.branch else { continue }
-            counts[branch, default: 0] += 1
-        }
-        return counts
+        store.state.activeWorktreeBranchCounts
     }
 
     /// Whether this card's worktree can be cleaned up: false when another
