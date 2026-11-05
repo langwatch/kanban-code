@@ -76,11 +76,15 @@ enum ConversationActions {
     }
 
     /// The conversation's messages, from the card's log here or the copy of
-    /// its owner's.
-    static func messages(cardId: String, conversationId: String) -> [RemoteConversationMessage] {
+    /// its owner's, read off the main actor: a log not folded yet can take
+    /// a while.
+    static func messages(cardId: String, conversationId: String) async -> [RemoteConversationMessage] {
         let owner = engine.isForeign(cardId) ? store.state.links[cardId]?.ownerMachine : nil
-        return engine.conversationStore.threads(cardId: cardId, ownerMachine: owner)
-            .first { $0.summary.id == conversationId }?.messages ?? []
+        let conversationStore = engine.conversationStore
+        return await Task.detached(priority: .userInitiated) {
+            conversationStore.threads(cardId: cardId, ownerMachine: owner)
+                .first { $0.summary.id == conversationId }?.messages ?? []
+        }.value
     }
 }
 
@@ -230,6 +234,10 @@ struct ConversationChatView: View {
     let card: KanbanCodeCard
     let conversation: RemoteConversation
     @State private var messages: [RemoteConversationMessage] = []
+    /// How many of the latest messages are shown; "Show earlier messages"
+    /// raises it. A conversation can hold hundreds of long replies, and
+    /// every row in the stack is measured when the list scrolls to its end.
+    @State private var shownCount = ConversationChatView.pageSize
     @State private var renaming = false
     @State private var focusToken = 0
     /// The transcript line of each human message whose images this machine
@@ -319,6 +327,12 @@ struct ConversationChatView: View {
         card.activityState == .activelyWorking && messages.last?.role != .agent
     }
 
+    static let pageSize = 80
+
+    private var shownMessages: ArraySlice<RemoteConversationMessage> {
+        messages.suffix(shownCount)
+    }
+
     /// Why the agent will not answer for now: its plan's usage limit.
     private var pausedLine: String? {
         card.activeUsageLimit()?.pausedLine(assistant: card.link.effectiveAssistant.displayName)
@@ -349,7 +363,15 @@ struct ConversationChatView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.top, 40)
                         }
-                        ForEach(messages) { message in
+                        if messages.count > shownCount {
+                            Button("Show earlier messages") {
+                                shownCount += Self.pageSize
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.app(.caption))
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        ForEach(shownMessages) { message in
                             ConversationMessageRow(message: message, cardId: card.id,
                                                    waiting: queuedIds.contains(message.id),
                                                    transcript: imageLines[message.id].map { (transcriptPath, $0) })
@@ -396,11 +418,16 @@ struct ConversationChatView: View {
                     .padding(.vertical, 16)
                     .frame(maxWidth: .infinity)
                 }
-                .onChange(of: messages.count) {
-                    if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
-                }
-                .onChange(of: pending.map(\.id)) { _, ids in
-                    if let last = ids.last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } }
+                // One scroll for a message landing and its pending bubble
+                // going away, which come in the same update.
+                .onChange(of: pending.last?.id ?? messages.last?.id) { previous, last in
+                    guard let last else { return }
+                    // The first load jumps to the end; later ones glide.
+                    if previous == nil {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    } else {
+                        withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                    }
                 }
                 .onAppear {
                     if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -424,7 +451,9 @@ struct ConversationChatView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: "\(card.id)/\(conversation.id)/\(conversation.updatedAt.timeIntervalSince1970)/\(conversation.messageCount)") {
-            messages = ConversationActions.messages(cardId: card.id, conversationId: conversation.id)
+            let loaded = await ConversationActions.messages(cardId: card.id, conversationId: conversation.id)
+            guard !Task.isCancelled else { return }
+            if loaded != messages { messages = loaded }
             let sent = ((store.state.conversationOutbox[card.id] ?? []) + (store.state.failedPrompts[card.id] ?? []).map(\.prompt))
                 .filter { $0.conversation == conversation.id }
             let delivered = ConversationOutbox.delivered(sent, in: messages)
@@ -441,7 +470,11 @@ struct ConversationChatView: View {
             ConversationRenameRequest.shared.conversationId = nil
             renaming = true
         }
-        .onChange(of: conversation.id) { focusToken += 1 }
+        .onChange(of: conversation.id) {
+            focusToken += 1
+            shownCount = Self.pageSize
+            messages = []
+        }
         .sheet(isPresented: $renaming) {
             ConversationRenameSheet(cardId: card.id, conversation: conversation, isPresented: $renaming)
         }
