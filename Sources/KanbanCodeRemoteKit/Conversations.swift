@@ -267,24 +267,64 @@ public enum ConversationLog {
     /// Folds the log into its conversations, most recent first. Lines that
     /// do not parse (a write cut short) are skipped.
     public static func fold(_ data: Data) -> [ConversationThread] {
-        let decoder = JSONDecoder.remote
-        var order: [String] = []
-        var threads: [String: Builder] = [:]
-        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
-            guard let event = try? decoder.decode(ConversationEvent.self, from: Data(line)) else { continue }
-            if threads[event.conv] == nil {
-                order.append(event.conv)
-                threads[event.conv] = Builder(id: event.conv, createdAt: event.at)
-            }
-            threads[event.conv]!.apply(event)
-        }
-        return order.compactMap { threads[$0]?.thread }
-            .sorted { $0.summary.updatedAt > $1.summary.updatedAt }
+        var folder = Folder()
+        folder.feed(data)
+        return folder.threads
     }
 
     public static func fold(path: String) -> [ConversationThread] {
         guard let data = FileManager.default.contents(atPath: path) else { return [] }
         return fold(data)
+    }
+
+    /// A fold that grows with the log: `feed` takes the bytes from
+    /// `consumed` on, so a log that only had lines appended is decoded once
+    /// per line instead of from the start on every read.
+    public struct Folder: Sendable {
+        private var order: [String] = []
+        private var builders: [String: Builder] = [:]
+        /// Bytes taken, up to the end of the last whole line.
+        public private(set) var consumed = 0
+        /// A last line without its newline yet: shown when it decodes, read
+        /// again with the rest of it on the next feed.
+        private var tail = Data()
+
+        public init() {}
+
+        /// Applies the whole lines of `data`, the log's bytes from `consumed`.
+        public mutating func feed(_ data: Data) {
+            let decoder = JSONDecoder.remote
+            guard let lastNewline = data.lastIndex(of: 0x0A) else {
+                tail = data
+                return
+            }
+            for line in data[data.startIndex..<lastNewline].split(separator: 0x0A, omittingEmptySubsequences: true) {
+                if let event = try? decoder.decode(ConversationEvent.self, from: Data(line)) {
+                    Self.apply(event, order: &order, builders: &builders)
+                }
+            }
+            consumed += lastNewline - data.startIndex + 1
+            tail = Data(data[(lastNewline + 1)...])
+        }
+
+        /// The conversations, most recent first.
+        public var threads: [ConversationThread] {
+            var order = order
+            var builders = builders
+            if !tail.isEmpty, let event = try? JSONDecoder.remote.decode(ConversationEvent.self, from: tail) {
+                Self.apply(event, order: &order, builders: &builders)
+            }
+            return order.compactMap { builders[$0]?.thread }
+                .sorted { $0.summary.updatedAt > $1.summary.updatedAt }
+        }
+
+        private static func apply(_ event: ConversationEvent, order: inout [String], builders: inout [String: Builder]) {
+            if builders[event.conv] == nil {
+                order.append(event.conv)
+                builders[event.conv] = Builder(id: event.conv, createdAt: event.at)
+            }
+            builders[event.conv]!.apply(event)
+        }
     }
 
     private struct Builder {
@@ -301,6 +341,8 @@ public enum ConversationLog {
         /// Marked unread by the human, until the next read.
         var markedUnread = false
         var messages: [RemoteConversationMessage] = []
+        /// Where each message is in `messages`, by id.
+        var messageIndex: [String: Int] = [:]
 
         init(id: String, createdAt: Date) {
             self.id = id
@@ -323,10 +365,11 @@ public enum ConversationLog {
             case .message:
                 guard let id = event.id, let role = event.role else { return }
                 let text = event.text ?? ""
-                if let index = messages.firstIndex(where: { $0.id == id }) {
+                if let index = messageIndex[id] {
                     messages[index].text = text
                     if let images = event.images { messages[index].images = images }
                 } else {
+                    messageIndex[id] = messages.count
                     messages.append(.init(id: id, role: role, text: text, at: event.at, images: event.images))
                 }
             case .title:
@@ -341,7 +384,9 @@ public enum ConversationLog {
             case .unread:
                 markedUnread = true
             case .retracted:
-                messages.removeAll { $0.id == event.id }
+                guard let id = event.id, messageIndex[id] != nil else { return }
+                messages.removeAll { $0.id == id }
+                messageIndex = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
             case .archived:
                 archived = event.archived ?? true
             }

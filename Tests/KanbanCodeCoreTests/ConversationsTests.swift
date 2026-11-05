@@ -786,6 +786,24 @@ struct ConversationHostTests {
         #expect(tmux.sent.isEmpty)
     }
 
+    @Test("a log reloaded off the main actor lands on the board as a reload on it does")
+    func backgroundReload() async throws {
+        let (_, engine, store, _, dir) = makeHost()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let conv = try await engine.createConversation(cardId: "card_a", RemoteConversationCreate(), by: "human")
+        // The CLI appends the agent's reply straight to the log.
+        try engine.conversationStore.append(cardId: "card_a", [
+            .message(conv.id, id: "r1", role: .agent, text: "done"),
+            .title(conv.id, "Leases", by: "agent"),
+        ])
+        #expect(store.state.conversations["card_a"]?.first?.messageCount == 0)
+        await engine.reloadConversationsInBackground(cardId: "card_a")
+        let loaded = try #require(store.state.conversations["card_a"]?.first)
+        #expect(loaded.messageCount == 1)
+        #expect(loaded.title == "Leases")
+        #expect(loaded.waiting)
+    }
+
     @Test("the raw log serves from an offset, for the mirror")
     func raw() async throws {
         let (host, _, _, _, dir) = makeHost()

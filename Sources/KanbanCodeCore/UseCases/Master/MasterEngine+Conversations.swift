@@ -109,9 +109,25 @@ extension MasterEngine {
     }
 
     /// Reads the card's log again, its own or the copy of its owner's.
+    /// The store reads only what was appended since its last fold, so this
+    /// is cheap right after a write of this master's.
     public func reloadConversations(cardId: String) {
         let owner = isForeign(cardId) ? store.state.links[cardId]?.ownerMachine : nil
-        let threads = conversationStore.threads(cardId: cardId, ownerMachine: owner)
+        applyConversations(cardId: cardId, threads: conversationStore.threads(cardId: cardId, ownerMachine: owner))
+    }
+
+    /// Reads the card's log again off the main actor: a log first read, or
+    /// one another master appended to, can take a long fold.
+    public func reloadConversationsInBackground(cardId: String) async {
+        let owner = isForeign(cardId) ? store.state.links[cardId]?.ownerMachine : nil
+        let conversationStore = conversationStore
+        let threads = await Task.detached(priority: .utility) {
+            conversationStore.threads(cardId: cardId, ownerMachine: owner)
+        }.value
+        applyConversations(cardId: cardId, threads: threads)
+    }
+
+    private func applyConversations(cardId: String, threads: [ConversationThread]) {
         store.dispatch(.conversationsLoaded(cardId: cardId, conversations: threads.map(\.summary)))
         settleSentMessages(cardId: cardId, threads: threads)
     }
@@ -165,7 +181,7 @@ extension MasterEngine {
                 changed.insert(file.cardId)
             }
             for cardId in changed {
-                reloadConversations(cardId: cardId)
+                await reloadConversationsInBackground(cardId: cardId)
             }
             failUnconfirmedMessages()
             try? await Task.sleep(for: interval)
@@ -192,12 +208,13 @@ extension MasterEngine {
                 continue
             }
             if slice.data.isEmpty { break }
-            Self.appendBytes(slice.data, to: path)
+            let data = slice.data
+            await Task.detached(priority: .utility) { Self.appendBytes(data, to: path) }.value
             wrote = true
             size += slice.data.count
             if size >= slice.size { break }
         }
-        if wrote || restarted { reloadConversations(cardId: cardId) }
+        if wrote || restarted { await reloadConversationsInBackground(cardId: cardId) }
     }
 
     private nonisolated static func appendBytes(_ data: Data, to path: String) {

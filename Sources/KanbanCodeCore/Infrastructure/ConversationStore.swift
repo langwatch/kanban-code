@@ -61,7 +61,57 @@ public final class ConversationStore: @unchecked Sendable {
 
     public func threads(cardId: String, ownerMachine: String? = nil) -> [ConversationThread] {
         guard let path = readPath(cardId: cardId, ownerMachine: ownerMachine) else { return [] }
-        return ConversationLog.fold(path: path)
+        return threads(atPath: path)
+    }
+
+    /// What each log folded into when it was last read, and from how many
+    /// of its bytes.
+    private struct Folded {
+        var size: Int
+        var modified: Date
+        var fileNumber: Int?
+        var folder: ConversationLog.Folder
+        var threads: [ConversationThread]
+    }
+
+    private var folded: [String: Folded] = [:]
+    private let foldLock = NSLock()
+
+    /// The log at `path`, folded. An unchanged log is not read again, and a
+    /// log that grew is read only from where the last fold stopped; one that
+    /// shrank or was replaced is folded from the start. The fold runs
+    /// outside the lock, so a reader on the main thread never waits on a
+    /// long fold another thread is doing.
+    public func threads(atPath path: String) -> [ConversationThread] {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            foldLock.lock()
+            folded[path] = nil
+            foldLock.unlock()
+            return []
+        }
+        let size = (attrs[.size] as? Int) ?? 0
+        let modified = (attrs[.modificationDate] as? Date) ?? .distantPast
+        let fileNumber = (attrs[.systemFileNumber] as? NSNumber)?.intValue
+        foldLock.lock()
+        let cached = folded[path]
+        foldLock.unlock()
+        if let cached, cached.size == size, cached.modified == modified, cached.fileNumber == fileNumber {
+            return cached.threads
+        }
+        var folder = ConversationLog.Folder()
+        if let cached, cached.fileNumber == fileNumber, size >= cached.folder.consumed {
+            folder = cached.folder
+        }
+        guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: UInt64(folder.consumed))
+        let data = (try? handle.readToEnd()) ?? Data()
+        folder.feed(data)
+        let threads = folder.threads
+        foldLock.lock()
+        folded[path] = Folded(size: size, modified: modified, fileNumber: fileNumber, folder: folder, threads: threads)
+        foldLock.unlock()
+        return threads
     }
 
     /// Appends events to the log of a card this master owns, as one write.
