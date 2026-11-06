@@ -42,6 +42,10 @@ public struct AssistantLogin: Sendable, Equatable {
     public let fingerprint: String
     /// The account the tokens belong to, when the file names it (Codex).
     public let accountId: String?
+    /// Seconds since 1970 when the access token stops working, when the copy
+    /// tells: `expiresAt` for Claude, the `exp` claim of the access token
+    /// for Codex.
+    public let expiresAt: TimeInterval?
 
     /// Nil when the bytes are not a login of this kind (no JSON, no token).
     public init?(kind: AssistantLoginKind, data: Data) {
@@ -52,9 +56,34 @@ public struct AssistantLogin: Sendable, Equatable {
         self.freshness = freshness
         self.fingerprint = Self.fingerprint(of: object, kind: kind)
         switch kind {
-        case .claude: self.accountId = nil
-        case .codex: self.accountId = (object["tokens"] as? [String: Any])?["account_id"] as? String
+        case .claude:
+            self.accountId = nil
+            let milliseconds = ((object["claudeAiOauth"] as? [String: Any])?["expiresAt"] as? NSNumber)?.doubleValue
+            self.expiresAt = milliseconds.map { $0 / 1000 }
+        case .codex:
+            let tokens = object["tokens"] as? [String: Any]
+            self.accountId = tokens?["account_id"] as? String
+            self.expiresAt = (tokens?["access_token"] as? String).flatMap(Self.jwtExpiry)
         }
+    }
+
+    /// The access token has stopped working. Such a copy is never sent
+    /// anywhere: it can only replace a working login with a dead one.
+    public func isExpired(now: TimeInterval) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt <= now
+    }
+
+    /// The `exp` claim of a JWT, nil when the token is not one.
+    static func jwtExpiry(_ token: String) -> TimeInterval? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = (claims["exp"] as? NSNumber)?.doubleValue else { return nil }
+        return exp
     }
 
     public static func == (lhs: AssistantLogin, rhs: AssistantLogin) -> Bool {
@@ -111,12 +140,36 @@ public struct AssistantLogin: Sendable, Equatable {
     /// Mac's account goes to the machine, whichever copy expires later (an
     /// account switch on the Mac is never undone by a machine). A Mac login
     /// that could not be read is never overwritten: only a Mac that has no
-    /// login at all takes the machine's.
+    /// login at all takes the machine's. A copy whose access token already
+    /// expired never moves and never counts as the newer one.
     public static func decide(
         local: LocalLogin,
         remote: AssistantLogin?,
         localAccount: String? = nil,
-        remoteAccount: String? = nil
+        remoteAccount: String? = nil,
+        now: TimeInterval = Date().timeIntervalSince1970
+    ) -> Decision {
+        let decision = decideIgnoringExpiry(
+            local: local, remote: remote, localAccount: localAccount, remoteAccount: remoteAccount)
+        return withoutExpired(decision, local: local.login, remote: remote, now: now)
+    }
+
+    /// Drops a move that would send a copy whose access token expired.
+    public static func withoutExpired(
+        _ decision: Decision, local: AssistantLogin?, remote: AssistantLogin?, now: TimeInterval
+    ) -> Decision {
+        switch decision {
+        case .push where local?.isExpired(now: now) ?? true: return .none
+        case .pull where remote?.isExpired(now: now) ?? true: return .none
+        default: return decision
+        }
+    }
+
+    private static func decideIgnoringExpiry(
+        local: LocalLogin,
+        remote: AssistantLogin?,
+        localAccount: String?,
+        remoteAccount: String?
     ) -> Decision {
         switch (local, remote) {
         case (.unreadable, _): return .none
@@ -173,6 +226,60 @@ public protocol LocalLoginStore: Sendable {
     /// The `oauthAccount` block of `~/.claude.json`: who the Claude login is,
     /// shown by Claude and used for its feature flags.
     func claudeAccount() async -> [String: Any]?
+    /// The rush config folder when rush manages the Claude accounts of this
+    /// Mac, nil otherwise.
+    func rushClaudeConfig() async -> String?
+}
+
+extension LocalLoginStore {
+    public func rushClaudeConfig() async -> String? { nil }
+}
+
+/// rush (agtop) signs in to Claude accounts itself: one config folder per
+/// account under `<config>/claude/<id>`, the active one named in
+/// `<config>/claude/using`, the sign-ins listed in `config.json` under
+/// `logins`. It copies whatever login a Claude folder holds back into its
+/// own store, so on such a machine the plain Claude login is not the source
+/// of truth and a copy written there can replace a sign-in rush just got.
+public enum RushClaudeAccounts {
+    /// The config folders rush may use under a home: `RUSH_HOME` first.
+    public static func configFolders(home: String, environment: [String: String]) -> [String] {
+        var folders: [String] = []
+        if let custom = environment["RUSH_HOME"], !custom.isEmpty { folders.append(custom) }
+        folders.append("\(home)/.config/rush")
+        folders.append("\(home)/.config/agtop")
+        return folders
+    }
+
+    /// The first folder where rush manages Claude accounts, nil when none.
+    public static func managingFolder(
+        home: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        configFolders(home: home, environment: environment).first(where: manages)
+    }
+
+    static func manages(_ folder: String) -> Bool {
+        if let using = FileManager.default.contents(atPath: "\(folder)/claude/using"),
+           !String(decoding: using, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        guard let data = FileManager.default.contents(atPath: "\(folder)/config.json"),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let logins = config["logins"] as? [Any] else { return false }
+        return !logins.isEmpty
+    }
+
+    /// The same check as a shell snippet for a machine: prints the folder,
+    /// or nothing.
+    public static func detectScript(home: String) -> String {
+        let folders = ["\(home)/.config/rush", "\(home)/.config/agtop"].map(BoxdMachineSupervisor.shellEscape)
+        return "rush=; for d in \"${RUSH_HOME:-}\" " + folders.joined(separator: " ")
+            + "; do [ -n \"$d\" ] || continue; "
+            + "if [ -s \"$d/claude/using\" ] && [ -n \"$(tr -d ' \\n\\r\\t' < \"$d/claude/using\")\" ]; then rush=\"$d\"; break; fi; "
+            + "if [ -f \"$d/config.json\" ] && tr -d ' \\n\\r\\t' < \"$d/config.json\" | grep '\"logins\":\\[[^]]' >/dev/null; then rush=\"$d\"; break; fi; "
+            + "done; echo \"$rush\""
+    }
 }
 
 /// Keychain for Claude, files for the rest, as the assistants do on a Mac.
@@ -248,6 +355,10 @@ public struct MacLoginStore: LocalLoginStore {
         guard let data = FileManager.default.contents(atPath: "\(home)/.claude.json"),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object["oauthAccount"] as? [String: Any]
+    }
+
+    public func rushClaudeConfig() async -> String? {
+        RushClaudeAccounts.managingFolder(home: home)
     }
 }
 
@@ -369,6 +480,7 @@ public struct AssistantLoginSync: Sendable {
     private let machineName: String
     private let owners: any ClaudeTokenOwnerResolver
     private let accounts: any LoginAccountMemory
+    private let now: @Sendable () -> Date
 
     public init(
         runner: any RemoteCommandRunner,
@@ -376,8 +488,10 @@ public struct AssistantLoginSync: Sendable {
         remoteHome: String,
         machineName: String = "machine",
         owners: any ClaudeTokenOwnerResolver = AnthropicTokenOwner.shared,
-        accounts: any LoginAccountMemory = InMemoryLoginAccountMemory()
+        accounts: any LoginAccountMemory = InMemoryLoginAccountMemory(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
+        self.now = now
         self.runner = runner
         self.store = store
         self.remoteHome = remoteHome
@@ -404,7 +518,8 @@ public struct AssistantLoginSync: Sendable {
 
     /// One command reads every login file of the machine, one line each,
     /// base64 so the JSON never meets the shell, then the `accountUuid` of
-    /// the machine's Claude account on the last line.
+    /// the machine's Claude account, then the rush config folder when rush
+    /// manages the machine's Claude accounts (empty otherwise).
     public static func readScript(remoteHome: String) -> String {
         let paths = AssistantLoginKind.allCases.map { "\(remoteHome)/\($0.remoteRelativePath)" }
         let config = BoxdMachineSupervisor.shellEscape("\(remoteHome)/.claude.json")
@@ -413,7 +528,8 @@ public struct AssistantLoginSync: Sendable {
         return "for f in " + paths.map(BoxdMachineSupervisor.shellEscape).joined(separator: " ")
             + "; do if [ -f \"$f\" ]; then base64 -w0 \"$f\"; fi; echo; done; "
             + nodePrefix + "if command -v node >/dev/null 2>&1; then node -e "
-            + BoxdMachineSupervisor.shellEscape(account) + " " + config + " 2>/dev/null; fi; echo"
+            + BoxdMachineSupervisor.shellEscape(account) + " " + config + " 2>/dev/null; fi; echo; "
+            + RushClaudeAccounts.detectScript(home: remoteHome)
     }
 
     /// Merges the Mac's `oauthAccount` into the machine's `~/.claude.json`.
@@ -438,8 +554,16 @@ public struct AssistantLoginSync: Sendable {
         let kinds = AssistantLoginKind.allCases
         let accountLine = kinds.count < lines.count ? lines[kinds.count].trimmingCharacters(in: .whitespaces) : ""
         let remoteClaudeAccount = accountLine.isEmpty ? nil : accountLine
+        let rushLine = kinds.count + 1 < lines.count ? lines[kinds.count + 1].trimmingCharacters(in: .whitespaces) : ""
+        let remoteRush = rushLine.isEmpty ? nil : rushLine
+        let localRush = await store.rushClaudeConfig()
+        let nowSeconds = now().timeIntervalSince1970
         var changes: [Change] = []
         for (index, kind) in kinds.enumerated() {
+            if kind == .claude, let remoteRush {
+                KanbanCodeLog.info("boxd", "\(machineName): rush manages the Claude accounts there (\(remoteRush)), Claude login not synced")
+                continue
+            }
             let line = index < lines.count ? lines[index].trimmingCharacters(in: .whitespaces) : ""
             let remote = line.isEmpty ? nil : Data(base64Encoded: line).flatMap { AssistantLogin(kind: kind, data: $0) }
             let local = LocalLogin(await store.read(kind), kind: kind)
@@ -467,7 +591,7 @@ public struct AssistantLoginSync: Sendable {
                 remoteAccount = remote?.accountId
             }
             var decision = AssistantLogin.decide(
-                local: local, remote: remote, localAccount: localAccount, remoteAccount: remoteAccount)
+                local: local, remote: remote, localAccount: localAccount, remoteAccount: remoteAccount, now: nowSeconds)
             let accountChanged = localAccount != nil && remoteAccount != nil && localAccount != remoteAccount
             if accountChanged, let localAccount, let remoteAccount {
                 let agreed = await accounts.agreed(kind, machine: machineName)
@@ -479,6 +603,13 @@ public struct AssistantLoginSync: Sendable {
                 }
             } else if let localAccount, localAccount == remoteAccount {
                 await accounts.record(kind, machine: machineName, account: localAccount)
+            }
+            decision = AssistantLogin.withoutExpired(decision, local: local.login, remote: remote, now: nowSeconds)
+            if decision == .pull, kind == .claude, let localRush {
+                // The Keychain item is not what rush runs on this Mac, and
+                // rush may copy it into its own store.
+                KanbanCodeLog.info("boxd", "\(machineName): rush manages the Claude accounts on this Mac (\(localRush)), machine's Claude login not taken")
+                decision = .none
             }
             guard decision != .none else { continue }
             if decision == .push, let localAccount {

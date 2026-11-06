@@ -15,12 +15,16 @@ final class FakeLoginStore: LocalLoginStore, @unchecked Sendable {
     private var _failures: [AssistantLoginKind: String] = [:]
     private var _account: [String: Any]?
     private var _writes: [AssistantLoginKind] = []
+    private let rush: String?
 
-    init(logins: [AssistantLoginKind: Data] = [:], account: [String: Any]? = nil, failures: [AssistantLoginKind: String] = [:]) {
+    init(logins: [AssistantLoginKind: Data] = [:], account: [String: Any]? = nil, failures: [AssistantLoginKind: String] = [:], rush: String? = nil) {
         _logins = logins
         _account = account
         _failures = failures
+        self.rush = rush
     }
+
+    func rushClaudeConfig() async -> String? { rush }
 
     var writes: [AssistantLoginKind] { withLock(lock) { _writes } }
     func data(_ kind: AssistantLoginKind) -> Data? { withLock(lock) { _logins[kind] } }
@@ -51,6 +55,10 @@ struct FakeOwners: ClaudeTokenOwnerResolver {
     }
 }
 
+/// Milliseconds since 1970 far in the future (2096): copies built on it
+/// have not expired.
+private let future = 4_000_000_000_000
+
 private func claudeLogin(access: String, expiresAt: Int) -> Data {
     let json = """
     {"claudeAiOauth":{"accessToken":"\(access)","refreshToken":"sk-ant-ort01-r","expiresAt":\(expiresAt),"scopes":["user:inference"],"subscriptionType":"max"}}
@@ -58,10 +66,24 @@ private func claudeLogin(access: String, expiresAt: Int) -> Data {
     return json.data(using: .utf8)!
 }
 
-private func codexLogin(refreshed: String?, token: String = "id") -> Data {
+private func codexLogin(refreshed: String?, token: String = "id", accessExpiresAt: Int? = nil) -> Data {
     let refresh = refreshed.map { ",\"last_refresh\":\"\($0)\"" } ?? ""
-    return "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"id_token\":\"\(token)\"}\(refresh)}".data(using: .utf8)!
+    let access = accessExpiresAt.map { ",\"access_token\":\"\(jwt(exp: $0))\"" } ?? ""
+    return "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"id_token\":\"\(token)\"\(access)}\(refresh)}".data(using: .utf8)!
 }
+
+/// An unsigned JWT with only an `exp` claim, base64url like a real one.
+private func jwt(exp: Int) -> String {
+    func encode(_ text: String) -> String {
+        Data(text.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    return encode("{\"alg\":\"none\"}") + "." + encode("{\"exp\":\(exp),\"sub\":\"user\"}") + ".sig"
+}
+
+/// One remote answer line: the login, base64, as the read script prints it.
+private func line(_ data: Data?) -> String { data?.base64EncodedString() ?? "" }
 
 @Suite("Assistant logins")
 struct AssistantLoginTests {
@@ -89,9 +111,9 @@ struct AssistantLoginTests {
 
     @Test("The newest copy wins, the Mac on a tie")
     func decision() throws {
-        let older = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "old", expiresAt: 1_000)))
-        let newer = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "new", expiresAt: 2_000)))
-        let sameAge = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "other", expiresAt: 2_000)))
+        let older = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "old", expiresAt: future + 1_000)))
+        let newer = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "new", expiresAt: future + 2_000)))
+        let sameAge = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "other", expiresAt: future + 2_000)))
         #expect(AssistantLogin.decide(local: .absent, remote: nil) == .none)
         #expect(AssistantLogin.decide(local: .present(newer), remote: nil) == .push)
         #expect(AssistantLogin.decide(local: .absent, remote: newer) == .pull)
@@ -108,7 +130,7 @@ struct AssistantLoginTests {
 
     @Test("A Mac login that could not be read is never replaced")
     func unreadableLocalMovesNothing() throws {
-        let remote = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "new", expiresAt: 2_000)))
+        let remote = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "new", expiresAt: future + 2_000)))
         #expect(AssistantLogin.decide(local: .unreadable("timed out"), remote: remote) == .none)
         #expect(AssistantLogin.decide(local: .unreadable("timed out"), remote: nil) == .none)
         #expect(LocalLogin(.found(Data("garbage".utf8)), kind: .claude) == .unreadable("7 bytes that are not a Claude login"))
@@ -136,7 +158,7 @@ struct AssistantLoginTests {
         #expect(local.data != remote.data)
         #expect(local == remote)
         #expect(AssistantLogin.decide(local: .present(local), remote: remote) == .none)
-        let refreshed = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "a/b", expiresAt: 3_000)))
+        let refreshed = try #require(AssistantLogin(kind: .claude, data: claudeLogin(access: "a/b", expiresAt: future + 3_000)))
         #expect(AssistantLogin.decide(local: .present(local), remote: refreshed) == .pull)
     }
 
@@ -233,8 +255,8 @@ struct LoginNoticeTests {
 struct AssistantLoginSyncTests {
     private let home = "/home/boxd"
 
-    private func remoteAnswer(claude: Data?, codex: Data?, claudeAccount: String? = nil) -> ShellCommand.Result {
-        let lines = [claude, codex].map { $0?.base64EncodedString() ?? "" } + [claudeAccount ?? ""]
+    private func remoteAnswer(claude: Data?, codex: Data?, claudeAccount: String? = nil, rush: String? = nil) -> ShellCommand.Result {
+        let lines = [claude, codex].map { $0?.base64EncodedString() ?? "" } + [claudeAccount ?? "", rush ?? ""]
         return ShellCommand.Result(exitCode: 0, stdout: lines.joined(separator: "\n") + "\n", stderr: "")
     }
 
@@ -244,9 +266,9 @@ struct AssistantLoginSyncTests {
 
     @Test("A newer login on the Mac goes to the machine with the account")
     func pushesNewerLocal() async {
-        let local = claudeLogin(access: "new", expiresAt: 2_000)
+        let local = claudeLogin(access: "new", expiresAt: future + 2_000)
         let runner = FakeRemoteCommandRunner()
-        runner.script(readCall(), remoteAnswer(claude: claudeLogin(access: "old", expiresAt: 1_000), codex: nil))
+        runner.script(readCall(), remoteAnswer(claude: claudeLogin(access: "old", expiresAt: future + 1_000), codex: nil))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1", "emailAddress": "a@b.c"])
 
         let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
@@ -264,10 +286,10 @@ struct AssistantLoginSyncTests {
 
     @Test("A newer login on the machine comes back to the Mac")
     func pullsNewerRemote() async {
-        let remote = claudeLogin(access: "refreshed", expiresAt: 3_000)
+        let remote = claudeLogin(access: "refreshed", expiresAt: future + 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil))
-        let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "old", expiresAt: 2_000)])
+        let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "old", expiresAt: future + 2_000)])
 
         let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
 
@@ -279,7 +301,7 @@ struct AssistantLoginSyncTests {
     @Test("A Mac login that could not be read is not overwritten by the machine's")
     func unreadableLocalIsKept() async {
         let runner = FakeRemoteCommandRunner()
-        runner.script(readCall(), remoteAnswer(claude: claudeLogin(access: "refreshed", expiresAt: 3_000), codex: nil))
+        runner.script(readCall(), remoteAnswer(claude: claudeLogin(access: "refreshed", expiresAt: future + 3_000), codex: nil))
         let store = FakeLoginStore(failures: [.claude: "Keychain read exited 36"])
 
         let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
@@ -291,7 +313,7 @@ struct AssistantLoginSyncTests {
 
     @Test("The same login written differently on the machine moves nothing")
     func reformattedCopyMovesNothing() async throws {
-        let local = claudeLogin(access: "same", expiresAt: 2_000)
+        let local = claudeLogin(access: "same", expiresAt: future + 2_000)
         let object = try JSONSerialization.jsonObject(with: local)
         let pretty = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted])
         let runner = FakeRemoteCommandRunner()
@@ -307,8 +329,8 @@ struct AssistantLoginSyncTests {
 
     @Test("A machine that never agreed with the Mac gets the Mac's account, however fresh its own")
     func otherAccountOnMachineGetsTheMacs() async {
-        let local = claudeLogin(access: "mac", expiresAt: 2_000)
-        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let local = claudeLogin(access: "mac", expiresAt: future + 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: future + 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1"])
@@ -324,8 +346,8 @@ struct AssistantLoginSyncTests {
 
     @Test("A machine that switched account since it last agreed with the Mac keeps it")
     func machineSwitchIsKept() async {
-        let local = claudeLogin(access: "mac", expiresAt: 2_000)
-        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let local = claudeLogin(access: "mac", expiresAt: future + 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: future + 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1"])
@@ -341,8 +363,8 @@ struct AssistantLoginSyncTests {
 
     @Test("A Mac that switched account since it last agreed sends it to the machine")
     func macSwitchIsSent() async {
-        let local = claudeLogin(access: "mac", expiresAt: 2_000)
-        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let local = claudeLogin(access: "mac", expiresAt: future + 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: future + 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u2"))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u3"])
@@ -357,11 +379,11 @@ struct AssistantLoginSyncTests {
 
     @Test("A fresher login of the same account comes back to the Mac")
     func sameAccountPulls() async {
-        let remote = claudeLogin(access: "refreshed", expiresAt: 3_000)
+        let remote = claudeLogin(access: "refreshed", expiresAt: future + 3_000)
         for remoteAccount in ["u1", ""] {
             let runner = FakeRemoteCommandRunner()
             runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: remoteAccount))
-            let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "old", expiresAt: 2_000)], account: ["accountUuid": "u1"])
+            let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "old", expiresAt: future + 2_000)], account: ["accountUuid": "u1"])
 
             let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
 
@@ -372,7 +394,7 @@ struct AssistantLoginSyncTests {
 
     @Test("Equal tokens move nothing, whatever account each side's record names")
     func equalTokensIgnoreAccountRecords() async {
-        let login = claudeLogin(access: "same", expiresAt: 2_000)
+        let login = claudeLogin(access: "same", expiresAt: future + 2_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: login, codex: nil, claudeAccount: "u2"))
         let store = FakeLoginStore(logins: [.claude: login], account: ["accountUuid": "u1"])
@@ -387,8 +409,8 @@ struct AssistantLoginSyncTests {
     func tokenOwnerDecides() async {
         // The Mac's record and the machine's both name u1, but the machine
         // holds u2's fresher tokens: they must not come back to the Mac.
-        let local = claudeLogin(access: "mac", expiresAt: 2_000)
-        let remote = claudeLogin(access: "machine", expiresAt: 3_000)
+        let local = claudeLogin(access: "mac", expiresAt: future + 2_000)
+        let remote = claudeLogin(access: "machine", expiresAt: future + 3_000)
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: remote, codex: nil, claudeAccount: "u1"))
         let store = FakeLoginStore(logins: [.claude: local], account: ["accountUuid": "u1"])
@@ -410,7 +432,7 @@ struct AssistantLoginSyncTests {
 
     @Test("Equal copies move nothing, each assistant on its own")
     func equalCopiesAndCodex() async {
-        let claude = claudeLogin(access: "same", expiresAt: 2_000)
+        let claude = claudeLogin(access: "same", expiresAt: future + 2_000)
         let codexLocal = codexLogin(refreshed: "2026-08-21T12:59:57Z", token: "new")
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), remoteAnswer(claude: claude, codex: codexLogin(refreshed: "2026-08-01T00:00:00Z", token: "old")))
@@ -427,7 +449,7 @@ struct AssistantLoginSyncTests {
     func seedsEmptyMachine() async {
         let runner = FakeRemoteCommandRunner()
         runner.script(readCall(), ShellCommand.Result(exitCode: 0, stdout: "\n\n", stderr: ""))
-        let local = claudeLogin(access: "mine", expiresAt: 2_000)
+        let local = claudeLogin(access: "mine", expiresAt: future + 2_000)
         let store = FakeLoginStore(logins: [.claude: local])
 
         let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
@@ -440,11 +462,191 @@ struct AssistantLoginSyncTests {
     func failedReadMovesNothing() async {
         let runner = FakeRemoteCommandRunner()
         runner.setFallback(ShellCommand.Result(exitCode: 1, stdout: "", stderr: "boom"))
-        let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "mine", expiresAt: 2_000)])
+        let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "mine", expiresAt: future + 2_000)])
 
         let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
 
         #expect(changes.isEmpty)
         #expect(runner.files.isEmpty)
+    }
+
+    @Test("An expired Claude login on the Mac is never sent, whatever the machine holds")
+    func expiredLocalIsNeverPushed() async {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let expired = claudeLogin(access: "dead", expiresAt: 1_999_000_000_000)
+        for remote in [nil, claudeLogin(access: "older-dead", expiresAt: 1_000_000_000_000)] as [Data?] {
+            let runner = FakeRemoteCommandRunner()
+            runner.script(readCall(), remoteAnswer(claude: remote, codex: nil))
+            let store = FakeLoginStore(logins: [.claude: expired], account: ["accountUuid": "u1"])
+
+            let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, now: { now }).run()
+
+            #expect(changes.isEmpty)
+            #expect(runner.files.isEmpty)
+            #expect(store.writes.isEmpty)
+        }
+    }
+
+    @Test("An expired Claude login on the Mac never replaces a live one of another account")
+    func expiredLocalNeverReplacesOtherAccount() async {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(
+            claude: claudeLogin(access: "live", expiresAt: 2_001_000_000_000), codex: nil, claudeAccount: "u2"))
+        let store = FakeLoginStore(
+            logins: [.claude: claudeLogin(access: "dead", expiresAt: 1_999_000_000_000)], account: ["accountUuid": "u1"])
+
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, now: { now }).run()
+
+        #expect(changes.isEmpty)
+        #expect(runner.files.isEmpty)
+        #expect(store.writes.isEmpty)
+    }
+
+    @Test("An expired login on the machine never comes back to the Mac")
+    func expiredRemoteIsNeverPulled() async {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(
+            claude: claudeLogin(access: "dead", expiresAt: 1_999_000_000_000),
+            codex: codexLogin(refreshed: "2026-08-21T12:59:57Z", token: "dead", accessExpiresAt: 1_999_000_000)))
+        let store = FakeLoginStore()
+
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home, now: { now }).run()
+
+        #expect(changes.isEmpty)
+        #expect(store.writes.isEmpty)
+    }
+
+    @Test("An expired Codex login is never sent, a live one still is")
+    func codexExpiry() async {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let dead = codexLogin(refreshed: "2026-08-21T12:59:57Z", token: "dead", accessExpiresAt: 1_999_000_000)
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(claude: nil, codex: nil))
+        let changes = await AssistantLoginSync(
+            runner: runner, store: FakeLoginStore(logins: [.codex: dead]), remoteHome: home, now: { now }).run()
+        #expect(changes.isEmpty)
+        #expect(runner.files.isEmpty)
+
+        let live = codexLogin(refreshed: "2026-08-21T12:59:57Z", token: "live", accessExpiresAt: 2_001_000_000)
+        let runner2 = FakeRemoteCommandRunner()
+        runner2.script(readCall(), remoteAnswer(claude: nil, codex: nil))
+        let pushed = await AssistantLoginSync(
+            runner: runner2, store: FakeLoginStore(logins: [.codex: live]), remoteHome: home, now: { now }).run()
+        #expect(pushed == [AssistantLoginSync.Change(kind: .codex, decision: .push)])
+        #expect(runner2.files["/home/boxd/.codex/auth.json"] == live)
+    }
+
+    @Test("A machine where rush manages Claude accounts gets no Claude login, Codex still syncs")
+    func rushRemoteSkipsClaude() async {
+        let codexLocal = codexLogin(refreshed: "2026-08-21T12:59:57Z", token: "new")
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(
+            claude: claudeLogin(access: "rush", expiresAt: future + 1_000),
+            codex: codexLogin(refreshed: "2026-08-01T00:00:00Z", token: "old"),
+            claudeAccount: "u2", rush: "/root/.config/agtop"))
+        let store = FakeLoginStore(
+            logins: [.claude: claudeLogin(access: "mac", expiresAt: future + 2_000), .codex: codexLocal],
+            account: ["accountUuid": "u1"])
+
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
+
+        #expect(changes == [AssistantLoginSync.Change(kind: .codex, decision: .push)])
+        #expect(runner.files["/home/boxd/.claude/.credentials.json"] == nil)
+        #expect(runner.files["/home/boxd/.codex/auth.json"] == codexLocal)
+        #expect(!runner.execCalls.contains { $0.count == 5 && $0[3] == "node" })
+        #expect(store.writes.isEmpty)
+    }
+
+    @Test("A Mac where rush manages Claude accounts still sends its live login but never takes one")
+    func rushLocalNeverPulls() async {
+        let runner = FakeRemoteCommandRunner()
+        runner.script(readCall(), remoteAnswer(claude: claudeLogin(access: "refreshed", expiresAt: future + 3_000), codex: nil))
+        let store = FakeLoginStore(logins: [.claude: claudeLogin(access: "old", expiresAt: future + 2_000)], rush: "/Users/me/.config/rush")
+        let changes = await AssistantLoginSync(runner: runner, store: store, remoteHome: home).run()
+        #expect(changes.isEmpty)
+        #expect(store.writes.isEmpty)
+
+        let local = claudeLogin(access: "new", expiresAt: future + 3_000)
+        let runner2 = FakeRemoteCommandRunner()
+        runner2.script(readCall(), remoteAnswer(claude: claudeLogin(access: "old", expiresAt: future + 1_000), codex: nil))
+        let store2 = FakeLoginStore(logins: [.claude: local], rush: "/Users/me/.config/rush")
+        let pushed = await AssistantLoginSync(runner: runner2, store: store2, remoteHome: home).run()
+        #expect(pushed == [AssistantLoginSync.Change(kind: .claude, decision: .push)])
+        #expect(runner2.files["/home/boxd/.claude/.credentials.json"] == local)
+    }
+}
+
+@Suite("rush detection")
+struct RushClaudeAccountsTests {
+    private func makeHome() throws -> String {
+        let home = NSTemporaryDirectory() + "rush-detect-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        return home
+    }
+
+    private func write(_ text: String, to path: String) throws {
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: URL(fileURLWithPath: path))
+    }
+
+    /// Runs the machine-side check with bash, as a machine would.
+    private func detectRemote(home: String, environment: [String: String] = [:]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", RushClaudeAccounts.detectScript(home: home)]
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "RUSH_HOME")
+        env.merge(environment) { _, new in new }
+        process.environment = env
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @Test("An active account or a list of sign-ins means rush manages Claude, on the Mac and on a machine")
+    func detects() throws {
+        let using = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: using) }
+        try write("acc-1\n", to: "\(using)/.config/agtop/claude/using")
+        #expect(RushClaudeAccounts.managingFolder(home: using, environment: [:]) == "\(using)/.config/agtop")
+        #expect(try detectRemote(home: using) == "\(using)/.config/agtop")
+
+        let logins = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: logins) }
+        try write("{\n  \"logins\": [\n    {\"id\": \"a\"}\n  ]\n}", to: "\(logins)/.config/rush/config.json")
+        #expect(RushClaudeAccounts.managingFolder(home: logins, environment: [:]) == "\(logins)/.config/rush")
+        #expect(try detectRemote(home: logins) == "\(logins)/.config/rush")
+
+        let custom = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: custom) }
+        try write("acc-1", to: "\(custom)/elsewhere/claude/using")
+        let empty = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: empty) }
+        #expect(RushClaudeAccounts.managingFolder(home: empty, environment: ["RUSH_HOME": "\(custom)/elsewhere"]) == "\(custom)/elsewhere")
+        #expect(try detectRemote(home: empty, environment: ["RUSH_HOME": "\(custom)/elsewhere"]) == "\(custom)/elsewhere")
+    }
+
+    @Test("No rush, or rush without Claude accounts, means the login syncs")
+    func ignoresOthers() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        #expect(RushClaudeAccounts.managingFolder(home: home, environment: [:]) == nil)
+        #expect(try detectRemote(home: home) == "")
+        try write("{\"logins\": [], \"view\": \"board\"}", to: "\(home)/.config/rush/config.json")
+        try write("  \n", to: "\(home)/.config/rush/claude/using")
+        #expect(RushClaudeAccounts.managingFolder(home: home, environment: [:]) == nil)
+        #expect(try detectRemote(home: home) == "")
+    }
+
+    @Test("The machine read script ends with the rush check")
+    func readScriptChecksRush() {
+        let script = AssistantLoginSync.readScript(remoteHome: "/root")
+        #expect(script.hasSuffix(RushClaudeAccounts.detectScript(home: "/root")))
+        #expect(script.contains("'/root/.config/agtop'"))
     }
 }
