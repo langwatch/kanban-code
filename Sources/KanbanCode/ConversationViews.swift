@@ -243,6 +243,18 @@ struct ConversationChatView: View {
     /// The transcript line of each human message whose images this machine
     /// cannot read from their paths.
     @State private var imageLines: [String: Int] = [:]
+    /// The card's GitHub repo, for references written as `#123`.
+    @State private var githubBaseURL: String?
+    /// The links of each agent message, built off the main actor once per
+    /// message rather than on every render.
+    @State private var messageLinks: [String: LinkedMessage] = [:]
+    /// The repo `messageLinks` were resolved against.
+    @State private var linksBase: String?
+
+    struct LinkedMessage: Equatable, Sendable {
+        let textLength: Int
+        let links: ChatTextLinks
+    }
 
     private var store: BoardStore { AppComposition.shared.store }
     private var drafts: ConversationDrafts { ConversationDrafts.shared }
@@ -283,6 +295,29 @@ struct ConversationChatView: View {
         messages.filter { message in
             message.role == .human && (message.images ?? []).contains { !FileManager.default.isReadableFile(atPath: $0) }
         }.map(\.id)
+    }
+
+    /// Resolves the links of the agent messages that have none yet, or of
+    /// all of them when the repo changed.
+    private func linkMessages() async {
+        let base = githubBaseURL
+        let known = linksBase == base ? messageLinks : [:]
+        let wanted = messages
+            .filter { $0.role == .agent && known[$0.id]?.textLength != $0.text.utf16.count }
+            .map { (id: $0.id, text: $0.text) }
+        guard !wanted.isEmpty || linksBase != base else { return }
+        let built = await Task.detached(priority: .userInitiated) {
+            var built: [String: LinkedMessage] = [:]
+            for message in wanted {
+                built[message.id] = LinkedMessage(
+                    textLength: message.text.utf16.count,
+                    links: ChatTextLinks.message(message.text, githubBaseURL: base))
+            }
+            return built
+        }.value
+        guard !Task.isCancelled, base == githubBaseURL else { return }
+        messageLinks = known.merging(built) { _, new in new }
+        linksBase = base
     }
 
     /// Finds those messages' prompts in the transcript, so their images load
@@ -373,6 +408,7 @@ struct ConversationChatView: View {
                         }
                         ForEach(shownMessages) { message in
                             ConversationMessageRow(message: message, cardId: card.id,
+                                                   links: messageLinks[message.id]?.links ?? ChatTextLinks(),
                                                    waiting: queuedIds.contains(message.id),
                                                    transcript: imageLines[message.id].map { (transcriptPath, $0) })
                                 .id(message.id)
@@ -454,6 +490,7 @@ struct ConversationChatView: View {
             let loaded = await ConversationActions.messages(cardId: card.id, conversationId: conversation.id)
             guard !Task.isCancelled else { return }
             if loaded != messages { messages = loaded }
+            await linkMessages()
             let sent = ((store.state.conversationOutbox[card.id] ?? []) + (store.state.failedPrompts[card.id] ?? []).map(\.prompt))
                 .filter { $0.conversation == conversation.id }
             let delivered = ConversationOutbox.delivered(sent, in: messages)
@@ -463,6 +500,16 @@ struct ConversationChatView: View {
             if conversation.unread {
                 ConversationActions.update(cardId: card.id, conversationId: conversation.id, .init(read: true))
             }
+        }
+        .task(id: card.link.projectPath) {
+            let base: String? = if let projectPath = card.link.projectPath {
+                await GitRemoteResolver.shared.githubBaseURL(for: projectPath)
+            } else {
+                nil
+            }
+            guard !Task.isCancelled else { return }
+            githubBaseURL = base
+            await linkMessages()
         }
         .onAppear { focusToken += 1 }
         .onChange(of: ConversationRenameRequest.shared.conversationId, initial: true) { _, requested in
@@ -523,6 +570,8 @@ struct ConversationChatView: View {
 private struct ConversationMessageRow: View {
     let message: RemoteConversationMessage
     let cardId: String
+    /// GitHub references and URLs in the message, opened with a plain click.
+    var links = ChatTextLinks()
     /// Logged but not taken by the session yet: faded, as the chat shows a
     /// message going out.
     var waiting = false
@@ -559,7 +608,8 @@ private struct ConversationMessageRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 ChatText(
                     content: message.text.containsBlockMarkdown ? .markdown(message.text) : .inlineMarkdown(message.text),
-                    appearance: .init(font: .systemFont(ofSize: NSFont.systemFontSize + 1), foregroundColor: .labelColor, lineSpacing: 0))
+                    appearance: .init(font: .systemFont(ofSize: NSFont.systemFontSize + 1), foregroundColor: .labelColor, lineSpacing: 0),
+                    links: links)
                 Text(message.at.formatted(date: .omitted, time: .shortened))
                     .font(.app(.caption2))
                     .foregroundStyle(.tertiary)

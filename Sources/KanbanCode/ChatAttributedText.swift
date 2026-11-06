@@ -59,13 +59,24 @@ struct ChatTextHighlight: Hashable {
 /// References arrive already resolved rather than as a closure: the channel
 /// resolves them against the pull requests it knows about, which a cache key
 /// could never describe.
-struct ChatTextLinks: Hashable {
+struct ChatTextLinks: Hashable, Sendable {
     /// Reference to destination, keyed by the reference exactly as written.
     var issueRefs: [String: URL] = [:]
     /// Whether plain http(s) URLs become links too.
     var urls: Bool = false
 
     var isEmpty: Bool { self.issueRefs.isEmpty && !self.urls }
+
+    /// The links of a message as the agent wrote it: its `owner/repo#123`,
+    /// `repo#123` and `#123` references, resolved against the card's repo
+    /// when it has one, and its plain http(s) URLs.
+    static func message(_ text: String, githubBaseURL: String?) -> ChatTextLinks {
+        ChatTextLinks(
+            issueRefs: text.contains("#")
+                ? TerminalTranscript.issueRefs(in: text, githubBaseURL: githubBaseURL) : [:],
+            urls: text.contains("http")
+        )
+    }
 }
 
 /// Builds the attributed string a chat row displays.
@@ -172,9 +183,9 @@ enum ChatAttributedText {
 
         if !links.issueRefs.isEmpty, let regex = self.issueRefRegex {
             for match in regex.matches(in: text, range: full) {
-                guard let url = links.issueRefs[nsText.substring(with: match.range)] else {
-                    continue
-                }
+                guard let url = links.issueRefs[nsText.substring(with: match.range)],
+                    !self.isLinked(match.range, in: string)
+                else { continue }
                 self.setLink(url, color: .systemBlue, range: match.range, on: string)
             }
         }
@@ -182,10 +193,25 @@ enum ChatAttributedText {
         if links.urls, let regex = self.urlRegex {
             let color = NSColor(srgbRed: 0.45, green: 0.65, blue: 1.0, alpha: 1)
             for match in regex.matches(in: text, range: full) {
-                guard let url = URL(string: nsText.substring(with: match.range)) else { continue }
+                guard let url = URL(string: nsText.substring(with: match.range)),
+                    !self.isLinked(match.range, in: string)
+                else { continue }
                 self.setLink(url, color: color, range: match.range, on: string)
             }
         }
+    }
+
+    /// Whether markdown already made part of this range a link, whose own
+    /// destination wins over one guessed from the text.
+    private static func isLinked(_ range: NSRange, in string: NSAttributedString) -> Bool {
+        guard NSMaxRange(range) <= string.length else { return true }
+        var linked = false
+        string.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
+            guard value != nil else { return }
+            linked = true
+            stop.pointee = true
+        }
+        return linked
     }
 
     private static func setLink(
