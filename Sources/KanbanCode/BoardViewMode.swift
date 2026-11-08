@@ -20,37 +20,20 @@ enum BoardViewMode: String, CaseIterable {
     }
 }
 
-struct ListBoardSection {
-    let column: KanbanCodeColumn
-    let cards: [KanbanCodeCard]
-
-    static func make(
-        columns: [KanbanCodeColumn],
-        cardsInColumn: (KanbanCodeColumn) -> [KanbanCodeCard]
-    ) -> [ListBoardSection] {
-        columns.map { column in
-            ListBoardSection(column: column, cards: cardsInColumn(column))
-        }
-    }
-}
-
 /// SwiftUI row identity includes presentation location so pinning is modeled
 /// as a clean lane removal plus pinned insertion, never as a cross-section move.
 enum ListBoardRowIdentity: Hashable {
     case pinned(String)
-    case column(KanbanCodeColumn, String)
+    case section(SidebarSectionKind, String)
 }
 
+/// Collapsed sidebar sections, stored by `SidebarSectionKind.id`.
 enum ListSectionCollapseState {
-    static func encode(_ columns: Set<KanbanCodeColumn>) -> String {
-        columns.map(\.rawValue).sorted().joined(separator: ",")
+    static func encode(_ ids: Set<String>) -> String {
+        ids.sorted().joined(separator: ",")
     }
 
-    static func decode(_ rawValue: String) -> Set<KanbanCodeColumn> {
-        Set(
-            rawValue
-                .split(separator: ",")
-                .compactMap { KanbanCodeColumn(rawValue: String($0)) }
-        )
+    static func decode(_ rawValue: String) -> Set<String> {
+        Set(rawValue.split(separator: ",").map(String.init))
     }
 }

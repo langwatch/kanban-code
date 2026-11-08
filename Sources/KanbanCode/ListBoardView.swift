@@ -44,10 +44,10 @@ struct ListBoardView: View {
     var inSidebar: Bool = false
     @AppStorage("listBoardCollapsedColumns") private var collapsedColumnsRaw = ""
 
-    private var sections: [ListBoardSection] {
-        ListBoardSection.make(columns: store.state.visibleColumns) { column in
-            store.state.unpinnedCards(in: column)
-        }
+    /// Live, then the columns, Backlog last (`SidebarLayout`). Pinned is
+    /// drawn on its own above, with its reordering.
+    private var sections: [SidebarSection] {
+        store.state.sidebarSections.filter { $0.kind != .pinned }
     }
 
     private var activeSubagentCardsByParent: [String: [KanbanCodeCard]] {
@@ -62,7 +62,7 @@ struct ListBoardView: View {
         activeSubagentCardsById.mapValues(\.link)
     }
 
-    private var collapsedColumns: Set<KanbanCodeColumn> {
+    private var collapsedSections: Set<String> {
         get { ListSectionCollapseState.decode(collapsedColumnsRaw) }
         nonmutating set { collapsedColumnsRaw = ListSectionCollapseState.encode(newValue) }
     }
@@ -101,7 +101,7 @@ struct ListBoardView: View {
             VStack(alignment: .leading, spacing: 0) {
                 channelsSection
                 pinnedCardsSection
-                ForEach(sections, id: \.column) { section in
+                ForEach(sections, id: \.kind) { section in
                     sectionView(for: section)
                 }
             }
@@ -140,7 +140,7 @@ struct ListBoardView: View {
                             .padding(.horizontal, 8)
                     }
                     .id(ListBoardRowIdentity.pinned(card.id))
-                    conversationRows(for: card.id)
+                    conversationRows(for: card.id, in: store.state)
                         .padding(.horizontal, 8)
                     ForEach(visiblePinnedSubagents(for: card.id)) { row in
                         if let child = activeSubagentCardsById[row.cardId] {
@@ -263,11 +263,12 @@ struct ListBoardView: View {
         store.dispatch(.reorderPinnedCard(cardId: cardId, targetCardId: targetCardId, above: above))
     }
 
-    private func sectionView(for section: ListBoardSection) -> some View {
+    private func sectionView(for section: SidebarSection) -> some View {
         ListBoardSectionView(
             section: section,
+            state: store.state,
             selectedCardId: store.state.selectedCardId.flatMap { store.state.highlightsCardRow($0) ? $0 : nil },
-            isCollapsed: collapsedColumns.contains(section.column),
+            isCollapsed: collapsedSections.contains(section.kind.id),
             isRefreshingBacklog: store.state.isRefreshingBacklog,
             availableProjects: availableProjects,
             dragState: dragState,
@@ -300,7 +301,7 @@ struct ListBoardView: View {
                 store.dispatch(.reorderCard(cardId: cardId, targetCardId: targetCardId, above: above))
             },
             onRenameCard: onRenameCard,
-            onToggleCollapse: { toggleCollapse(for: section.column) }
+            onToggleCollapse: { toggleCollapse(section.kind.id) }
         )
     }
 
@@ -332,15 +333,15 @@ struct ListBoardView: View {
         if newId != nil { onCardClicked(cardId) }
     }
 
-    private func toggleCollapse(for column: KanbanCodeColumn) {
+    private func toggleCollapse(_ sectionId: String) {
         withAnimation(.easeInOut(duration: 0.2)) {
-            var updated = collapsedColumns
-            if updated.contains(column) {
-                updated.remove(column)
+            var updated = collapsedSections
+            if updated.contains(sectionId) {
+                updated.remove(sectionId)
             } else {
-                updated.insert(column)
+                updated.insert(sectionId)
             }
-            collapsedColumns = updated
+            collapsedSections = updated
         }
     }
 
@@ -374,7 +375,8 @@ struct ListBoardView: View {
 }
 
 private struct ListBoardSectionView: View {
-    let section: ListBoardSection
+    let section: SidebarSection
+    let state: AppState
     let selectedCardId: String?
     let isCollapsed: Bool
     let isRefreshingBacklog: Bool
@@ -430,12 +432,34 @@ private struct ListBoardSectionView: View {
         dragState.draggingCard != nil
     }
 
+    /// The column a drop moves cards to; Live takes no drops.
+    private var column: KanbanCodeColumn? { section.kind.column }
+
+    private var coordinateSpaceName: String { "list_section_\(section.kind.id)" }
+
     private var isCurrentDropAllowed: Bool {
         guard let draggingCard = dragState.draggingCard else { return true }
-        if dragState.sourceColumn == section.column {
+        guard let column else { return false }
+        if dragState.sourceColumn == column {
             return true
         }
-        return canDropCard(draggingCard, section.column)
+        return canDropCard(draggingCard, column)
+    }
+
+    private var dropDelegate: ListSectionDropDelegate? {
+        column.map { column in
+            ListSectionDropDelegate(
+                column: column,
+                cards: section.cards,
+                cardFrames: cardFrames,
+                dragState: dragState,
+                isTargeted: $isTargeted,
+                canDropCard: canDropCard,
+                onMoveCard: onMoveCard,
+                onMergeCards: onMergeCards,
+                onReorderCard: onReorderCard
+            )
+        }
     }
 
     var body: some View {
@@ -446,11 +470,11 @@ private struct ListBoardSectionView: View {
             }
         } header: {
             ListSectionHeader(
-                column: section.column,
+                kind: section.kind,
                 count: section.cards.count,
                 isCollapsed: isCollapsed,
                 isRefreshingBacklog: isRefreshingBacklog,
-                onRefreshBacklog: section.column == .backlog ? onRefreshBacklog : nil,
+                onRefreshBacklog: section.kind == .column(.backlog) ? onRefreshBacklog : nil,
                 onToggleCollapse: onToggleCollapse
             )
             .overlay(alignment: .topTrailing) {
@@ -467,17 +491,7 @@ private struct ListBoardSectionView: View {
                             : Color.clear
                     )
             )
-            .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
-                column: section.column,
-                cards: section.cards,
-                cardFrames: cardFrames,
-                dragState: dragState,
-                isTargeted: $isTargeted,
-                canDropCard: canDropCard,
-                onMoveCard: onMoveCard,
-                onMergeCards: onMergeCards,
-                onReorderCard: onReorderCard
-            ))
+            .sectionDrop(dropDelegate)
         }
     }
 
@@ -500,21 +514,11 @@ private struct ListBoardSectionView: View {
                             : Color.clear
                     )
             )
-            .coordinateSpace(name: "list_section_\(section.column.rawValue)")
+            .coordinateSpace(name: coordinateSpaceName)
             .onPreferenceChange(CardFramePreference.self) { frames in
                 cardFrames = isCollectingCardFrames ? frames : [:]
             }
-            .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
-                column: section.column,
-                cards: section.cards,
-                cardFrames: cardFrames,
-                dragState: dragState,
-                isTargeted: $isTargeted,
-                canDropCard: canDropCard,
-                onMoveCard: onMoveCard,
-                onMergeCards: onMergeCards,
-                onReorderCard: onReorderCard
-            ))
+            .sectionDrop(dropDelegate)
         } else {
             LazyVStack(spacing: 4) {
                 ForEach(section.cards) { card in
@@ -544,16 +548,16 @@ private struct ListBoardSectionView: View {
                     .background { cardFrameReporter(for: card) }
                     .onDrag {
                         dragState.draggingCard = card
-                        dragState.sourceColumn = section.column
+                        dragState.sourceColumn = column ?? card.column
                         return NSItemProvider(object: card.id as NSString)
                     }
-                    .id(ListBoardRowIdentity.column(section.column, card.id))
-                    conversationRows(for: card.id)
+                    .id(ListBoardRowIdentity.section(section.kind, card.id))
+                    conversationRows(for: card.id, in: state)
                     ForEach(visibleSubagents(for: card.id)) { row in
                         if let child = subagentCardsById[row.cardId] {
                             listCardRow(for: child)
                                 .padding(.leading, CGFloat(row.depth * 16))
-                                .id(ListBoardRowIdentity.column(section.column, child.id))
+                                .id(ListBoardRowIdentity.section(section.kind, child.id))
                         }
                     }
                     if dragState.reorderTargetId == card.id && !dragState.reorderAbove {
@@ -563,24 +567,14 @@ private struct ListBoardSectionView: View {
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
-            .coordinateSpace(name: "list_section_\(section.column.rawValue)")
+            .coordinateSpace(name: coordinateSpaceName)
             .onPreferenceChange(CardFramePreference.self) { frames in
                 cardFrames = isCollectingCardFrames ? frames : [:]
             }
             .onChange(of: dragState.draggingCard?.id) { _, draggingId in
                 if draggingId == nil { cardFrames = [:] }
             }
-            .onDrop(of: [.utf8PlainText], delegate: ListSectionDropDelegate(
-                column: section.column,
-                cards: section.cards,
-                cardFrames: cardFrames,
-                dragState: dragState,
-                isTargeted: $isTargeted,
-                canDropCard: canDropCard,
-                onMoveCard: onMoveCard,
-                onMergeCards: onMergeCards,
-                onReorderCard: onReorderCard
-            ))
+            .sectionDrop(dropDelegate)
             .sheet(isPresented: Binding(
                 get: { renamingCardId != nil },
                 set: { if !$0 { renamingCardId = nil } }
@@ -652,7 +646,7 @@ private struct ListBoardSectionView: View {
             GeometryReader { geo in
                 Color.clear.preference(
                     key: CardFramePreference.self,
-                    value: [card.id: geo.frame(in: .named("list_section_\(section.column.rawValue)"))]
+                    value: [card.id: geo.frame(in: .named(coordinateSpaceName))]
                 )
             }
         } else {
@@ -662,7 +656,7 @@ private struct ListBoardSectionView: View {
 }
 
 private struct ListSectionHeader: View {
-    let column: KanbanCodeColumn
+    let kind: SidebarSectionKind
     let count: Int
     let isCollapsed: Bool
     let isRefreshingBacklog: Bool
@@ -673,10 +667,10 @@ private struct ListSectionHeader: View {
         Button(action: onToggleCollapse) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(column.accentColor)
+                    .fill(kind.accentColor)
                     .frame(width: 8, height: 8)
 
-                Text(column.displayName)
+                Text(kind.title)
                     .font(.app(.headline))
                     .foregroundStyle(.primary)
 
@@ -824,8 +818,7 @@ private struct ListSectionDropDelegate: DropDelegate {
 
 /// The card's conversations nested under its row (docs/conversations.md).
 @MainActor @ViewBuilder
-private func conversationRows(for cardId: String) -> some View {
-    let state = AppComposition.shared.store.state
+private func conversationRows(for cardId: String, in state: AppState) -> some View {
     if let conversations = state.conversations[cardId], conversations.contains(where: { !$0.archived }) {
         SidebarConversationRows(
             cardId: cardId, conversations: conversations, openId: state.openConversations[cardId],
@@ -964,6 +957,28 @@ private struct ListCardRowView: View {
                 availableProjects: availableProjects,
                 enabledAssistants: enabledAssistants
             )
+        }
+    }
+}
+
+private extension View {
+    /// Takes card drops when the section stands for a column.
+    @ViewBuilder
+    func sectionDrop(_ delegate: ListSectionDropDelegate?) -> some View {
+        if let delegate {
+            onDrop(of: [.utf8PlainText], delegate: delegate)
+        } else {
+            self
+        }
+    }
+}
+
+extension SidebarSectionKind {
+    var accentColor: Color {
+        switch self {
+        case .pinned: .secondary
+        case .live: .mint
+        case .column(let column): column.accentColor
         }
     }
 }

@@ -114,7 +114,7 @@ public final class AppState: @unchecked Sendable {
     /// Claude's statusline rather than derived from the card, so an in-session
     /// `/model` switch shows up.
     public var sessionModels: [String: String] = [:] { didSet { cardInputsVersion &+= 1 } }
-    public var tmuxSessions: Set<String> = []                  // live tmux names
+    public var tmuxSessions: Set<String> = [] { didSet { cardInputsVersion &+= 1 } }  // live tmux names
     /// Messages queued in each live rush host, by session name; hosts with
     /// an empty queue are left out.
     public var rushQueues: [String: [String]] = [:]
@@ -436,6 +436,13 @@ public final class AppState: @unchecked Sendable {
     /// Cards presented above the normal lanes while retaining their real column.
     public internal(set) var pinnedCards: [KanbanCodeCard] = []
 
+    /// The card list of the sidebar, in order (`SidebarLayout`).
+    public internal(set) var sidebarSections: [SidebarSection] = []
+
+    /// Ids of the cards whose assistant session runs now: the owner's word
+    /// for a card another master runs, the tmux scan for the others.
+    @ObservationIgnored private var builtLiveCardIds: Set<String> = []
+
     /// Unarchived subagent cards that pass the project filter, by parent
     /// card id, newest activity first.
     public internal(set) var subagentCardsByParent: [String: [KanbanCodeCard]] = [:]
@@ -567,9 +574,13 @@ public final class AppState: @unchecked Sendable {
         let newSelected = selectedCardId.flatMap { id in cards.first { $0.id == id } }
         if newSelected != selectedCard { selectedCard = newSelected }
 
-        // Everything below derives from the cards and the project filter.
+        // Everything below derives from the cards, which sessions run and
+        // the project filter.
+        let liveIds = Set(cards.lazy.filter { self.isLive($0) }.map(\.id))
+        let liveChanged = liveIds != builtLiveCardIds
+        builtLiveCardIds = liveIds
         let memoKey = [selectedProjectPath ?? ""] + excludedPaths
-        guard cardsChanged || memoKey != projectFilterMemoKey else { return }
+        guard cardsChanged || liveChanged || memoKey != projectFilterMemoKey else { return }
         if memoKey != projectFilterMemoKey {
             projectFilterMemo = [:]
             projectFilterMemoKey = memoKey
@@ -648,6 +659,26 @@ public final class AppState: @unchecked Sendable {
         var newVisible = alwaysVisible
         if (newByColumn[.allSessions]?.count ?? 0) > 0 { newVisible.append(.allSessions) }
         if newVisible != visibleColumns { visibleColumns = newVisible }
+
+        let newSidebar = SidebarLayout.sections(
+            pinned: newPinned,
+            cardsByColumn: newByColumn.mapValues { $0.filter { !$0.link.isPinned } },
+            isLive: { liveIds.contains($0.id) },
+            isBusy: { $0.activityState == .activelyWorking || $0.link.isLaunching == true }
+        )
+        if newSidebar != sidebarSections { sidebarSections = newSidebar }
+    }
+
+    /// Whether the card's assistant session runs now, as the phone shows it
+    /// (`RemoteCard.isLive`).
+    public func isLive(_ card: KanbanCodeCard) -> Bool {
+        if card.owner != nil { return peerCards[card.id]?.isLive ?? false }
+        return RemoteBoardMapper.isLive(card.link, liveSessions: tmuxSessions)
+    }
+
+    /// The cards of the sidebar from top to bottom, for keyboard navigation.
+    public var sidebarCardOrder: [KanbanCodeCard] {
+        sidebarSections.flatMap(\.cards)
     }
 
     /// Cards for a specific column (pre-computed, cached).

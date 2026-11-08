@@ -332,6 +332,7 @@ enum BoardCache {
 }
 
 extension RemoteColumn {
-    /// Board order on the phone: what needs me first.
-    static let phoneOrder: [RemoteColumn] = [.waiting, .inProgress, .inReview, .backlog, .done, .allSessions]
+    /// Board order on the phone after Pinned and Live: what needs me first,
+    /// Backlog last, as in the Mac sidebar (`SidebarLayout.columnOrder`).
+    static let phoneOrder: [RemoteColumn] = [.waiting, .inProgress, .inReview, .done, .backlog]
 }

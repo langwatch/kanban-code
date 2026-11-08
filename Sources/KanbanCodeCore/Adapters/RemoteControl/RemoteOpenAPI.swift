@@ -214,6 +214,8 @@ enum RemoteOpenAPI {
           "parentCardId": {"type": ["string", "null"]},
           "archived": {"type": "boolean"},
           "pinned": {"type": "boolean"},
+          "pinnedSortOrder": {"type": ["integer", "null"], "description": "where the card was dragged in Pinned; lower first, before cards without one"},
+          "pinnedAt": {"type": ["string", "null"], "format": "date-time", "description": "when the card was pinned; the most recent first among cards without pinnedSortOrder"},
           "lastActivity": {"type": ["string", "null"], "format": "date-time"},
           "updatedAt": {"type": "string", "format": "date-time"},
           "machineId": {"type": ["string", "null"], "description": "the master that owns the card; send its prompts, transcript and terminal calls there"},

@@ -228,7 +228,7 @@ struct BoardScreen: View {
                                 && section.cards.count > Self.columnPreviewCount
                             ForEach(collapsed ? Array(section.cards.prefix(Self.columnPreviewCount)) : section.cards) { entry in
                                 NavigationLink(value: BoardRoute.card(entry.card.id)) {
-                                    CardRow(card: entry.card, showsColumn: section.id == Self.liveSectionID,
+                                    CardRow(card: entry.card, showsColumn: Self.mixedSectionIDs.contains(section.id),
                                             machine: fleet.showsMachines ? entry.machineName : nil,
                                             machineOffline: !entry.master.isOnline)
                                 }
@@ -483,7 +483,10 @@ struct BoardScreen: View {
         }
     }
 
+    private static let pinnedSectionID = "pinned"
     private static let liveSectionID = "live"
+    /// Sections whose cards come from several columns, so each row names its own.
+    private static let mixedSectionIDs: Set<String> = [pinnedSectionID, liveSectionID]
 
     private struct BoardSection {
         let id: String
@@ -491,8 +494,9 @@ struct BoardScreen: View {
         let cards: [FleetCard]
     }
 
-    /// Live sessions first, whatever their column (busy ones on top), then
-    /// the columns without them.
+    /// Pinned cards first, in the Mac's pinned order, then live sessions
+    /// whatever their column (busy ones on top), then the columns without
+    /// them, Backlog last. The Mac sidebar lists cards the same way.
     private func sections(of entries: [FleetCard]) -> [BoardSection] {
         // The same rule as the masters' search: every word, any field.
         let query = CardSearchQuery(search)
@@ -510,12 +514,16 @@ struct BoardScreen: View {
         }
         // A card of a machine that is off shows in its column, not as live.
         func isLive(_ entry: FleetCard) -> Bool { entry.card.isLive && entry.master.isOnline }
-        let live = visible.filter(isLive).sorted { a, b in
+        var out: [BoardSection] = []
+        let pinned = visible.filter { $0.card.pinned && $0.card.parentCardId == nil }
+            .sorted { RemoteCard.pinnedBefore($0.card, $1.card) }
+        if !pinned.isEmpty { out.append(BoardSection(id: Self.pinnedSectionID, title: "Pinned", cards: pinned)) }
+        let pinnedIds = Set(pinned.map(\.id))
+        let live = visible.filter { isLive($0) && !pinnedIds.contains($0.id) }.sorted { a, b in
             a.card.isBusy != b.card.isBusy ? a.card.isBusy : recent(a, b)
         }
-        var out: [BoardSection] = []
         if !live.isEmpty { out.append(BoardSection(id: Self.liveSectionID, title: "Live", cards: live)) }
-        let rest = visible.filter { !isLive($0) }
+        let rest = visible.filter { !isLive($0) && !pinnedIds.contains($0.id) }
         for column in RemoteColumn.phoneOrder {
             let cards = rest.filter { $0.card.column == column }.sorted(by: recent)
             if !cards.isEmpty { out.append(BoardSection(id: column.rawValue, title: column.displayName, cards: cards)) }

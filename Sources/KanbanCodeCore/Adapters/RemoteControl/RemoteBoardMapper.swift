@@ -71,6 +71,8 @@ public enum RemoteBoardMapper {
             parentCardId: link.parentCardId,
             archived: link.manuallyArchived,
             pinned: link.isPinned,
+            pinnedSortOrder: link.isPinned ? link.pinnedSortOrder : nil,
+            pinnedAt: link.pinnedAt,
             lastActivity: link.lastActivity,
             updatedAt: link.updatedAt,
             machineId: owner,

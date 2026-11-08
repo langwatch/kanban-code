@@ -34,7 +34,7 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 - `queue`: `queuedPrompts` on cards and the `/v1/cards/{id}/queue/{promptId}` routes.
 - `terminalScroll`: the `scroll` terminal control frame.
 - `machines`: `GET /v1/machines`, and `machine` on tasks.
-- `cardActions`: `pinned` on cards, `pinned` and `archived: false` on `PATCH /v1/cards/{id}`, and `DELETE /v1/cards/{id}`.
+- `cardActions`: `pinned` on cards, `pinned` and `archived: false` on `PATCH /v1/cards/{id}`, and `DELETE /v1/cards/{id}`. A pinned card also carries `pinnedSortOrder` (where it was dragged in Pinned) and `pinnedAt`; clients order Pinned by `pinnedSortOrder`, then the most recently pinned (`RemoteCard.pinnedBefore`).
 - `worktrees`: `POST /v1/cards/{id}/worktree/remove` and `POST /v1/cards/{id}/discover`.
 - `sideChat`: the `/v1/cards/{id}/side-chat` routes, and `human` on prompts and tasks.
 - `slashCommands`: `GET /v1/cards/{id}/slash-commands`.

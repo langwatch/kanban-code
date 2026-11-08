@@ -2420,6 +2420,12 @@ struct ContentView: View {
     /// Find the card that should be selected after deleting the given card.
     /// Prefers the card directly below; if last in column, selects the one above.
     private func cardIdAfterDeletion(_ cardId: String) -> String? {
+        if isExpandedDetail {
+            let order = store.state.sidebarCardOrder
+            guard let idx = order.firstIndex(where: { $0.id == cardId }) else { return nil }
+            if idx + 1 < order.count { return order[idx + 1].id }
+            return idx > 0 ? order[idx - 1].id : nil
+        }
         for col in store.state.visibleColumns {
             let colCards = store.state.cards(in: col)
             if let idx = colCards.firstIndex(where: { $0.id == cardId }) {
@@ -2591,6 +2597,10 @@ struct ContentView: View {
     private enum NavDirection { case up, down, left, right, open }
 
     private func navigateCard(_ direction: NavDirection) {
+        if isExpandedDetail {
+            navigateSidebar(direction)
+            return
+        }
         let columns = store.state.visibleColumns
         guard !columns.isEmpty else { return }
 
@@ -2660,6 +2670,34 @@ struct ContentView: View {
             }
         case .open:
             break // handled above
+        }
+    }
+
+    /// Arrow keys follow the sidebar: up and down go card by card, left and
+    /// right jump to the previous or next section.
+    private func navigateSidebar(_ direction: NavDirection) {
+        let sections = store.state.sidebarSections.filter { !$0.cards.isEmpty }
+        let order = sections.flatMap(\.cards)
+        guard let first = order.first else { return }
+        guard let selectedId = store.state.selectedCardId,
+              let index = order.firstIndex(where: { $0.id == selectedId }) else {
+            if direction != .open || store.state.selectedCardId == nil {
+                store.dispatch(.selectCard(cardId: first.id))
+            }
+            return
+        }
+        switch direction {
+        case .open:
+            return
+        case .down:
+            store.dispatch(.selectCard(cardId: order[min(index + 1, order.count - 1)].id))
+        case .up:
+            store.dispatch(.selectCard(cardId: order[max(index - 1, 0)].id))
+        case .left, .right:
+            guard let sectionIndex = sections.firstIndex(where: { $0.cards.contains { $0.id == selectedId } }) else { return }
+            let target = sectionIndex + (direction == .left ? -1 : 1)
+            guard sections.indices.contains(target), let card = sections[target].cards.first else { return }
+            store.dispatch(.selectCard(cardId: card.id))
         }
     }
 

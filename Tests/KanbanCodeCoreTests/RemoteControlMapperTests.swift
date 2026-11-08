@@ -285,3 +285,36 @@ struct RemoteWorkingSetTests {
         #expect(!ids.contains("done30"))
     }
 }
+
+@Suite("Remote: pinned order")
+struct RemotePinnedOrderTests {
+    @Test("a pinned card carries its place in Pinned, and the phone orders it as the Mac does")
+    func pinnedOrderReachesThePhone() throws {
+        func pinned(_ id: String, order: Int?, minutesAgo: Double) -> KanbanCodeCard {
+            var link = Link(id: id, name: id, column: .waiting, source: .manual)
+            link.pinnedAt = .now.addingTimeInterval(-minutesAgo * 60)
+            link.pinnedSortOrder = order
+            return KanbanCodeCard(link: link)
+        }
+        let cards = [
+            pinned("card_recent", order: nil, minutesAgo: 1),
+            pinned("card_dragged_second", order: 1, minutesAgo: 30),
+            pinned("card_old", order: nil, minutesAgo: 90),
+            pinned("card_dragged_first", order: 0, minutesAgo: 60),
+        ].map { RemoteBoardMapper.card($0, liveSessions: []) }
+
+        #expect(cards[1].pinnedSortOrder == 1)
+        #expect(cards[0].pinnedAt != nil)
+        let data = try JSONEncoder.remote.encode(cards)
+        let decoded = try JSONDecoder.remote.decode([RemoteCard].self, from: data)
+        #expect(decoded.sorted(by: RemoteCard.pinnedBefore).map(\.id)
+                == ["card_dragged_first", "card_dragged_second", "card_recent", "card_old"])
+    }
+
+    @Test("an unpinned card sends no pin fields")
+    func unpinnedSendsNothing() throws {
+        let card = RemoteBoardMapper.card(KanbanCodeCard(link: Link(id: "card_1", column: .waiting)), liveSessions: [])
+        let json = String(decoding: try JSONEncoder.remote.encode(card), as: UTF8.self)
+        #expect(!json.contains("pinned"))
+    }
+}

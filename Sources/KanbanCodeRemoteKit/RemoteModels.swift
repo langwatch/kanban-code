@@ -244,6 +244,11 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     public var archived: Bool
     /// Pinned to the top of the board.
     public var pinned: Bool
+    /// Where the user dragged the card in Pinned on the Mac; nil keeps the
+    /// order of `pinnedAt` (`RemoteCard.pinnedBefore`).
+    public var pinnedSortOrder: Int?
+    /// When the card was pinned.
+    public var pinnedAt: Date?
     public var lastActivity: Date?
     public var updatedAt: Date
     /// The master that owns the card and runs its session. Prompts, the
@@ -267,6 +272,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         isLive: Bool = false, isBusy: Bool = false, sessionId: String? = nil, terminals: [RemoteTerminal] = [],
         prs: [RemotePR] = [], queuedPromptCount: Int = 0, queuedPrompts: [RemoteQueuedPrompt] = [],
         parentCardId: String? = nil, archived: Bool = false, pinned: Bool = false,
+        pinnedSortOrder: Int? = nil, pinnedAt: Date? = nil,
         lastActivity: Date? = nil, updatedAt: Date, machineId: String? = nil, machineName: String? = nil,
         sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = [],
         usageLimit: RemoteUsageLimit? = nil
@@ -290,6 +296,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.parentCardId = parentCardId
         self.archived = archived
         self.pinned = pinned
+        self.pinnedSortOrder = pinnedSortOrder
+        self.pinnedAt = pinnedAt
         self.lastActivity = lastActivity
         self.updatedAt = updatedAt
         self.machineId = machineId
@@ -402,6 +410,7 @@ extension RemoteCard {
     private enum CodingKeys: String, CodingKey {
         case id, title, column, projectPath, projectName, branch, worktreePath, assistant, runtime
         case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived, pinned
+        case pinnedSortOrder, pinnedAt
         case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations, usageLimit
     }
 
@@ -427,6 +436,8 @@ extension RemoteCard {
             parentCardId: try c.decodeIfPresent(String.self, forKey: .parentCardId),
             archived: try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false,
             pinned: try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false,
+            pinnedSortOrder: try c.decodeIfPresent(Int.self, forKey: .pinnedSortOrder),
+            pinnedAt: try c.decodeIfPresent(Date.self, forKey: .pinnedAt),
             lastActivity: try c.decodeIfPresent(Date.self, forKey: .lastActivity),
             updatedAt: try c.decode(Date.self, forKey: .updatedAt),
             machineId: try c.decodeIfPresent(String.self, forKey: .machineId),
@@ -459,6 +470,8 @@ extension RemoteCard {
         try c.encodeIfPresent(parentCardId, forKey: .parentCardId)
         if archived { try c.encode(true, forKey: .archived) }
         if pinned { try c.encode(true, forKey: .pinned) }
+        try c.encodeIfPresent(pinnedSortOrder, forKey: .pinnedSortOrder)
+        try c.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
         try c.encodeIfPresent(lastActivity, forKey: .lastActivity)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encodeIfPresent(machineId, forKey: .machineId)
@@ -867,5 +880,21 @@ public struct RemoteVaultResponse: Codable, Sendable, Equatable {
         self.status = status
         self.message = message
         self.id = id
+    }
+}
+
+extension RemoteCard {
+    /// Order of the Pinned section, the same on the Mac and the phone: the
+    /// place the user dragged a card to first, then the most recently pinned.
+    public static func pinnedBefore(_ a: RemoteCard, _ b: RemoteCard) -> Bool {
+        switch (a.pinnedSortOrder, b.pinnedSortOrder) {
+        case (let x?, let y?) where x != y: return x < y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        default:
+            let ta = a.pinnedAt ?? .distantPast
+            let tb = b.pinnedAt ?? .distantPast
+            return ta != tb ? ta > tb : a.id < b.id
+        }
     }
 }
