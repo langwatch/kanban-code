@@ -218,7 +218,22 @@ public final class AppState: @unchecked Sendable {
     /// is also recorded with mode `.boxd`, but it is never destroyed or stopped.
     public func runsOnDisposableMachine(_ cardId: String) -> Bool {
         guard let remote = links[cardId]?.remote, remote.mode == .boxd else { return false }
-        return boxdSettings?.sshMachine(named: remote.machineName) == nil
+        return isDisposableMachine(remote.machineName)
+    }
+
+    /// Whether archiving or deleting the last card on `machineName` may
+    /// destroy it: only a boxd VM Kanban created for a card
+    /// (`BoxdLaunchPlanner.isKanbanMachineName`), never an ssh machine from
+    /// the settings or a peer master, whatever a card's link says.
+    public func isDisposableMachine(_ machineName: String) -> Bool {
+        guard BoxdLaunchPlanner.isKanbanMachineName(machineName) else { return false }
+        if boxdSettings?.sshMachine(named: machineName) != nil { return false }
+        let name = machineName.lowercased()
+        for status in peerStatuses.values {
+            let names = [status.peerId, status.machine?.name, status.url.flatMap { URL(string: $0)?.host }]
+            if names.contains(where: { $0?.lowercased() == name }) { return false }
+        }
+        return true
     }
 
     /// Live state of every boxd machine the app knows, by machine name.
@@ -713,6 +728,9 @@ public enum Action: Sendable {
     case archiveCard(cardId: String)
     /// Brings an archived card back to the board.
     case unarchiveCard(cardId: String)
+    /// Archives every card this master owns that only discovery created
+    /// (`Link.isDiscoveryOnly`). Runs once the links are loaded.
+    case archiveDiscoveryOnlyCards
     case deleteCard(cardId: String)
     case selectCard(cardId: String?)
     case setPaletteOpen(Bool)
@@ -1099,6 +1117,8 @@ public enum Reducer {
         link.isRemote = false
         let others = state.cardIds(onMachine: remote.machineName).filter { $0 != link.id }
         guard others.isEmpty else { return [] }
+        // A machine Kanban did not create for a card is only let go of.
+        if destroy && !state.isDisposableMachine(remote.machineName) { return [] }
         return destroy
             ? [.destroyRemoteMachine(machineName: remote.machineName)]
             : [.stopRemoteMachine(machineName: remote.machineName, reason: .sessionStopped)]
@@ -1420,6 +1440,20 @@ public enum Reducer {
             effects.insert(.upsertLink(link), at: 0)
             return effects
 
+        case .archiveDiscoveryOnlyCards:
+            var archived = 0
+            for (id, var link) in state.links where !link.manuallyArchived && link.isDiscoveryOnly
+                && state.isOwnedLocally(link) {
+                link.manuallyArchived = true
+                link.column = .allSessions
+                link.updatedAt = .now
+                state.links[id] = link
+                archived += 1
+            }
+            guard archived > 0 else { return [] }
+            KanbanCodeLog.info("store", "Archived \(archived) cards only discovery created")
+            return [.persistLinks(Array(state.links.values))]
+
         case .unarchiveCard(let cardId):
             guard var link = state.links[cardId], link.manuallyArchived else { return [] }
             Self.unarchive(&link)
@@ -1453,7 +1487,8 @@ public enum Reducer {
                     effects.append(.deleteSessionFile(sessionPath))
                 }
                 if let remote = link.remote, remote.mode == .boxd,
-                   state.cardIds(onMachine: remote.machineName).isEmpty {
+                   state.cardIds(onMachine: remote.machineName).isEmpty,
+                   state.isDisposableMachine(remote.machineName) {
                     effects.append(.destroyRemoteMachine(machineName: remote.machineName))
                 }
                 var imagesToDelete = link.promptImagePaths ?? []
@@ -3382,6 +3417,7 @@ public final class BoardStore: @unchecked Sendable {
             for page in pending {
                 dispatch(.peerLinksMerged(peer: page.peer, links: page.links))
             }
+            dispatch(.archiveDiscoveryOnlyCards)
             return true
         }
         localLinksLoad = task

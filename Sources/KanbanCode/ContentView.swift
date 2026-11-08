@@ -2967,7 +2967,8 @@ struct ContentView: View {
 
     private func archiveCard(cardId: String) {
         guard let card = store.state.cards.first(where: { $0.id == cardId }) else { return }
-        if card.link.tmuxLink != nil {
+        // Destroying a machine is always confirmed, even with no terminal open.
+        if card.link.tmuxLink != nil || store.state.runsOnDisposableMachine(cardId) {
             presentArchiveDialog(cardId: cardId)
         } else {
             store.dispatch(.archiveCard(cardId: cardId))

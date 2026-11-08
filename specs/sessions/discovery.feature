@@ -84,21 +84,29 @@ Feature: Session Discovery
     And existing cards should be interactive
     And new discoveries should appear incrementally
 
-  # ── Headless Sessions ──
+  # ── Which sessions become cards ──
+  # Kanban lists what it started or what the kanban CLI registered. A Claude
+  # session started outside it (a subagent another tool ran, a terminal the
+  # user opened) is not a card, and neither is a plain git worktree.
 
-  Scenario: A headless session no card claims stays in All Sessions
+  Scenario: A session started outside Kanban gets no card
+    Given a Claude session runs in "/repo" that Kanban did not start
+    And no card has its sessionId, terminal or worktree branch
+    When the discovery process runs
+    Then no card is created for the session
+    And the board, the sidebar and the phone do not list it
+
+  Scenario: A session the kanban CLI started is a card
+    Given "kanban subagent spawn" created a card and its tmux session in "/repo"
+    When the session's transcript is discovered
+    Then the transcript is linked to that card
+    And no second card is created
+
+  Scenario: A headless session no card claims gets no card
     Given a script runs "claude -p" in a project, so its transcript records "entrypoint": "sdk-cli"
     And no card has its sessionId, and no rush card is waiting for a session in that project
     When the discovery process runs
-    Then a discovered card is created for the session with headless = true
-    And the card is listed in All Sessions only, whatever its activity
-    And it never shows in Backlog, In Progress, Waiting, In Review or Done
-
-  Scenario: Existing discovered headless cards leave the board columns
-    Given a discovered card sits in Waiting for a session whose transcript records "entrypoint": "sdk-cli"
-    And the user never renamed, pinned, launched or moved the card
-    When the next reconcile runs
-    Then the card moves to All Sessions and is not deleted
+    Then no card is created for the session
 
   Scenario: Sessions Kanban runs headless keep their cards
     Given a card launched on rush, so its session runs as "claude -p" with "entrypoint": "sdk-cli"
@@ -110,9 +118,31 @@ Feature: Session Discovery
     Given a card launched in tmux is waiting for its session in "/repo"
     When a headless session in "/repo" is discovered
     Then the card keeps waiting for its own session
-    And the headless session gets a hidden card of its own
+    And the headless session gets no card
 
-  Scenario: The user can take a headless card onto the board
-    Given a headless card in All Sessions
-    When the user drags it to Waiting, pins it, renames it or resumes it
-    Then the card stays on the board from then on, even after its drag override clears
+  # ── Cards earlier versions made from discovery ──
+
+  Scenario: Cards only discovery made are archived once the links load
+    Given links.json holds a card with source "discovered"
+    And nobody named, pinned, launched, resumed, moved or prompted it
+    And it has no pull request, issue, parent card, terminal or machine
+    When Kanban Code loads its links, on the Mac and on the box master alike
+    Then the card is archived, not deleted
+    And it leaves the board, the sidebar and the phone
+
+  Scenario: Cards someone touched are kept
+    Given a discovered card the user renamed, pinned, launched, moved or sent a prompt to
+    Or a discovered card with a pull request linked
+    When Kanban Code loads its links
+    Then the card stays where it is
+
+  Scenario: The archive reaches the other master
+    Given the Mac archived a card that was only a discovered transcript
+    When the box master pulls the Mac's cards
+    Then the archived card is in the page it gets
+    And the box archives its copy too
+
+  Scenario: A card brought back from the archive stays out
+    Given a discovery-only card was archived
+    When the user unarchives it
+    Then later loads leave it on the board

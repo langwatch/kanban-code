@@ -130,19 +130,19 @@ Feature: Card Lifecycle and Automation
     And on launch, the existing card (with issueLink) gains tmuxLink + sessionLink
     And the card moves to "In Progress" (no new card created)
 
-  Scenario: Starting work on an orphan worktree
-    Given an orphan worktree card (label "WORKTREE") is on the board
+  Scenario: Starting work on a card that has a worktree
+    Given a card with a worktree and no session is on the board
     When I click "Start Work"
     Then the launch confirmation dialog should appear
     And Claude should be launched in the existing worktree directory
     And no --worktree flag should be passed (worktree already exists)
     And the card gains tmuxLink + sessionLink while keeping worktreeLink
 
-  Scenario: Task started externally appears in In Progress
+  Scenario: Task started externally gets no card
     Given I started Claude Code from my terminal with `claude --worktree feat-123`
     When the background process detects the new session
-    Then a new card should appear in "In Progress"
-    And it should attempt to match to any backlog item by branch name
+    Then no card appears for it
+    And it is linked only to a card that already has its session, terminal or branch
 
   # ── In Progress → Requires Attention ──
 

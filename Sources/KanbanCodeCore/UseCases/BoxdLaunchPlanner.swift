@@ -27,6 +27,12 @@ public enum BoxdLaunchPlanner {
 
     // MARK: - Machine name
 
+    /// Whether `name` has the shape of a machine Kanban creates for a card.
+    /// Only those are ever destroyed.
+    public static func isKanbanMachineName(_ name: String) -> Bool {
+        name.hasPrefix("kanban-")
+    }
+
     /// Machine name of a card: `kanban-<repo>-<first 8 of the card id>`.
     public static func machineName(repoName: String, cardId: String) -> String {
         let identifier = cardId.hasPrefix("card_") ? String(cardId.dropFirst("card_".count)) : cardId

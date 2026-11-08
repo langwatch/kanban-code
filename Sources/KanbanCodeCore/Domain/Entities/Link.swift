@@ -342,6 +342,27 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
             || !prLinks.isEmpty
     }
 
+    /// A card that exists only because discovery found its transcript or
+    /// worktree: nobody created, launched, resumed, named, pinned, moved or
+    /// prompted it, and no pull request, issue or parent card ties it to
+    /// work. A worktree alone does not count, since discovery attached it.
+    public var isDiscoveryOnly: Bool {
+        source == .discovered
+            && !isTombstone
+            && name == nil
+            && !manualOverrides.name
+            && !(manualOverrides.column && column != .allSessions)
+            && tmuxLink == nil
+            && launchedAt == nil
+            && parentCardId == nil
+            && !isPinned
+            && remote == nil
+            && issueLink == nil
+            && prLinks.isEmpty
+            && promptBody == nil
+            && (queuedPrompts ?? []).isEmpty
+    }
+
     /// A headless session nobody claimed: it lives in All Sessions only.
     public var isUnclaimedHeadless: Bool {
         headless == true && !isClaimed

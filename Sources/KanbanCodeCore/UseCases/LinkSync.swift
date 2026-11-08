@@ -330,11 +330,12 @@ public enum LinkSync {
         }
     }
 
-    /// Whether a served card is worth sending to peers: tombstones and every
-    /// card someone placed on the board, not the thousands of discovered
-    /// transcripts that live in All Sessions only.
+    /// Whether a served card is worth sending to peers: tombstones, every
+    /// card someone placed on the board, and archived cards, so an archive
+    /// reaches the peers even when the card was only a discovered
+    /// transcript. Discovered transcripts nobody touched stay home.
     public static func isServed(_ link: Link) -> Bool {
-        link.isTombstone || link.isClaimed || link.column != .allSessions
+        link.isTombstone || link.isClaimed || link.manuallyArchived || link.column != .allSessions
     }
 }
 

@@ -39,17 +39,13 @@ struct HeadlessSessionTests {
 
     // MARK: - Reconcile + column
 
-    @Test("A headless session no card claims stays off the board")
-    func unclaimedHeadlessStaysInAllSessions() {
+    @Test("A headless session no card claims gets no card")
+    func unclaimedHeadlessGetsNoCard() {
         let result = CardReconciler.reconcile(
             existing: [],
             snapshot: .init(sessions: [headless("h1")])
         )
-        #expect(result.count == 1)
-        #expect(result[0].headless == true)
-        #expect(column(of: result[0]) == .allSessions)
-        #expect(column(of: result[0], activity: .activelyWorking) == .allSessions)
-        #expect(column(of: result[0], activity: .needsAttention) == .allSessions)
+        #expect(result.isEmpty)
     }
 
     @Test("An existing discovered headless card leaves the board columns")
@@ -113,16 +109,15 @@ struct HeadlessSessionTests {
             launchedAt: .now.addingTimeInterval(-5)
         )
         let result = CardReconciler.reconcile(existing: [card], snapshot: .init(sessions: [headless("h1")]))
-        #expect(result.count == 2)
+        #expect(result.count == 1)
         #expect(result.first { $0.id == card.id }?.sessionLink == nil)
-        let hidden = result.first { $0.id != card.id }
-        #expect(hidden?.headless == true)
     }
 
     @Test("An interactive cli session is unchanged")
     func interactiveSessionUnchanged() {
         let session = Session(id: "c1", projectPath: "/repo", messageCount: 3, modifiedTime: .now, entrypoint: "cli")
-        let result = CardReconciler.reconcile(existing: [], snapshot: .init(sessions: [session]))
+        let card = Link(projectPath: "/repo", column: .waiting, source: .manual, sessionLink: SessionLink(sessionId: "c1"))
+        let result = CardReconciler.reconcile(existing: [card], snapshot: .init(sessions: [session]))
         #expect(result[0].headless == nil)
         #expect(column(of: result[0], activity: .needsAttention) == .waiting)
     }

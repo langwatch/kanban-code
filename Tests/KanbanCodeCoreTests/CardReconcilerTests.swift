@@ -26,16 +26,13 @@ struct CardReconcilerTests {
 
     // MARK: - Session matching
 
-    @Test("New session creates a discovered card")
-    func newSessionCreatesCard() {
+    @Test("A session no card claims gets no card")
+    func unclaimedSessionGetsNoCard() {
         let snapshot = CardReconciler.DiscoverySnapshot(
-            sessions: [Session(id: "s1", messageCount: 1, modifiedTime: .now)]
+            sessions: [Session(id: "s1", projectPath: "/p", messageCount: 1, modifiedTime: .now)]
         )
         let result = CardReconciler.reconcile(existing: [], snapshot: snapshot)
-        #expect(result.count == 1)
-        #expect(result[0].sessionLink?.sessionId == "s1")
-        #expect(result[0].source == .discovered)
-        #expect(result[0].column == .allSessions)
+        #expect(result.isEmpty)
     }
 
     @Test("An old session that lands on a card by project path does not age the card")
@@ -437,8 +434,8 @@ struct CardReconcilerTests {
 
     // MARK: - Worktree handling
 
-    @Test("Orphan worktree creates new card with just worktreeLink")
-    func orphanWorktree() {
+    @Test("A worktree no card uses gets no card")
+    func unclaimedWorktreeGetsNoCard() {
         let snapshot = CardReconciler.DiscoverySnapshot(
             worktrees: [
                 "/project": [
@@ -448,11 +445,7 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [], snapshot: snapshot)
-        #expect(result.count == 1)
-        #expect(result[0].worktreeLink?.branch == "fix-auth")
-        #expect(result[0].worktreeLink?.path == "/project/.worktrees/fix-auth")
-        #expect(result[0].sessionLink == nil)
-        #expect(result[0].source == .discovered)
+        #expect(result.isEmpty)
     }
 
     @Test("Bare worktree is skipped")
@@ -608,7 +601,7 @@ struct CardReconcilerTests {
                 tmuxLink: TmuxLink(sessionName: "my-session")
             )
         ]
-        // Snapshot with no tmux data = tmux not scanned (e.g. BoardState.refresh())
+        // Snapshot with no tmux data = tmux not scanned (a reconcile without a tmux scan)
         let snapshot = CardReconciler.DiscoverySnapshot(
             sessions: [Session(id: "s1", messageCount: 1, modifiedTime: .now)]
         )
@@ -660,7 +653,7 @@ struct CardReconcilerTests {
 
     // MARK: - Multiple sessions
 
-    @Test("Multiple sessions each get their own card")
+    @Test("Several sessions no card claims get no cards")
     func multipleSessions() {
         let snapshot = CardReconciler.DiscoverySnapshot(
             sessions: [
@@ -671,9 +664,7 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [], snapshot: snapshot)
-        #expect(result.count == 3)
-        let sessionIds = Set(result.compactMap(\.sessionLink?.sessionId))
-        #expect(sessionIds == ["s1", "s2", "s3"])
+        #expect(result.isEmpty)
     }
 
     @Test("Existing cards without matching sessions are preserved")
@@ -704,7 +695,12 @@ struct CardReconcilerTests {
             ]
         )
 
-        let first = CardReconciler.reconcile(existing: [], snapshot: snapshot)
+        let card = Link(name: "Task", projectPath: "/p", column: .inProgress, source: .manual,
+                        sessionLink: SessionLink(sessionId: "s1"))
+        let first = CardReconciler.reconcile(existing: [card], snapshot: snapshot)
+        #expect(first.count == 1)
+        #expect(first[0].worktreeLink?.branch == "feat-x")
+        #expect(first[0].prLinks.map(\.number) == [1])
         let second = CardReconciler.reconcile(existing: first, snapshot: snapshot)
 
         #expect(first.count == second.count)
@@ -712,11 +708,8 @@ struct CardReconcilerTests {
         #expect(Set(first.map(\.id)) == Set(second.map(\.id)))
     }
 
-    @Test("Session gitBranch prevents orphan worktree creation")
+    @Test("A session and its worktree found together get no card")
     func sessionBranchPreventsOrphanWorktree() {
-        // Session discovered on branch "feat-x" (no existing card)
-        // Worktree also discovered with branch "feat-x"
-        // Should produce ONE card with both sessionLink and worktreeLink
         let snapshot = CardReconciler.DiscoverySnapshot(
             sessions: [
                 Session(id: "s1", projectPath: "/project", gitBranch: "feat-x",
@@ -730,10 +723,7 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [], snapshot: snapshot)
-        #expect(result.count == 1)
-        #expect(result[0].sessionLink?.sessionId == "s1")
-        #expect(result[0].worktreeLink?.branch == "feat-x")
-        #expect(result[0].worktreeLink?.path == "/project/.worktrees/feat-x")
+        #expect(result.isEmpty)
     }
 
     @Test("Worktree creates worktreeLink on session card without existing worktreeLink")
@@ -762,21 +752,6 @@ struct CardReconcilerTests {
         #expect(result.count == 1)
         #expect(result[0].worktreeLink?.branch == "feat-x")
         #expect(result[0].worktreeLink?.path == "/project/.worktrees/feat-x")
-    }
-
-    @Test("Orphan worktree card gets projectPath from repoRoot")
-    func orphanWorktreeGetsProjectPath() {
-        let snapshot = CardReconciler.DiscoverySnapshot(
-            worktrees: [
-                "/Users/me/Projects/langwatch": [
-                    Worktree(path: "/Users/me/Projects/langwatch/.worktrees/feat-x", branch: "feat-x", isBare: false)
-                ]
-            ]
-        )
-
-        let result = CardReconciler.reconcile(existing: [], snapshot: snapshot)
-        #expect(result.count == 1)
-        #expect(result[0].projectPath == "/Users/me/Projects/langwatch")
     }
 
     // MARK: - Fork regression
@@ -1385,7 +1360,8 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [card], snapshot: snapshot)
-        #expect(result.count == 2, "Different project = different card")
+        #expect(result.count == 1, "A session of another project gets no card")
+        #expect(result[0].sessionLink?.sessionId == "s1")
     }
 
     @Test("Shell tab session in worktree project is absorbed")
@@ -1432,7 +1408,8 @@ struct CardReconcilerTests {
         )
 
         let result = CardReconciler.reconcile(existing: [card], snapshot: snapshot)
-        #expect(result.count == 2, "Different project = different card")
+        #expect(result.count == 1, "A session of another project gets no card")
+        #expect(result[0].sessionLink?.sessionId == "s1")
     }
 
     // MARK: - Worktree directory name matching (step 3b)

@@ -449,7 +449,7 @@ extension MasterEngine {
             projectPath: projectPath,
             column: .waiting,
             lastActivity: link.lastActivity,
-            source: .discovered,
+            source: .manual,
             parentCardId: link.parentCardId,
             modelOverride: link.modelOverride,
             selfCompactContextThresholdTokens: link.selfCompactContextThresholdTokens,

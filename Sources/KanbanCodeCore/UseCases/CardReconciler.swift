@@ -5,11 +5,12 @@ import Foundation
 ///
 /// Responsibilities:
 /// - Match discovered sessions to existing cards (by sessionId → tmux name → worktree branch)
-/// - Create new cards for truly unmatched sessions
 /// - Match discovered worktrees to existing cards (by branch)
-/// - Create orphan worktree cards for unmatched worktrees
 /// - Add/update PR links via branch matching
 /// - Clear dead tmux and worktree links
+///
+/// It never creates a card: a session or worktree no card claims stays off
+/// the board (specs/sessions/discovery.feature).
 ///
 /// NOT responsible for: column assignment, activity detection, GitHub issue syncing.
 public enum CardReconciler {
@@ -99,9 +100,6 @@ public enum CardReconciler {
             }
         }
 
-        // Track which sessions we've matched so we can detect new ones
-        var matchedSessionIds: Set<String> = []
-
         // The fuzzy matches below only consider cards with a terminal: a
         // handful, looked up for every session instead of scanning every card.
         let tmuxCardIds = existing.filter { $0.tmuxLink != nil }.map(\.id)
@@ -118,9 +116,8 @@ public enum CardReconciler {
             )
 
             if let cardId, var link = linksById[cardId] {
-                // Archived cards stay archived — just mark matched to prevent duplicates
+                // Archived cards stay archived.
                 if link.manuallyArchived {
-                    matchedSessionIds.insert(session.id)
                     continue
                 }
                 // A card another master runs takes its session, worktree and
@@ -129,7 +126,6 @@ public enum CardReconciler {
                 // values would be undone by the next sync and redone by the
                 // next pass, forever.
                 if let local = snapshot.localMachineId, let owner = link.ownerMachine, owner != local {
-                    matchedSessionIds.insert(session.id)
                     continue
                 }
                 // Update existing card with session data
@@ -151,7 +147,7 @@ public enum CardReconciler {
                    link.sessionLink?.sessionId == session.id, !link.isClaimed {
                     link.headless = true
                 }
-                // Different sessionId (e.g., shell tab session) — just mark matched,
+                // Different sessionId (e.g., shell tab session):
                 // don't overwrite the card's primary session. Activity only moves
                 // forward: a session from days ago that lost its own card lands
                 // on the newest card of its project by rule 4, and its age is
@@ -196,25 +192,11 @@ public enum CardReconciler {
                     }
                 }
                 linksById[cardId] = link
-                matchedSessionIds.insert(session.id)
             } else {
-                KanbanCodeLog.info("reconciler", "New session \(session.id.prefix(8)) → new card")
-                // Truly new session — create discovered card. A headless one
-                // is kept off the board columns (see AssignColumn).
-                let newLink = Link(
-                    projectPath: session.projectPath,
-                    column: .allSessions,
-                    lastActivity: session.modifiedTime,
-                    source: .discovered,
-                    sessionLink: SessionLink(
-                        sessionId: session.id,
-                        sessionPath: session.jsonlPath
-                    ),
-                    headless: session.isHeadless ? true : nil
-                )
-                linksById[newLink.id] = newLink
-                cardIdBySessionId[session.id] = newLink.id
-                matchedSessionIds.insert(session.id)
+                // A session no card claims gets no card. Kanban lists what it
+                // started or what the kanban CLI registered; a transcript found
+                // on disk is not one of those.
+                KanbanCodeLog.debug("reconciler", "Session \(session.id.prefix(8)) matches no card, not listed")
             }
         }
 
@@ -277,15 +259,8 @@ public enum CardReconciler {
                         linksById[launchingId] = link
                         cardIdsByBranch[baseName, default: []].append(launchingId)
                     } else {
-                        // Orphan worktree — create a new card
-                        KanbanCodeLog.info("reconciler", "Orphan worktree branch=\(baseName) → new card")
-                        let newLink = Link(
-                            projectPath: repoRoot,
-                            source: .discovered,
-                            worktreeLink: WorktreeLink(path: worktree.path, branch: baseName)
-                        )
-                        linksById[newLink.id] = newLink
-                        cardIdsByBranch[baseName, default: []].append(newLink.id)
+                        // A worktree no card uses gets no card of its own.
+                        KanbanCodeLog.debug("reconciler", "Worktree branch=\(baseName) matches no card, not listed")
                     }
                 } else {
                     // Update existing card's worktree link

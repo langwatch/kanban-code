@@ -974,6 +974,10 @@ public actor BoxdMachineSupervisor: RemoteMachineControl {
             KanbanCodeLog.info(Self.subsystem, "\(machineName): ssh machine, not removed")
             return
         }
+        guard BoxdLaunchPlanner.isKanbanMachineName(machineName) else {
+            KanbanCodeLog.warn(Self.subsystem, "\(machineName): not a machine Kanban created, not removed")
+            return
+        }
         if var runtime = machines[machineName] {
             runtime.eventTask?.cancel()
             runtime.keepaliveTask?.cancel()

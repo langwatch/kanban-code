@@ -41,8 +41,8 @@ struct LaunchSessionHijackTests {
 
         let launched = result.first { $0.id == card.id }
         #expect(launched?.sessionLink == nil)
-        // The old session is somebody else's, so it gets its own card.
-        #expect(result.contains { $0.sessionLink?.sessionId == "old-session" && $0.id != card.id })
+        // The old session is somebody else's, and it gets no card either.
+        #expect(result.count == 1)
     }
 
     @Test("the session the launch starts is taken")

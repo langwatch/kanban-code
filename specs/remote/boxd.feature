@@ -335,6 +335,19 @@ Feature: Boxd Remote Mode
     And Return confirms, as on "Destroy machine" and "Remove worktree"
     And a notice says "Machine <name> destroyed"
 
+  Scenario: Archive asks before destroying even with no terminal open
+    Given a card on a machine Kanban created, with no tmux session
+    When I archive the card
+    Then the same dialog asks before the machine is destroyed
+
+  Scenario: Only machines Kanban created are ever destroyed
+    Given a card linked to a machine Kanban did not create for a card
+    Like an ssh machine from the settings, a peer master such as "rchaves-platform", or a boxd VM picked by name
+    When I archive or delete the card
+    Then the card lets go of the machine
+    And the machine is not destroyed, stopped or removed
+    And the supervisor refuses to remove any machine whose name does not start with "kanban-"
+
   Scenario: Card menu machine actions
     Given a card with a machine
     Then the card menu offers "Pause Machine" while it runs

@@ -148,7 +148,3 @@ Reducer tests are pure and fast — no disk, no async, no mocks needed:
     #expect(state.links["card1"]?.column == .inProgress) // still protected
 }
 ```
-
-## Legacy: BoardState.swift
-
-`BoardState.swift` is kept as dead code — no UI references it. The `BoardStateIntegrationTests` still exercise it as regression tests. Can be deleted in a future cleanup pass.

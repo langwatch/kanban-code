@@ -294,8 +294,8 @@ struct LaunchFlowIntegrationTests {
         #expect(card?.worktreeLink?.path == "/test/project/.claude/worktrees/feat-new")
     }
 
-    @Test("Reconciler creates orphan when no card is launching in the repo")
-    func reconcilerCreatesOrphanWhenNoLaunch() {
+    @Test("A worktree with no launching card in its repo gets no card")
+    func worktreeWithoutLaunchGetsNoCard() {
         let idleCard = makeLink(
             id: "card_idle",
             column: .backlog,
@@ -315,11 +315,8 @@ struct LaunchFlowIntegrationTests {
 
         let result = CardReconciler.reconcile(existing: [idleCard], snapshot: snapshot)
 
-        // Should create an orphan card for the unmatched worktree
-        #expect(result.count == 2)
-        let orphan = result.first(where: { $0.id != "card_idle" })
-        #expect(orphan?.worktreeLink?.branch == "feat-orphan")
-        #expect(orphan?.source == .discovered)
+        #expect(result.map(\.id) == ["card_idle"])
+        #expect(result[0].worktreeLink == nil)
     }
 
     // MARK: - Discovered branches indexed for PR matching
