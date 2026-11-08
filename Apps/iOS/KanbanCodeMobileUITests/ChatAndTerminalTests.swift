@@ -304,6 +304,61 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         clearComposer()
     }
 
+    /// An item of the open edit menu, paging the menu forward until it shows.
+    private func editMenuItem(_ title: String) -> XCUIElement? {
+        for _ in 0..<4 {
+            let item = app.menuItems[title].exists ? app.menuItems[title] : app.buttons[title]
+            if item.waitForExistence(timeout: 2) { return item }
+            let forward = app.buttons["Forward"]
+            guard forward.exists else { return nil }
+            forward.tap()
+        }
+        return nil
+    }
+
+    /// Pastes what the app copied into the composer and returns it: the
+    /// app reads its own copy with no paste prompt.
+    private func pastedIntoComposer() -> String {
+        clearComposer()
+        composer.tap()
+        composer.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let pasted = (composer.value as? String) ?? ""
+        clearComposer()
+        return pasted
+    }
+
+    func testASelectionRunsOverTheParagraphsAndBulletsOfAMessage() throws {
+        openCard("card_wait")
+        let step = message(containing: "Step 30: checked part 30")
+        XCTAssertTrue(step.waitForExistence(timeout: 10))
+        // The paragraph and its list are one text view.
+        XCTAssertTrue(((step.value as? String) ?? step.label).contains("• two"))
+        // Touch and hold the first word, then drag down into the list.
+        step.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.1))
+            .press(forDuration: 1.2, thenDragTo: step.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.92)))
+        let copy = try XCTUnwrap(editMenuItem("Copy"), "no edit menu after the drag")
+        shot("29-selection-across-blocks")
+        copy.tap()
+        let copied = pastedIntoComposer()
+        XCTAssertTrue(copied.contains("Step 30: checked part 30"), copied)
+        XCTAssertTrue(copied.contains("too.\n• one"), copied)
+    }
+
+    func testCopyMessageCopiesTheWholeMarkdown() throws {
+        openCard("card_wait")
+        let step = message(containing: "Step 30: checked part 30")
+        XCTAssertTrue(step.waitForExistence(timeout: 10))
+        step.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.1)).press(forDuration: 1.2)
+        let copyMessage = try XCTUnwrap(editMenuItem("Copy message"), "no Copy message in the edit menu")
+        copyMessage.tap()
+        let copied = pastedIntoComposer()
+        XCTAssertTrue(copied.contains("**Markdown** works, `code` too."), copied)
+        XCTAssertTrue(copied.contains("- one") && copied.contains("- two"), copied)
+    }
+
     // MARK: Blank chat
 
     func testALongChatShowsItsMessagesEveryTimeItOpens() throws {
@@ -329,17 +384,22 @@ final class ChatAndTerminalTests: KanbanUITestCase {
     func testAChatWithLongLastMessagesOpensAtItsEnd() throws {
         for round in 0..<4 {
             openCard("card_long")
+            // The last message is one text view, as tall as all its
+            // paragraphs: the chat is at its end when its bottom shows.
             let end = message(containing: "End of the release notes.")
+            func atEnd() -> Bool {
+                end.isHittable && end.frame.maxY <= composer.frame.minY + 1
+            }
             XCTAssertTrue(end.waitForExistence(timeout: 10), "round \(round): no messages")
-            XCTAssertTrue(waitFor(5) { end.isHittable }, "round \(round): the chat did not open at its end")
+            XCTAssertTrue(waitFor(5) { atEnd() }, "round \(round): the chat did not open at its end")
             sleep(1)
-            XCTAssertTrue(end.isHittable, "round \(round): the chat moved off its end")
+            XCTAssertTrue(atEnd(), "round \(round): the chat moved off its end")
             if round == 0 { shot("50-long-chat-opened") }
             if round == 1 {
                 // Scrolled up to read, it stays there.
                 app.swipeDown(velocity: .slow)
                 sleep(2)
-                XCTAssertFalse(end.isHittable, "the chat went back to its end while reading")
+                XCTAssertFalse(atEnd(), "the chat went back to its end while reading")
                 shot("51-long-chat-reading")
             }
             goBack()

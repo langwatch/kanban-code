@@ -88,9 +88,11 @@ struct ChatPane: View {
                 }
                 ForEach(visibleMessages) { message in
                     MessageView(message: message, loadImage: imageLoader(for: message))
-                        // Touch and hold an agent message: its edit menu
-                        // offers to go on with it in a conversation of its own.
-                        .environment(\.selectableTextMenuItem, continueItem(for: message))
+                        // Touch and hold a message: its edit menu copies the
+                        // whole message, and offers to go on with it in a
+                        // conversation of its own.
+                        .environment(\.selectableTextMenuItems,
+                                     [copyItem(for: message), continueItem(for: message)].compactMap { $0 })
                         .background {
                             if highlightedMessage == message.id {
                                 RoundedRectangle(cornerRadius: 12)
@@ -239,6 +241,18 @@ struct ChatPane: View {
             try await RemoteImageCache.data("transcript|\(cardId)|\(message.id)|\(index)") {
                 try await client.transcriptImage(cardId: cardId, messageId: message.id, index: index)
             }
+        }
+    }
+
+    /// Copies the message's whole markdown, past what one text view
+    /// selects: its code blocks, its tables, the part a long message hides.
+    private func copyItem(for message: RemoteMessage) -> SelectableTextMenuItem? {
+        guard message.role == .assistant || message.role == .user, !message.text.isEmpty else { return nil }
+        // A prompt sent from a conversation copies as the human wrote it.
+        let text = message.role == .user ? ConversationPrompt.parse(message.text)?.text ?? message.text : message.text
+        return SelectableTextMenuItem(title: "Copy message", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = text
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
 
@@ -805,21 +819,17 @@ struct SentFileRow: View {
 }
 
 /// Assistant markdown: fenced code as monospaced blocks, tables as grids,
-/// headings and lists by line, inline styles through AttributedString.
+/// and the headings, paragraphs and lists between them as one selectable
+/// text, so a selection runs across all of them.
 struct MarkdownText: View {
     let text: String
-
-    private enum Block: Hashable {
-        case code(String)
-        case heading(String)
-        case paragraph(String)
-        case table(MarkdownTable)
-    }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
+        let segments = MarkdownDocument.segments(for: text, sizeCategory: UIContentSizeCategory(dynamicTypeSize))
+        VStack(alignment: .leading, spacing: MarkdownDocument.blockSpacing) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
                 case .code(let code):
                     let styled = SelectableTextStyle.plain(
                         code, font: .monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
@@ -838,11 +848,8 @@ struct MarkdownText: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                case .heading(let line):
-                    SelectableText(text: SelectableTextStyle.markdown(line, font: .preferredFont(forTextStyle: .headline)))
-                        .fixedSize(horizontal: false, vertical: true)
-                case .paragraph(let para):
-                    SelectableText(text: SelectableTextStyle.markdown(para))
+                case .text(let styled):
+                    SelectableText(text: styled)
                         .fixedSize(horizontal: false, vertical: true)
                 case .table(let table):
                     MarkdownTableView(table: table)
@@ -856,57 +863,6 @@ struct MarkdownText: View {
     /// thousands of points wide.
     static func wrapsCode(_ code: String) -> Bool {
         code.split(separator: "\n", omittingEmptySubsequences: false).contains { $0.utf16.count > 2_000 }
-    }
-
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var paragraph: [String] = []
-        var code: [String]? = nil
-        func flush() {
-            let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .newlines)
-            if !joined.isEmpty { out.append(.paragraph(joined)) }
-            paragraph = []
-        }
-        let lines = text.components(separatedBy: "\n")
-        var index = 0
-        while index < lines.count {
-            let raw = lines[index]
-            index += 1
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                if let lines = code {
-                    out.append(.code(lines.joined(separator: "\n")))
-                    code = nil
-                } else {
-                    flush()
-                    code = []
-                }
-                continue
-            }
-            if code != nil { code!.append(raw); continue }
-            if let (table, lineCount) = MarkdownTable.parse(lines, at: index - 1) {
-                flush()
-                out.append(.table(table))
-                index += lineCount - 1
-                continue
-            }
-            if trimmed.hasPrefix("#") {
-                flush()
-                out.append(.heading(String(trimmed.drop { $0 == "#" }).trimmingCharacters(in: .whitespaces)))
-            } else if trimmed.isEmpty {
-                flush()
-            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                // A list starts its own block after a paragraph.
-                if let last = paragraph.last, !last.trimmingCharacters(in: .whitespaces).hasPrefix("• ") { flush() }
-                let indent = String(raw.prefix { $0 == " " })
-                paragraph.append(indent + "• " + trimmed.dropFirst(2))
-            } else {
-                paragraph.append(raw)
-            }
-        }
-        if let lines = code { out.append(.code(lines.joined(separator: "\n"))) }
-        flush()
-        return out
     }
 }
 

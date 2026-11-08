@@ -12,7 +12,7 @@ struct SelectableText: UIViewRepresentable {
     var wraps = true
     var alignment: NSTextAlignment = .natural
     @Environment(\.selectableTextTap) private var onTap
-    @Environment(\.selectableTextMenuItem) private var menuItem
+    @Environment(\.selectableTextMenuItems) private var menuItems
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -49,7 +49,7 @@ struct SelectableText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.onTap = onTap
-        context.coordinator.menuItem = menuItem
+        context.coordinator.menuItems = menuItems
         if view.attributedText != text {
             view.attributedText = text
         }
@@ -58,19 +58,22 @@ struct SelectableText: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate, UITextViewDelegate {
         var onTap: (() -> Void)?
-        var menuItem: SelectableTextMenuItem?
+        var menuItems: [SelectableTextMenuItem] = []
 
         @objc func tapped() { onTap?() }
 
-        /// `menuItem` first when one is set, then the system items (Copy,
-        /// Look Up, Share).
+        /// The system's Copy and Select All first, then `menuItems`, then
+        /// the rest of the system items (Look Up, Translate, Share). A
+        /// narrow menu pages its items, so what comes first stays in view.
         func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
                       suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard let menuItem else { return nil }
-            let action = UIAction(title: menuItem.title, image: UIImage(systemName: menuItem.systemImage)) { _ in
-                menuItem.action()
+            guard !menuItems.isEmpty else { return nil }
+            let actions: [UIMenuElement] = menuItems.map { item in
+                UIAction(title: item.title, image: UIImage(systemName: item.systemImage)) { _ in item.action() }
             }
-            return UIMenu(children: [action] + suggestedActions)
+            let edit: [UIMenuElement] = Array(suggestedActions.prefix(1))
+            let rest: [UIMenuElement] = Array(suggestedActions.dropFirst())
+            return UIMenu(children: edit + actions + rest)
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -149,6 +152,6 @@ struct SelectableTextMenuItem {
 extension EnvironmentValues {
     /// Called on a plain tap on any `SelectableText` below.
     @Entry var selectableTextTap: (() -> Void)? = nil
-    /// Added to the edit menu of any `SelectableText` below.
-    @Entry var selectableTextMenuItem: SelectableTextMenuItem? = nil
+    /// Added, in order, to the edit menu of any `SelectableText` below.
+    @Entry var selectableTextMenuItems: [SelectableTextMenuItem] = []
 }
