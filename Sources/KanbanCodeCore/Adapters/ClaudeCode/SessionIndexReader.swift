@@ -15,9 +15,17 @@ public enum SessionIndexReader {
     /// Best-effort: finds the index file containing this session and updates the summary field.
     /// With no `claudeDir`, looks in the projects folder of every Claude
     /// config folder.
-    public static func updateSummary(sessionId: String, summary: String, claudeDir: String? = nil) throws {
-        for baseDir in claudeDir.map({ [$0] }) ?? ClaudeConfigDirectories.current.projectsDirectories {
-            if try updateSummary(sessionId: sessionId, summary: summary, in: baseDir) { return }
+    public static func updateSummary(
+        sessionId: String, summary: String, claudeDir: String? = nil,
+        layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
+    ) throws {
+        for baseDir in claudeDir.map({ [$0] }) ?? layout.projectsDirectories {
+            // A folder that cannot be read does not stop the others.
+            if claudeDir != nil {
+                if try updateSummary(sessionId: sessionId, summary: summary, in: baseDir) { return }
+            } else if (try? updateSummary(sessionId: sessionId, summary: summary, in: baseDir)) == true {
+                return
+            }
         }
     }
 

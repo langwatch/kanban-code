@@ -45,6 +45,9 @@ struct ClaudeConfigLayoutTests {
                 ClaudeAccount(name: "Standard", configDirectory: "~/.claude"),
                 ClaudeAccount(name: "Relative", configDirectory: "claude-x"),
                 ClaudeAccount(name: "Empty", configDirectory: "  "),
+                ClaudeAccount(name: "Half-typed", configDirectory: "~/"),
+                ClaudeAccount(name: "Root", configDirectory: "/"),
+                ClaudeAccount(name: "Above home", configDirectory: "/home"),
             ])
         #expect(layout.defaultDirectory == "/home/u/.claude-env")
         #expect(layout.directories == ["/home/u/.claude-env", "/home/u/.claude", "/home/u/.claude-work"])
@@ -121,6 +124,30 @@ struct ClaudeConfigLayoutTests {
         #expect(layout.launchEnvironment(directory: root + "/.claude/") == [:])
         #expect(layout.launchEnvironment(directory: root + "/std-link") == [:])
         #expect(layout.launchEnvironment(directory: root + "/.claude-w/") == ["CLAUDE_CONFIG_DIR": root + "/.claude-w"])
+
+        // The environment's folder keeps the environment's spelling, also
+        // ~/.claude set explicitly: its Keychain item is named after it.
+        let fromEnv = ClaudeConfigLayout(home: root, environment: ["CLAUDE_CONFIG_DIR": root + "/.claude-e/"])
+        #expect(fromEnv.launchEnvironment(directory: root + "/.claude-e") == ["CLAUDE_CONFIG_DIR": root + "/.claude-e/"])
+        let explicit = ClaudeConfigLayout(home: root, environment: ["CLAUDE_CONFIG_DIR": root + "/.claude"])
+        #expect(explicit.launchEnvironment(directory: root + "/.claude") == ["CLAUDE_CONFIG_DIR": root + "/.claude"])
+    }
+
+    @Test("Only folders Claude Code has used are written to or scrubbed")
+    func writableFolders() throws {
+        let root = try tempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        for dir in ["/.claude-used", "/work", "/.claude-proj/projects"] {
+            try FileManager.default.createDirectory(atPath: root + dir, withIntermediateDirectories: true)
+        }
+        try "{}".write(toFile: root + "/.claude-used/.claude.json", atomically: true, encoding: .utf8)
+        let layout = ClaudeConfigLayout(home: root, accounts: [
+            ClaudeAccount(name: "Used", configDirectory: root + "/.claude-used"),
+            ClaudeAccount(name: "Typo", configDirectory: root + "/work"),
+            ClaudeAccount(name: "Projects", configDirectory: root + "/.claude-proj"),
+        ])
+        #expect(layout.directories.count == 4)
+        #expect(layout.writableDirectories == [root + "/.claude", root + "/.claude-used", root + "/.claude-proj"])
     }
 
     @Test("The Keychain item is named as Claude Code names it")
@@ -152,7 +179,8 @@ struct ClaudeConfigLayoutTests {
         let accounts = [ClaudeAccount(name: "W", configDirectory: "~/.claude-w")]
         #expect(ClaudeConfigLayout(home: home, accounts: accounts, machineLoginDirectory: "~/.claude-w/").machineLoginDirectory == "/home/u/.claude-w")
         #expect(ClaudeConfigLayout(home: home, accounts: accounts, machineLoginDirectory: "~/.claude-gone").machineLoginDirectory == "/home/u/.claude")
-        #expect(ClaudeConfigLayout(home: home, environment: ["CLAUDE_CONFIG_DIR": "/e"], accounts: accounts).machineLoginDirectory == "/e")
+        // CLAUDE_CONFIG_DIR alone does not switch the machines' login.
+        #expect(ClaudeConfigLayout(home: home, environment: ["CLAUDE_CONFIG_DIR": "/e"], accounts: accounts).machineLoginDirectory == "/home/u/.claude")
     }
 
     @Test("Claude owns the transcripts of every configured folder; the others leave them alone")
@@ -208,6 +236,36 @@ struct ClaudeAccountSettingsTests {
         let settings = try JSONDecoder().decode(Settings.self, from: Data(json.utf8))
         #expect(settings.claudeAccounts.map(\.configDirectory) == ["/ok"])
         #expect(settings.projects.map(\.path) == ["/p"])
+    }
+
+    @Test("A registry follows only the settings file it was bootstrapped from, and says each change once")
+    func registry() throws {
+        let dir = NSTemporaryDirectory() + "claude-registry-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        final class Count: @unchecked Sendable { let lock = NSLock(); var value = 0 }
+        let changes = Count()
+        let registry = ClaudeConfigRegistry(home: "/h")
+        registry.onChange { _ in changes.lock.withLock { changes.value += 1 } }
+        var settings = Settings()
+        settings.claudeAccounts = [ClaudeAccount(name: "W", configDirectory: "/h/.claude-w")]
+
+        // Before bootstrap no store's settings apply.
+        registry.settingsChanged(settings, at: dir + "/settings.json")
+        #expect(registry.current.isStandardOnly)
+
+        registry.bootstrap(settingsPath: dir + "/./settings.json")
+        #expect(registry.current.isStandardOnly)
+        registry.settingsChanged(settings, at: dir + "/other.json")
+        #expect(registry.current.isStandardOnly)
+        registry.settingsChanged(settings, at: dir + "/settings.json")
+        #expect(registry.current.directories == ["/h/.claude", "/h/.claude-w"])
+        registry.settingsChanged(settings, at: dir + "/settings.json")
+        #expect(!registry.update(environment: ["PATH": "/bin"]))
+        #expect(registry.update(environment: ["CLAUDE_CONFIG_DIR": "/h/.claude-e", "PATH": "/bin"]))
+        #expect(registry.current.defaultDirectory == "/h/.claude-e")
+        #expect(!registry.update(environment: ["CLAUDE_CONFIG_DIR": "/h/.claude-e"]))
+        #expect(changes.lock.withLock { changes.value } == 2)
     }
 
     @Test("A settings store of another file never changes the process-wide folders")

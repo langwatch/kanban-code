@@ -28,6 +28,7 @@ struct ClaudeAccountsSettingsView: View {
             }
 
             ForEach(accounts.indices, id: \.self) { index in
+                if accounts.indices.contains(index) {
                 Section {
                     accountRows(index)
                 } header: {
@@ -35,6 +36,8 @@ struct ClaudeAccountsSettingsView: View {
                         Text(accounts[index].name.isEmpty ? "Account" : accounts[index].name)
                         Spacer()
                         Button(role: .destructive) {
+                            guard accounts.indices.contains(index) else { return }
+                            if machineLogin == accounts[index].configDirectory { machineLogin = "" }
                             accounts.remove(at: index)
                             scheduleSave()
                         } label: {
@@ -43,6 +46,7 @@ struct ClaudeAccountsSettingsView: View {
                         .buttonStyle(.borderless)
                         .help("Remove this account")
                     }
+                }
                 }
             }
 
@@ -57,7 +61,9 @@ struct ClaudeAccountsSettingsView: View {
             Section("Remote Machines") {
                 Picker("Login for machines", selection: $machineLogin) {
                     Text("Default").tag("")
-                    ForEach(accounts.filter { !$0.configDirectory.isEmpty }, id: \.configDirectory) { account in
+                    // Tagged by folder, listed by position: two rows may share
+                    // a folder while being edited (flagged on the rows).
+                    ForEach(Array(uniqueFolders.enumerated()), id: \.offset) { _, account in
                         Text(account.name.isEmpty ? account.configDirectory : account.name).tag(account.configDirectory)
                     }
                 }
@@ -68,12 +74,22 @@ struct ClaudeAccountsSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .task { await load() }
+        .task {
+            await load()
+            // A folder created since (the first `claude` run in it) gets
+            // its hooks and skill now.
+            Task.detached { ClaudeAccountsSetup.refresh() }
+        }
+    }
+
+    private var uniqueFolders: [ClaudeAccount] {
+        var seen = Set<String>()
+        return accounts.filter { !$0.configDirectory.isEmpty && seen.insert($0.configDirectory).inserted }
     }
 
     @ViewBuilder
     private func accountRows(_ index: Int) -> some View {
-        let account = accounts[index]
+        let account = accounts.indices.contains(index) ? accounts[index] : ClaudeAccount(name: "", configDirectory: "")
         TextField("Name", text: binding(index, \.name), prompt: Text("Work"))
         TextField("Config folder", text: binding(index, \.configDirectory), prompt: Text("~/.claude-work"))
             .font(.system(.body, design: .monospaced))
@@ -107,6 +123,9 @@ struct ClaudeAccountsSettingsView: View {
         guard let folder = ClaudeConfigLayout.expand(account.configDirectory, home: home) else {
             return ["Use a full path or one starting with ~/. This account is ignored until then."]
         }
+        guard ClaudeConfigLayout.isUsableConfigDirectory(folder, home: home) else {
+            return ["Not the home folder or above it. This account is ignored until then."]
+        }
         var out: [String] = []
         if folder == home + "/.claude" {
             out.append("~/.claude is always included; this account only adds its project folders.")
@@ -133,6 +152,11 @@ struct ClaudeAccountsSettingsView: View {
             get: { accounts.indices.contains(index) ? accounts[index][keyPath: keyPath] : "" },
             set: { value in
                 guard accounts.indices.contains(index) else { return }
+                // The machines' login follows its folder being renamed.
+                if keyPath == \ClaudeAccount.configDirectory, machineLogin == accounts[index].configDirectory,
+                   !machineLogin.isEmpty {
+                    machineLogin = value
+                }
                 accounts[index][keyPath: keyPath] = value
                 scheduleSave()
             }
@@ -168,6 +192,8 @@ struct ClaudeAccountsSettingsView: View {
     // MARK: Load / save
 
     private func load() async {
+        // An edit still waiting to be saved lands first.
+        await saveTask?.value
         do {
             let settings = try await settingsStore.read()
             accounts = settings.claudeAccounts

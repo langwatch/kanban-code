@@ -355,7 +355,7 @@ public actor SecretScrubber {
         let claudeLayout = ClaudeConfigDirectories.current
         let files = (targets ?? ScrubTargets.standard(
             home: home, kanbanHome: kanbanHome, extra: settings.paths,
-            claudeDirectories: claudeLayout.home == home ? claudeLayout.directories : [])).files()
+            claudeDirectories: claudeLayout.home == home ? claudeLayout.writableDirectories : [])).files()
         // Passwords and other credentials the human typed that only their
         // label gives away: looked for in every file, whatever their format.
         let records = ScrubTypedText(home: home, kanbanHome: kanbanHome)

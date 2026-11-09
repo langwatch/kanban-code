@@ -78,15 +78,19 @@ public enum VaultHook {
     /// Installs it when the Kanban Code hooks of Claude Code are installed,
     /// and for Codex when Codex is set up on this machine.
     public static func installWhereHooked() {
-        // Per Claude config folder: each that has the Kanban Code hooks.
-        for path in HookManager.claudeSettingsPaths()
-        where HookManager.isInstalled(for: .claude, settingsPath: path) {
-            if (try? install(settingsPath: path)) == true {
-                KanbanCodeLog.info("hooks", "installed the vault Bash hook in \(path)")
-            }
-        }
+        installWhereHooked(settingsPaths: HookManager.claudeSettingsPaths())
         if FileManager.default.fileExists(atPath: codexHome), (try? installCodex()) == true {
             KanbanCodeLog.info("hooks", "installed the vault Bash hook for Codex")
+        }
+    }
+
+    /// Per Claude config folder: each of `settingsPaths` that has the
+    /// Kanban Code hooks.
+    static func installWhereHooked(settingsPaths: [String], scriptPath: String? = nil) {
+        for path in settingsPaths where HookManager.isInstalled(for: .claude, settingsPath: path) {
+            if (try? install(settingsPath: path, scriptPath: scriptPath)) == true {
+                KanbanCodeLog.info("hooks", "installed the vault Bash hook in \(path)")
+            }
         }
     }
 

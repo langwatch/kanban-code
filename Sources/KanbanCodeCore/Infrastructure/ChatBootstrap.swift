@@ -35,7 +35,7 @@ public enum ChatBootstrap {
         let fm = FileManager.default
         var configDirs = [layout.standard]
         var isDir: ObjCBool = false
-        for dir in layout.directories where dir != layout.standard
+        for dir in layout.writableDirectories where dir != layout.standard
             && fm.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue {
             configDirs.append(dir)
         }
@@ -64,8 +64,13 @@ public enum ChatBootstrap {
         for link in links {
             do {
                 try fm.createDirectory(atPath: (link as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-                if fm.fileExists(atPath: link) || (try? fm.destinationOfSymbolicLink(atPath: link)) != nil {
+                if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil {
+                    // A stale or dangling link of ours.
                     try fm.removeItem(atPath: link)
+                } else if fm.fileExists(atPath: link) {
+                    // Something of the user's: never removed.
+                    KanbanCodeLog.warn("bootstrap", "Not linking the kanban-code skill: \(link) exists and is not a link")
+                    continue
                 }
                 try fm.createSymbolicLink(atPath: link, withDestinationPath: src)
                 KanbanCodeLog.info("bootstrap", "Linked kanban-code skill \(link) → \(src)")

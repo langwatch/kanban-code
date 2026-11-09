@@ -16,16 +16,20 @@ public enum InheritedSessionEnvironment {
         // A shell that held an Anthropic API key would make every session
         // the app starts bill that key instead of the signed-in account.
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-        // The Claude and GitHub account a card's session runs as (Claude
-        // accounts): an app started from it would run every card as that
-        // card's accounts. A shell rc that sets them still does, per pane.
-        "CLAUDE_CONFIG_DIR", "GH_TOKEN",
+        accountMarker,
     ]
+
+    /// Set in a card's session when Kanban gave it the variables of a Claude
+    /// account (`accountNames`). Only then are those dropped: an app started
+    /// from that session would otherwise run every card as that card's
+    /// accounts, while a user's own `CLAUDE_CONFIG_DIR` or `GH_TOKEN` stays.
+    public static let accountMarker = "KANBAN_CLAUDE_ACCOUNT"
+    public static let accountNames: [String] = ["CLAUDE_CONFIG_DIR", "GH_TOKEN"]
 
     /// The variables a card's session gets from the tmux session itself
     /// (`new-session -e`), never typed into its pane. `GH_TOKEN` is the
     /// token of the GitHub account of the card's project (Claude accounts).
-    public static let sessionOwned: Set<String> = ["KANBAN_CARD_ID", "KANBAN_CARD_TOKEN", "GH_TOKEN"]
+    public static let sessionOwned: Set<String> = ["KANBAN_CARD_ID", "KANBAN_CARD_TOKEN", "GH_TOKEN", accountMarker]
 
     /// Variables a card's session gets both ways: from the tmux session, so
     /// a user's own launch command sees them too, and in front of the
@@ -37,6 +41,9 @@ public enum InheritedSessionEnvironment {
     /// into a rush session's own folder.
     public static func inherited(in environment: [String: String]) -> [String] {
         var out = environment.keys.filter { names.contains($0) }
+        if environment[accountMarker] != nil {
+            out += accountNames.filter { environment[$0] != nil }
+        }
         for name in temporaryFolderNames {
             if let tmp = environment[name], isSessionFolder(tmp) { out.append(name) }
         }
@@ -54,9 +61,10 @@ public enum InheritedSessionEnvironment {
     /// server's global environment. A tmux server keeps the environment of
     /// the process that started it, so a server first started from an agent's
     /// shell would give every later pane that agent's card and session.
-    public static func tmuxUnsetArguments(serverTMPDIR: String?) -> [String] {
+    public static func tmuxUnsetArguments(serverTMPDIR: String?, accountMarked: Bool = false) -> [String] {
         var names = names.sorted()
         if let tmp = serverTMPDIR, isSessionFolder(tmp) { names += temporaryFolderNames }
+        if accountMarked { names += accountNames }
         var args: [String] = []
         for name in names {
             if !args.isEmpty { args.append(";") }

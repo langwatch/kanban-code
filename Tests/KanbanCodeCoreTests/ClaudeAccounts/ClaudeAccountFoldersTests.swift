@@ -49,12 +49,22 @@ struct ClaudeMultiRootDiscoveryTests {
         try writeTranscript(new, cwd: "/p", date: Date(timeIntervalSince1970: 2_000))
         for order in [[root + "/b/projects", root + "/a/projects"], [root + "/a/projects", root + "/b/projects"]] {
             let discovery = ClaudeCodeSessionDiscovery(projectsDirectories: { order })
-            for _ in 0..<2 {
-                let sessions = try await discovery.discoverSessions()
-                #expect(sessions.count == 1)
-                #expect(sessions.first?.jsonlPath == new)
-            }
+            let sessions = try await discovery.discoverSessions()
+            #expect(sessions.count == 1)
+            #expect(sessions.first?.jsonlPath == new)
+            // The older copy changing does not take over.
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_500)], ofItemAtPath: old)
+            #expect(try await discovery.discoverSessions().first?.jsonlPath == new)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000)], ofItemAtPath: old)
         }
+
+        // The newer copy gone, the other one shows again.
+        let discovery = ClaudeCodeSessionDiscovery(projectsDirectories: { [root + "/a/projects", root + "/b/projects"] })
+        _ = try await discovery.discoverSessions()
+        try FileManager.default.removeItem(atPath: new)
+        var paths: [String?] = []
+        for _ in 0..<2 { paths.append(try await discovery.discoverSessions().first?.jsonlPath) }
+        #expect(paths.last == old)
     }
 }
 
@@ -65,13 +75,14 @@ struct ClaudeMultiFolderHookTests {
         let root = try tempDir("hooks")
         defer { try? FileManager.default.removeItem(atPath: root) }
         let script = root + "/.kanban-code/hook.sh"
+        let status = root + "/.kanban-code/statusline.sh"
         let a = root + "/a/settings.json", b = root + "/b/settings.json"
         try FileManager.default.createDirectory(atPath: root + "/a", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: root + "/b", withIntermediateDirectories: true)
 
-        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script)
+        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script, statusLineScriptPath: status)
         #expect(!HookManager.isInstalled(for: .claude, settingsPaths: [a, b]))
-        try HookManager.install(for: .claude, settingsPaths: [a, b], hookScriptPath: script)
+        try HookManager.install(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status)
         #expect(HookManager.isInstalled(for: .claude, settingsPaths: [a, b]))
         #expect(HookManager.isStatusLineInstalled(for: .claude, settingsPath: b))
     }
@@ -81,17 +92,18 @@ struct ClaudeMultiFolderHookTests {
         let root = try tempDir("propagate")
         defer { try? FileManager.default.removeItem(atPath: root) }
         let script = root + "/.kanban-code/hook.sh"
+        let status = root + "/.kanban-code/statusline.sh"
         let a = root + "/a/settings.json", b = root + "/b/settings.json"
         try FileManager.default.createDirectory(atPath: root + "/a", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: root + "/b", withIntermediateDirectories: true)
         try #"{"statusLine":{"type":"command","command":"my-status"}}"#.write(toFile: b, atomically: true, encoding: .utf8)
 
         // Nobody opted in: nothing is installed anywhere.
-        #expect(!HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script))
+        #expect(!HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status))
         #expect(!HookManager.isInstalled(for: .claude, settingsPath: b))
 
-        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script)
-        #expect(HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script))
+        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script, statusLineScriptPath: status)
+        #expect(HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status))
         #expect(HookManager.isInstalled(for: .claude, settingsPath: b))
         let root2 = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: b))) as? [String: Any]
         #expect((root2?["statusLine"] as? [String: Any])?["command"] as? String == "my-status")
@@ -102,28 +114,61 @@ struct ClaudeMultiFolderHookTests {
         let root = try tempDir("unreadable")
         defer { try? FileManager.default.removeItem(atPath: root) }
         let script = root + "/.kanban-code/hook.sh"
+        let status = root + "/.kanban-code/statusline.sh"
         let a = root + "/a/settings.json", b = root + "/b/settings.json"
         try FileManager.default.createDirectory(atPath: root + "/a", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: root + "/b", withIntermediateDirectories: true)
         let commented = "{ // the user's comments\n \"model\": \"opus\" }"
         try commented.write(toFile: b, atomically: true, encoding: .utf8)
-        try HookManager.install(for: .claude, settingsPaths: [a, b], hookScriptPath: script)
-        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script)
-        _ = HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script)
+        try HookManager.install(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status)
+        try HookManager.install(for: .claude, settingsPath: a, hookScriptPath: script, statusLineScriptPath: status)
+        _ = HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status)
         #expect(try String(contentsOfFile: b, encoding: .utf8) == commented)
         #expect(HookManager.isInstalled(for: .claude, settingsPath: a))
         #expect(!HookManager.isRewritable(b))
         #expect(HookManager.isRewritable(root + "/missing/settings.json"))
+        // The file left alone does not keep the hooks from counting as installed.
+        #expect(HookManager.isInstalled(for: .claude, settingsPaths: [a, b]))
     }
 
-    @Test("Only folders that exist are written, and the default one when none does")
+    @Test("The vault and permission hooks follow every folder that has the Kanban hooks")
+    func vaultAndPermissionPerFolder() throws {
+        let root = try tempDir("vault")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let script = root + "/.kanban-code/hook.sh"
+        let status = root + "/.kanban-code/statusline.sh"
+        let a = root + "/a/settings.json", b = root + "/b/settings.json"
+        for dir in ["/a", "/b"] { try FileManager.default.createDirectory(atPath: root + dir, withIntermediateDirectories: true) }
+        try HookManager.install(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status)
+        VaultHook.installWhereHooked(settingsPaths: [a, b, root + "/none/settings.json"], scriptPath: root + "/.kanban-code/vault-hook.sh")
+        PermissionHook.installWhereHooked(settingsPaths: [a, b], scriptPath: root + "/.kanban-code/permission-hook.sh")
+        for path in [a, b] {
+            let text = try String(contentsOfFile: path, encoding: .utf8)
+            #expect(text.contains("vault-hook.sh"))
+            #expect(text.contains("permission-hook.sh"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: root + "/none/settings.json"))
+    }
+
+    @Test("Only Claude folders that exist are written, ~/.claude when none does, a shared file once")
     func existingFoldersOnly() throws {
         let root = try tempDir("existing")
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let none = ClaudeConfigLayout(home: root, accounts: [ClaudeAccount(name: "W", configDirectory: root + "/.claude-w")])
-        #expect(HookManager.claudeSettingsPaths(layout: none) == [root + "/.claude/settings.json"])
+        let layout = ClaudeConfigLayout(home: root, accounts: [
+            ClaudeAccount(name: "W", configDirectory: root + "/.claude-w"),
+            ClaudeAccount(name: "S", configDirectory: root + "/.claude-s"),
+        ])
+        #expect(HookManager.claudeSettingsPaths(layout: layout) == [root + "/.claude/settings.json"])
         try FileManager.default.createDirectory(atPath: root + "/.claude-w", withIntermediateDirectories: true)
-        #expect(HookManager.claudeSettingsPaths(layout: none) == [root + "/.claude-w/settings.json"])
+        // A folder Claude Code never used is not written.
+        #expect(HookManager.claudeSettingsPaths(layout: layout) == [root + "/.claude/settings.json"])
+        try "{}".write(toFile: root + "/.claude-w/.claude.json", atomically: true, encoding: .utf8)
+        #expect(HookManager.claudeSettingsPaths(layout: layout) == [root + "/.claude-w/settings.json"])
+        try FileManager.default.createDirectory(atPath: root + "/.claude", withIntermediateDirectories: true)
+        try "{}".write(toFile: root + "/.claude/settings.json", atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(atPath: root + "/.claude-s", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/.claude-s/settings.json", withDestinationPath: root + "/.claude/settings.json")
+        #expect(HookManager.claudeSettingsPaths(layout: layout) == [root + "/.claude/settings.json", root + "/.claude-w/settings.json"])
     }
 }
 
@@ -147,7 +192,7 @@ struct ClaudeAccountLaunchTests {
         let unclaimed = ClaudeAccountLaunch.forNewSession(assistant: .claude, isLocal: true, projectPath: "/h/home-app", layout: l)
         #expect(unclaimed == .shellDecides)
         #expect(unclaimed.projectsDirectoriesToWatch(layout: l) == ["/h/.claude/projects", "/h/.claude-w/projects"])
-        #expect(unclaimed.wrapping(commandTemplate: "lw") == "lw")
+        #expect(unclaimed.preamble(shell: "/bin/zsh") == nil)
 
         #expect(ClaudeAccountLaunch.forNewSession(assistant: .claude, isLocal: false, projectPath: "/h/work/app", layout: l) == .shellDecides)
         #expect(ClaudeAccountLaunch.forNewSession(assistant: .codex, isLocal: true, projectPath: "/h/work/app", layout: l) == .shellDecides)
@@ -170,6 +215,13 @@ struct ClaudeAccountLaunchTests {
         #expect(inStandard.directory == root + "/.claude")
         #expect(inStandard.environment.isEmpty)
         #expect(inStandard.unsetsConfigDirectory)
+
+        // CLAUDE_CONFIG_DIR=~/.claude set in the login shell is set again, never unset.
+        let explicit = ClaudeAccountLaunch.forResume(
+            assistant: .claude, isLocal: true, sessionId: "s1", sessionPath: standard, projectPath: "/x",
+            layout: layout(root, env: ["CLAUDE_CONFIG_DIR": root + "/.claude"]))
+        #expect(explicit.environment == ["CLAUDE_CONFIG_DIR": root + "/.claude"])
+        #expect(!explicit.unsetsConfigDirectory)
 
         let inAccount = ClaudeAccountLaunch.forResume(
             assistant: .claude, isLocal: true, sessionId: "s2", sessionPath: account, projectPath: "/elsewhere", layout: l)
@@ -199,20 +251,18 @@ struct ClaudeAccountLaunchTests {
             layout: ClaudeConfigLayout(home: root))
         #expect(launch.environment.isEmpty)
         #expect(!launch.unsetsConfigDirectory)
-        #expect(launch.wrapping(commandTemplate: nil) == nil)
+        #expect(launch.preamble(shell: "/bin/zsh") == nil)
     }
 
-    @Test("The unset goes in front of the assistant command, inside the user's template")
-    func wrapping() {
+    @Test("The unset is a shell builtin run first, so an alias named claude still works")
+    func preamble() {
         let unset = ClaudeAccountLaunch(directory: "/h/.claude", environment: [:], unsetsConfigDirectory: true)
-        let cmd = "claude --resume x"
-        func apply(_ template: String?) -> String {
-            CodingAssistant.applyCommandTemplate(cmd, template: unset.wrapping(commandTemplate: template))
-        }
-        #expect(apply(nil) == "env -u CLAUDE_CONFIG_DIR claude --resume x")
-        #expect(apply("  ") == "env -u CLAUDE_CONFIG_DIR claude --resume x")
-        #expect(apply("langwatch") == "langwatch env -u CLAUDE_CONFIG_DIR claude --resume x")
-        #expect(apply("source ~/.env; ${cli_command} --rc") == "source ~/.env; env -u CLAUDE_CONFIG_DIR claude --resume x --rc")
+        #expect(unset.preamble(shell: "/bin/zsh") == "unset CLAUDE_CONFIG_DIR")
+        #expect(unset.preamble(shell: nil) == "unset CLAUDE_CONFIG_DIR")
+        #expect(unset.preamble(shell: "/opt/homebrew/bin/fish") == "begin; set -e CLAUDE_CONFIG_DIR; true; end")
+        #expect(MasterEngine.joinedPreamble(nil, nil) == nil)
+        #expect(MasterEngine.joinedPreamble("a", nil) == "a")
+        #expect(MasterEngine.joinedPreamble("a", "b") == "a && b")
     }
 }
 
@@ -263,10 +313,15 @@ struct ClaudeAccountSessionEnvironmentTests {
         #expect(tmux.environment["CLAUDE_CONFIG_DIR"] == "/h/.claude-w")
     }
 
-    @Test("An app started from a card's shell drops the card's accounts")
+    @Test("An app started from a card's shell drops the accounts Kanban gave it, and only those")
     func inherited() {
-        let found = InheritedSessionEnvironment.inherited(in: ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t", "HOME": "/h"])
-        #expect(found == ["CLAUDE_CONFIG_DIR", "GH_TOKEN"])
+        let marker = InheritedSessionEnvironment.accountMarker
+        let card = ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t", marker: "1", "HOME": "/h"]
+        #expect(InheritedSessionEnvironment.inherited(in: card) == ["CLAUDE_CONFIG_DIR", "GH_TOKEN", marker])
+        // The user's own exports stay.
+        #expect(InheritedSessionEnvironment.inherited(in: ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t"]).isEmpty)
+        #expect(InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil, accountMarked: true).contains("GH_TOKEN"))
+        #expect(!InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil).contains("GH_TOKEN"))
     }
 }
 
@@ -311,7 +366,14 @@ struct ClaudeTranscriptFolderTests {
         try #"{"version":1,"entries":[{"sessionId":"s","summary":"old"}]}"#.write(toFile: index, atomically: true, encoding: .utf8)
         try SessionIndexReader.updateSummary(sessionId: "s", summary: "new", claudeDir: root + "/a/projects")
         #expect(try String(contentsOfFile: index, encoding: .utf8).contains("old"))
-        try SessionIndexReader.updateSummary(sessionId: "s", summary: "new", claudeDir: root + "/b/projects")
+        // No folder named: every folder of the layout, an unreadable one skipped.
+        let layout = ClaudeConfigLayout(home: root, accounts: [
+            ClaudeAccount(name: "Unreadable", configDirectory: root + "/broken"),
+            ClaudeAccount(name: "A", configDirectory: root + "/a"),
+            ClaudeAccount(name: "B", configDirectory: root + "/b"),
+        ])
+        try "not a folder".write(toFile: root + "/broken", atomically: true, encoding: .utf8)
+        try SessionIndexReader.updateSummary(sessionId: "s", summary: "new", layout: layout)
         #expect(try String(contentsOfFile: index, encoding: .utf8).contains("new"))
     }
 
@@ -328,7 +390,7 @@ struct ClaudeTranscriptFolderTests {
         try writeTranscript(transcript, cwd: "/p")
         var link = Link(projectPath: "/p")
         link.sessionLink = SessionLink(sessionId: "sid", sessionPath: root + "/gone.jsonl")
-        #expect(ConversationExportCommand.transcriptPath(for: link, kanbanHome: kanban) == transcript)
+        #expect(ConversationExportCommand.transcriptPath(for: link, kanbanHome: kanban, userHome: root, environment: [:]) == transcript)
     }
 
     @Test("Machines get the login of the chosen folder: its Keychain item and files")
@@ -355,15 +417,18 @@ struct ClaudeTranscriptFolderTests {
         let source = root + "/repo/.claude/skills/kanban-code"
         try FileManager.default.createDirectory(atPath: source, withIntermediateDirectories: true)
         try "x".write(toFile: source + "/SKILL.md", atomically: true, encoding: .utf8)
-        try FileManager.default.createDirectory(atPath: root + "/.claude-w", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: root + "/.claude-w/projects", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: root + "/.claude-unused", withIntermediateDirectories: true)
         let layout = ClaudeConfigLayout(home: root, accounts: [
             ClaudeAccount(name: "W", configDirectory: root + "/.claude-w"),
             ClaudeAccount(name: "Gone", configDirectory: root + "/.claude-gone"),
+            ClaudeAccount(name: "Unused", configDirectory: root + "/.claude-unused"),
         ])
         ChatBootstrap.ensureSkillSymlink(repoRoot: root + "/repo", layout: layout)
         #expect(FileManager.default.fileExists(atPath: root + "/.claude/skills/kanban-code/SKILL.md"))
         #expect(FileManager.default.fileExists(atPath: root + "/.claude-w/skills/kanban-code/SKILL.md"))
         #expect(!FileManager.default.fileExists(atPath: root + "/.claude-gone"))
+        #expect(!FileManager.default.fileExists(atPath: root + "/.claude-unused/skills"))
     }
 
     @Test("The scrubber reads the transcripts of the account folders")
@@ -373,10 +438,17 @@ struct ClaudeTranscriptFolderTests {
         #expect(targets.roots.filter { $0 == "/h/.claude/projects" }.count == 1)
     }
 
-    @Test("Side chat and slash commands find a tmux card's account folder from its transcript")
+    @Test("Side chat and slash commands find a tmux card's account folder from its transcript, or its project")
     func sideChatFolder() {
         #expect(SideChatSession.claudeConfigDirectory(
             transcriptPath: "/h/.claude-w/projects/-p/s.jsonl", isRush: false, home: "/h") == "/h/.claude-w")
+        let layout = ClaudeConfigLayout(home: "/h", accounts: [
+            ClaudeAccount(name: "W", configDirectory: "/h/.claude-w", projectPaths: ["/h/work"]),
+        ])
+        #expect(SlashCommandSession.claudeConfigDirectory(
+            transcriptPath: nil, isRush: false, home: "/h", environment: [:], projectPath: "/h/work/app", layout: layout) == "/h/.claude-w")
+        #expect(SlashCommandSession.claudeConfigDirectory(
+            transcriptPath: nil, isRush: false, home: "/h", environment: [:], projectPath: "/h/else", layout: layout) == nil)
     }
 }
 

@@ -300,12 +300,11 @@ public final class MasterEngine {
                 // The Claude account of the project: its config folder, and
                 // where the new transcript can show up (every folder when
                 // the shell picks it).
-                let claudeLayout = ClaudeConfigDirectories.current
+                let claudeLayout = platform.claudeLayout()
                 let claudeAccount = ClaudeAccountLaunch.forNewSession(
                     assistant: assistant, isLocal: !isRemote, projectPath: projectPath, layout: claudeLayout)
-                let launchEnv = serviceExtraEnv
-                    .merging(claudeAccount.environment) { _, new in new }
-                    .merging(isRemote ? [:] : await gitHubEnvironment(projectPath)) { _, new in new }
+                let launchEnv = serviceExtraEnv.merging(
+                    await accountEnvironment(claudeAccount, projectPath: projectPath, isRemote: isRemote)) { _, new in new }
 
                 // Snapshot existing session files for detection
                 let sessionFileExt = ".\(assistant.sessionFileExtension)"
@@ -357,9 +356,9 @@ public final class MasterEngine {
                     shellOverride: shellOverride,
                     extraEnv: launchEnv,
                     commandOverride: commandOverride,
-                    commandTemplate: claudeAccount.wrapping(commandTemplate: commandTemplate),
+                    commandTemplate: commandTemplate,
                     skipPermissions: skipPermissions,
-                    preamble: preamble,
+                    preamble: Self.joinedPreamble(preamble, claudeAccount.preamble(shell: platform.paneShell())),
                     assistant: assistant,
                     service: resolvedService,
                     modelOverride: effectiveModelOverride
@@ -700,8 +699,7 @@ public final class MasterEngine {
            let sessionPath = sessionLink.sessionPath {
             // Within the transcript's own Claude config folder: the resume
             // runs with that folder.
-            let projectsDir = ClaudeConfigDirectories.current.projectsDirectory(containingSession: sessionPath)
-                ?? platform.claudeProjectsDirectory
+            let projectsDir = claudeProjectsDirectory(holding: sessionPath)
             let expectedDir = projectsDir + "/" + SessionFileMover.encodeProjectPath(projectPath)
             let expectedPath = expectedDir + "/" + sessionId + ".jsonl"
             if sessionPath != expectedPath,
@@ -709,7 +707,8 @@ public final class MasterEngine {
                FileManager.default.fileExists(atPath: sessionPath) {
                 KanbanCodeLog.info("resume", "Moving session file from worktree project key to \(expectedDir)")
                 if let newPath = try? SessionFileMover.moveSession(
-                    sessionId: sessionId, fromPath: sessionPath, toProjectPath: projectPath
+                    sessionId: sessionId, fromPath: sessionPath, toProjectPath: projectPath,
+                    projectsDirectory: projectsDir
                 ) {
                     var updatedLink = card.link
                     updatedLink.sessionLink = SessionLink(sessionId: sessionId, sessionPath: newPath)
@@ -893,7 +892,9 @@ public final class MasterEngine {
                         if assistant == .claude,
                            let sessionPath = store.state.links[cardId]?.sessionLink?.sessionPath,
                            FileManager.default.fileExists(atPath: sessionPath),
-                           let moved = try? SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: root) {
+                           let moved = try? SessionFileMover.moveSession(
+                               sessionId: sessionId, fromPath: sessionPath, toProjectPath: root,
+                               projectsDirectory: claudeProjectsDirectory(holding: sessionPath)) {
                             var updated = store.state.links[cardId] ?? card.link
                             updated.sessionLink = SessionLink(sessionId: sessionId, sessionPath: moved)
                             store.dispatch(.createManualTask(updated))
@@ -963,19 +964,18 @@ public final class MasterEngine {
                 let claudeAccount = ClaudeAccountLaunch.forResume(
                     assistant: assistant, isLocal: !isRemote, sessionId: sessionId,
                     sessionPath: store.state.links[cardId]?.sessionLink?.sessionPath ?? card.link.sessionLink?.sessionPath,
-                    projectPath: card.link.projectPath ?? resumePath, layout: ClaudeConfigDirectories.current)
-                let resumeEnv = serviceExtraEnv
-                    .merging(claudeAccount.environment) { _, new in new }
-                    .merging(isRemote ? [:] : await gitHubEnvironment(card.link.projectPath ?? resumePath)) { _, new in new }
+                    projectPath: card.link.projectPath ?? resumePath, layout: platform.claudeLayout())
+                let resumeEnv = serviceExtraEnv.merging(
+                    await accountEnvironment(claudeAccount, projectPath: card.link.projectPath ?? resumePath, isRemote: isRemote)) { _, new in new }
                 let actualTmuxName = try await launcher.resume(
                     sessionId: sessionId,
                     projectPath: resumePath,
                     shellOverride: shellOverride,
                     extraEnv: resumeEnv,
                     commandOverride: commandOverride,
-                    commandTemplate: claudeAccount.wrapping(commandTemplate: commandTemplate),
+                    commandTemplate: commandTemplate,
                     skipPermissions: skipPermissions,
-                    preamble: preamble,
+                    preamble: Self.joinedPreamble(preamble, claudeAccount.preamble(shell: platform.paneShell())),
                     assistant: assistant,
                     service: resolvedService,
                     modelOverride: effectiveModelOverride

@@ -20,12 +20,15 @@ public enum SessionFileMover {
     /// Move a session file to a new project folder of the same Claude config
     /// folder: `claude --resume` finds a session only in the folder it runs
     /// with. Returns the new file path.
+    /// `projectsDirectory`: where to move it, by default the `projects/`
+    /// folder it is in.
     public static func moveSession(
         sessionId: String,
         fromPath: String,
-        toProjectPath: String
+        toProjectPath: String,
+        projectsDirectory: String? = nil
     ) throws -> String {
-        let projectsDir = projectsDirectory(of: fromPath)
+        let projectsDir = projectsDirectory ?? Self.projectsDirectory(of: fromPath)
         let targetDirName = encodeProjectPath(toProjectPath)
         let targetDir = projectsDir + "/" + targetDirName
         let targetPath = targetDir + "/" + sessionId + ".jsonl"

@@ -105,5 +105,17 @@ public struct MasterPlatform: Sendable {
     /// Claude's projects directory, where transcripts live by working directory.
     public var claudeProjectsDirectory: String = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
 
+    /// The Claude config folders (Settings > Claude accounts) launches and
+    /// resumes pick from.
+    public var claudeLayout: @Sendable () -> ClaudeConfigLayout = { ClaudeConfigDirectories.current }
+
+    /// Tokens of the GitHub logins the accounts name.
+    public var gitHubTokens: GitHubAccountTokens = .shared
+
+    /// The shell a card's tmux pane runs (the user's login shell).
+    public var paneShell: @Sendable () -> String? = {
+        ShellCommand.loginEnvironment["SHELL"] ?? ProcessInfo.processInfo.environment["SHELL"]
+    }
+
     public init() {}
 }

@@ -95,7 +95,10 @@ let options = ServerOptions.parse(Array(CommandLine.arguments.dropFirst()))
 // current as the settings change.
 ClaudeConfigDirectories.bootstrap(settingsPath: (options.home as NSString).appendingPathComponent("settings.json"))
 ClaudeConfigDirectories.update(environment: ShellCommand.loginEnvironment)
-ClaudeConfigDirectories.onChange { _ in ClaudeAccountsSetup.refresh(installingHooks: true) }
+ClaudeConfigDirectories.onChange { _ in
+    // Off the caller, often a SettingsStore read.
+    Task.detached { ClaudeAccountsSetup.refresh(installingHooks: true) }
+}
 let devices = RemoteDeviceStore(path: options.devicesFile)
 let settings = try? await SettingsStore(basePath: options.home).read()
 let port = options.port ?? settings?.remoteControl.port ?? RemoteAPI.defaultPort

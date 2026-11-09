@@ -162,8 +162,11 @@ public struct Settings: Codable, Sendable {
         remoteControl = (try? container.decodeIfPresent(RemoteControlSettings.self, forKey: .remoteControl)) ?? RemoteControlSettings()
         peers = (try? container.decodeIfPresent([PeerConfig].self, forKey: .peers)) ?? []
         // One account that does not decode is dropped, not the others.
-        claudeAccounts = ((try? container.decodeIfPresent([LossyClaudeAccount].self, forKey: .claudeAccounts)) ?? [])
-            .compactMap(\.account)
+        let lossyAccounts = (try? container.decodeIfPresent([LossyClaudeAccount].self, forKey: .claudeAccounts)) ?? []
+        claudeAccounts = lossyAccounts.compactMap(\.account)
+        if claudeAccounts.count < lossyAccounts.count {
+            KanbanCodeLog.warn("settings", "Dropped \(lossyAccounts.count - claudeAccounts.count) Claude account(s) without a configDirectory; the next save removes them")
+        }
         claudeMachineLoginDirectory = (try? container.decodeIfPresent(String.self, forKey: .claudeMachineLoginDirectory))
             .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }

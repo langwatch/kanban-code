@@ -8,8 +8,8 @@ import Foundation
 ///   login environment), as before accounts existed.
 /// - A resume runs with the folder its transcript is in: `claude --resume`
 ///   finds a session only there.
-/// - `~/.claude` is reached by unsetting `CLAUDE_CONFIG_DIR`, never by
-///   setting it (see `ClaudeConfigLayout.launchEnvironment`).
+/// - `~/.claude` is reached by unsetting `CLAUDE_CONFIG_DIR` (`preamble`),
+///   never by setting it (see `ClaudeConfigLayout.launchEnvironment`).
 public struct ClaudeAccountLaunch: Sendable, Equatable {
     /// The folder Kanban picked, nil when it leaves the choice to the shell.
     public var directory: String?
@@ -87,17 +87,18 @@ public struct ClaudeAccountLaunch: Sendable, Equatable {
         return layout.projectsDirectories
     }
 
-    /// The user's launch command template with `env -u CLAUDE_CONFIG_DIR`
-    /// in front of the assistant command when the session must not inherit
-    /// one. Placed at the command itself, so a template that runs shell
-    /// code first (`source x; ${cli_command}`) keeps working.
-    public func wrapping(commandTemplate template: String?) -> String? {
-        guard unsetsConfigDirectory else { return template }
-        let placeholder = AssistantCommandTemplate.placeholder
-        let unset = "env -u CLAUDE_CONFIG_DIR " + placeholder
-        let trimmed = template?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, trimmed != placeholder else { return unset }
-        let withPlaceholder = trimmed.contains(placeholder) ? trimmed : trimmed + " " + placeholder
-        return withPlaceholder.replacingOccurrences(of: placeholder, with: unset)
+    /// The shell step the launch runs before the command when the session
+    /// must not inherit a `CLAUDE_CONFIG_DIR` (the pane's shell, direnv or
+    /// the tmux server may carry one). A shell builtin, not `env -u`: the
+    /// command stays a word the shell resolves, so an alias or function
+    /// named `claude` (Claude Code's local install) keeps working, and a
+    /// launch command of the user's own is covered too. `shell` is the
+    /// pane's shell (fish has no `unset`).
+    public func preamble(shell: String?) -> String? {
+        guard unsetsConfigDirectory else { return nil }
+        if let shell, (shell as NSString).lastPathComponent == "fish" {
+            return "begin; set -e CLAUDE_CONFIG_DIR; true; end"
+        }
+        return "unset CLAUDE_CONFIG_DIR"
     }
 }

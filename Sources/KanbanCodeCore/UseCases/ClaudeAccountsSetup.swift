@@ -6,18 +6,27 @@ import Foundation
 /// change (an account added in Settings), so a new account works without a
 /// restart.
 public enum ClaudeAccountsSetup {
+    /// One run at a time: two would read and write the same settings files.
+    private static let lock = NSLock()
+
     /// `installingHooks`: install the hooks into every folder that lacks
     /// them (the headless server, which always runs with hooks). Otherwise
     /// only where the user already opted in once (`addMissingHooks`).
+    /// Folders other than `~/.claude` keep a status line of their own.
     public static func refresh(installingHooks: Bool = false) {
-        let paths = HookManager.claudeSettingsPaths().filter {
+        lock.lock()
+        defer { lock.unlock() }
+        let layout = ClaudeConfigDirectories.current
+        let paths = HookManager.claudeSettingsPaths(layout: layout).filter {
             FileManager.default.fileExists(atPath: ($0 as NSString).deletingLastPathComponent)
         }
         if installingHooks {
             for path in paths where !HookManager.isInstalled(for: .claude, settingsPath: path) {
                 guard HookManager.isRewritable(path) else { continue }
                 do {
-                    try HookManager.install(for: .claude, settingsPath: path)
+                    try HookManager.install(
+                        for: .claude, settingsPaths: [path],
+                        replacingOwnStatusLine: path == layout.standard + "/settings.json")
                     KanbanCodeLog.info("hooks", "installed Claude Code hooks in \(path)")
                 } catch {
                     KanbanCodeLog.warn("hooks", "could not install Claude Code hooks in \(path): \(error)")
@@ -28,6 +37,6 @@ public enum ClaudeAccountsSetup {
         }
         VaultHook.installWhereHooked()
         PermissionHook.installWhereHooked()
-        ChatBootstrap.ensureSkillSymlink()
+        ChatBootstrap.ensureSkillSymlink(layout: layout)
     }
 }

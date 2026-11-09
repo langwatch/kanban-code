@@ -489,9 +489,15 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             """
 
         // No checkout is named: the GitHub account is the one of a known
-        // checkout of this repository.
+        // checkout of this repository, one an account with a GitHub login
+        // claims first, then in path order.
+        let layout = ClaudeConfigDirectories.current
         let checkout = slugLock.withLock {
-            slugCache.first { $0.value.owner == parts[0] && $0.value.name == parts[1] }?.key
+            slugCache.filter {
+                $0.value.owner.lowercased() == parts[0].lowercased() && $0.value.name.lowercased() == parts[1].lowercased()
+            }.keys.sorted()
+        }.min { lhs, rhs in
+            (layout.account(forPath: lhs)?.githubUser != nil ? 0 : 1) < (layout.account(forPath: rhs)?.githubUser != nil ? 0 : 1)
         }
         var environment: [String: String]?
         if let checkout { environment = await ghEnvironment(checkout) }
@@ -608,8 +614,6 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         }
     }
 
-    /// Merge a PR using the configured merge command template.
-    /// The template can contain `${number}` which gets replaced with the PR number.
     /// The environment `gh` runs with in `directory`: the token of the
     /// GitHub account of the Claude account that claims it, nil (the login
     /// environment, the active `gh` account) otherwise.
@@ -620,6 +624,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         return ShellCommand.loginEnvironment.merging(extra) { _, new in new }
     }
 
+    /// Merge a PR using the configured merge command template.
+    /// The template can contain `${number}` which gets replaced with the PR number.
     public func mergePR(repoRoot: String, prNumber: Int, commandTemplate: String) async throws -> MergeResult {
         let expanded = commandTemplate.replacingOccurrences(of: "${number}", with: "\(prNumber)")
         let parts = expanded.components(separatedBy: " ").filter { !$0.isEmpty }

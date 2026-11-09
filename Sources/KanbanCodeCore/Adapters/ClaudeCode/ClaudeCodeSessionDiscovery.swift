@@ -66,6 +66,11 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
             return
         }
         cachedSessions.removeValue(forKey: sessionId)
+        // Another folder may hold a copy `keep` passed over (a config
+        // folder copied from another): the next scan reads it again.
+        for (otherDir, ids) in dirSessionIds where otherDir != dirPath && ids.contains(sessionId) {
+            dirMtimes.removeValue(forKey: otherDir)
+        }
     }
 
     /// Caches `session`, unless the same session id is cached from another
@@ -141,8 +146,10 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
                     if let cachedMtime = fileMtimes[filePath],
                        mtime == cachedMtime,
                        cachedSessions[sessionId] != nil {
-                        // Still merge index data in case index was updated
-                        if let entry = indexById[sessionId], var session = cachedSessions[sessionId] {
+                        // Still merge index data in case index was updated,
+                        // from this folder's index for this folder's copy.
+                        if let entry = indexById[sessionId], var session = cachedSessions[sessionId],
+                           session.jsonlPath.map({ ($0 as NSString).deletingLastPathComponent }) == dirPath {
                             if session.name == nil { session.name = entry.summary }
                             if session.projectPath == nil { session.projectPath = entry.projectPath }
                             cachedSessions[sessionId] = session
@@ -184,7 +191,11 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
 
                         if isExcludedHeadless(session) {
                             skipped.insert(sessionId)
-                            cachedSessions.removeValue(forKey: sessionId)
+                            // Only this transcript's entry: another folder
+                            // may hold the same id.
+                            if cachedSessions[sessionId]?.jsonlPath == filePath {
+                                cachedSessions.removeValue(forKey: sessionId)
+                            }
                             fileMtimes.removeValue(forKey: filePath)
                             continue
                         }

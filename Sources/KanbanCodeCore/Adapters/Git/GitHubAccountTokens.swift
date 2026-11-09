@@ -13,6 +13,8 @@ public actor GitHubAccountTokens {
     private let lifetime: TimeInterval
     private let retryAfter: TimeInterval
     private var tokens: [String: (token: String?, at: Date)] = [:]
+    /// A fetch under way, which callers arriving meanwhile wait for.
+    private var fetching: [String: Task<String?, Never>] = [:]
 
     /// `lifetime`: how long a token is reused. `retryAfter`: how long a
     /// login whose token could not be read is left alone, so a missing
@@ -28,7 +30,12 @@ public actor GitHubAccountTokens {
            now.timeIntervalSince(cached.at) < (cached.token == nil ? retryAfter : lifetime) {
             return cached.token
         }
-        let token = await fetch(user)
+        if let running = fetching[user] { return await running.value }
+        let fetch = self.fetch
+        let task = Task { await fetch(user) }
+        fetching[user] = task
+        let token = await task.value
+        fetching[user] = nil
         if token == nil {
             KanbanCodeLog.warn("github", "No gh token for \(user); gh runs as the active account (gh auth login --user \(user))")
         }

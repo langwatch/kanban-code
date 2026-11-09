@@ -437,8 +437,7 @@ extension MasterEngine {
             // `claude --resume` finds the session only under the folder it
             // runs in, and only in its own Claude config folder.
             if assistant == .claude, let path = projectPath {
-                let projects = ClaudeConfigDirectories.current.projectsDirectory(containingSession: sessionPath)
-                    ?? platform.claudeProjectsDirectory
+                let projects = claudeProjectsDirectory(holding: sessionPath)
                 targetDir = "\(projects)/\(SessionFileMover.encodeProjectPath(path))"
             }
         }
