@@ -34,6 +34,12 @@ public struct Settings: Codable, Sendable {
     public var remoteControl: RemoteControlSettings
     /// Other masters this one syncs cards with (Settings > Peers).
     public var peers: [PeerConfig]
+    /// Claude Code config folders besides `~/.claude`, and the projects that
+    /// use each (Settings > Claude accounts).
+    public var claudeAccounts: [ClaudeAccount]
+    /// The config folder whose Claude login remote machines get. Nil for
+    /// the default one.
+    public var claudeMachineLoginDirectory: String?
 
     public init(
         projects: [Project] = [],
@@ -57,7 +63,9 @@ public struct Settings: Codable, Sendable {
         assistantCommands: [String: AssistantCommandTemplate] = [:],
         assistantRuntimes: [String: SessionRuntime] = [:],
         remoteControl: RemoteControlSettings = RemoteControlSettings(),
-        peers: [PeerConfig] = []
+        peers: [PeerConfig] = [],
+        claudeAccounts: [ClaudeAccount] = [],
+        claudeMachineLoginDirectory: String? = nil
     ) {
         self.projects = projects
         self.globalView = globalView
@@ -81,6 +89,8 @@ public struct Settings: Codable, Sendable {
         self.assistantRuntimes = assistantRuntimes
         self.remoteControl = remoteControl
         self.peers = peers
+        self.claudeAccounts = claudeAccounts
+        self.claudeMachineLoginDirectory = claudeMachineLoginDirectory
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -89,6 +99,7 @@ public struct Settings: Codable, Sendable {
         case enabledAssistants
         case apiServices, defaultAPIServiceIds
         case selfCompact, subagents, assistantCommands, assistantRuntimes, remoteControl, peers
+        case claudeAccounts, claudeMachineLoginDirectory
         case skill // backward-compat: old name for promptTemplate
     }
 
@@ -150,6 +161,14 @@ public struct Settings: Codable, Sendable {
         }
         remoteControl = (try? container.decodeIfPresent(RemoteControlSettings.self, forKey: .remoteControl)) ?? RemoteControlSettings()
         peers = (try? container.decodeIfPresent([PeerConfig].self, forKey: .peers)) ?? []
+        // One account that does not decode is dropped, not the others.
+        let lossyAccounts = (try? container.decodeIfPresent([LossyClaudeAccount].self, forKey: .claudeAccounts)) ?? []
+        claudeAccounts = lossyAccounts.compactMap(\.account)
+        if claudeAccounts.count < lossyAccounts.count {
+            KanbanCodeLog.warn("settings", "Dropped \(lossyAccounts.count - claudeAccounts.count) Claude account(s) without a configDirectory; the next save removes them")
+        }
+        claudeMachineLoginDirectory = (try? container.decodeIfPresent(String.self, forKey: .claudeMachineLoginDirectory))
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -180,6 +199,10 @@ public struct Settings: Codable, Sendable {
         if !peers.isEmpty {
             try container.encode(peers, forKey: .peers)
         }
+        if !claudeAccounts.isEmpty {
+            try container.encode(claudeAccounts, forKey: .claudeAccounts)
+        }
+        try container.encodeIfPresent(claudeMachineLoginDirectory, forKey: .claudeMachineLoginDirectory)
         // Note: "skill" is NOT encoded — only read for backward-compat
     }
 
@@ -199,6 +222,14 @@ public struct Settings: Codable, Sendable {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != AssistantCommandTemplate.placeholder else { return nil }
         return trimmed
+    }
+}
+
+/// An account entry that decodes to nil instead of failing the list.
+private struct LossyClaudeAccount: Decodable {
+    let account: ClaudeAccount?
+    init(from decoder: Decoder) throws {
+        account = try? ClaudeAccount(from: decoder)
     }
 }
 
@@ -560,6 +591,7 @@ public actor SettingsStore {
         let settings = try decoder.decode(Settings.self, from: data)
         cachedSettings = settings
         cachedMtime = mtime
+        publishClaudeAccounts(settings)
         return settings
     }
 
@@ -577,6 +609,14 @@ public actor SettingsStore {
         // Update cache with the just-written value
         cachedSettings = settings
         cachedMtime = (try? fileManager.attributesOfItem(atPath: filePath))?[.modificationDate] as? Date
+        publishClaudeAccounts(settings)
+    }
+
+    /// The Claude config folders follow the settings file the process
+    /// bootstrapped them from (`ClaudeConfigDirectories.bootstrap`), whatever
+    /// store reads it; other files (a test's) leave them alone.
+    private func publishClaudeAccounts(_ settings: Settings) {
+        ClaudeConfigDirectories.settingsChanged(settings, at: filePath)
     }
 
     /// The file path for external access.

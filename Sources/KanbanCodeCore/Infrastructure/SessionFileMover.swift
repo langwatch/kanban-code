@@ -5,14 +5,31 @@ import Foundation
 /// Mirrors claude-resume's moveSession() logic.
 public enum SessionFileMover {
 
-    /// Move a session file to a new project folder.
-    /// Returns the new file path.
+    /// The `projects/` folder a transcript (`<config>/projects/<key>/<id>.jsonl`)
+    /// is in, or `~/.claude`'s when the path has another shape (as
+    /// `MasterPlatform.claudeProjectsDirectory`).
+    public static func projectsDirectory(
+        of transcriptPath: String,
+        layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
+    ) -> String {
+        if let known = layout.projectsDirectory(containingSession: transcriptPath) { return known }
+        let projects = ((transcriptPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        if (projects as NSString).lastPathComponent == "projects" { return projects }
+        return layout.standard + "/projects"
+    }
+
+    /// Move a session file to a new project folder of the same Claude config
+    /// folder: `claude --resume` finds a session only in the folder it runs
+    /// with. Returns the new file path.
+    /// `projectsDirectory`: where to move it, by default the `projects/`
+    /// folder it is in.
     public static func moveSession(
         sessionId: String,
         fromPath: String,
-        toProjectPath: String
+        toProjectPath: String,
+        projectsDirectory: String? = nil
     ) throws -> String {
-        let projectsDir = NSHomeDirectory() + "/.claude/projects"
+        let projectsDir = projectsDirectory ?? Self.projectsDirectory(of: fromPath)
         let targetDirName = encodeProjectPath(toProjectPath)
         let targetDir = projectsDir + "/" + targetDirName
         let targetPath = targetDir + "/" + sessionId + ".jsonl"
@@ -53,8 +70,9 @@ public enum SessionFileMover {
         let newContent = newLines.joined(separator: "\n")
         try newContent.write(toFile: targetPath, atomically: true, encoding: .utf8)
 
-        // Remove original (only if different path)
-        if fromPath != targetPath {
+        // Remove original (only if another file: one spelled through a
+        // symlink is the same file, just rewritten)
+        if fromPath != targetPath, ClaudeConfigLayout.resolve(fromPath) != ClaudeConfigLayout.resolve(targetPath) {
             try? fm.removeItem(atPath: fromPath)
         }
 

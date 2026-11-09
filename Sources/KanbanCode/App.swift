@@ -10,6 +10,16 @@ struct KanbanCodeApp: App {
 
     init() {
         InheritedSessionEnvironment.scrub()
+        // The Claude config folders (Settings > Claude accounts), before
+        // anything looks for sessions or links the skill.
+        ClaudeConfigDirectories.bootstrap()
+        ClaudeConfigDirectories.onChange { _ in
+            Task.detached { ClaudeAccountsSetup.refresh() }
+        }
+        Task.detached {
+            // The CLAUDE_CONFIG_DIR sessions start with is the login shell's.
+            ClaudeConfigDirectories.update(environment: ShellCommand.loginEnvironment)
+        }
         MainThreadWatchdog.shared.start()
         MemoryDiagnostics.shared.start()
         ChatBootstrap.run()

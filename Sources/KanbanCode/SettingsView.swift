@@ -112,6 +112,9 @@ struct SettingsView: View {
             AssistantsSettingsView(assistantStatus: $assistantStatus)
                 .tabItem { Label("Assistants", systemImage: "terminal") }
 
+            ClaudeAccountsSettingsView()
+                .tabItem { Label("Claude Accounts", systemImage: "person.2") }
+
             GeneralSettingsView(
                 ghAvailable: ghAvailable,
                 tmuxAvailable: tmuxAvailable
@@ -287,7 +290,7 @@ struct AssistantsSettingsView: View {
                             } else {
                                 Button("Install Hooks") {
                                     do {
-                                        try HookManager.install(for: assistant)
+                                        try ClaudeAccountsSetup.serialized { try HookManager.install(for: assistant) }
                                         assistantStatus[assistant] = AssistantStatus(
                                             available: status.available,
                                             hooksInstalled: true,

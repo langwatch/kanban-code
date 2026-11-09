@@ -434,9 +434,11 @@ extension MasterEngine {
             if let path = projectPath, let range = path.range(of: "/.claude/worktrees/") {
                 projectPath = String(path[..<range.lowerBound])
             }
-            // `claude --resume` finds the session only under the folder it runs in.
+            // `claude --resume` finds the session only under the folder it
+            // runs in, and only in its own Claude config folder.
             if assistant == .claude, let path = projectPath {
-                targetDir = "\(platform.claudeProjectsDirectory)/\(SessionFileMover.encodeProjectPath(path))"
+                let projects = claudeProjectsDirectory(holding: sessionPath)
+                targetDir = "\(projects)/\(SessionFileMover.encodeProjectPath(path))"
             }
         }
         let sessionStore = registry.store(for: assistant) ?? store.sessionStore

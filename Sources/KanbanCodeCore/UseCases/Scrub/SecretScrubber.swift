@@ -351,7 +351,11 @@ public actor SecretScrubber {
         // A one-off run takes its own patterns mode and reads every file;
         // the schedule and what the scheduled runs know stay as they are.
         let patterns = once?.patterns ?? settings.patterns
-        let files = (targets ?? ScrubTargets.standard(home: home, kanbanHome: kanbanHome, extra: settings.paths)).files()
+        // The Claude config folders of the accounts, for the home they are of.
+        let claudeLayout = ClaudeConfigDirectories.current
+        let files = (targets ?? ScrubTargets.standard(
+            home: home, kanbanHome: kanbanHome, extra: settings.paths,
+            claudeDirectories: claudeLayout.home == home ? claudeLayout.writableDirectories : [])).files()
         // Passwords and other credentials the human typed that only their
         // label gives away: looked for in every file, whatever their format.
         let records = ScrubTypedText(home: home, kanbanHome: kanbanHome)
@@ -645,12 +649,15 @@ public struct ScrubTargets: Sendable {
         self.excluded = excluded
     }
 
-    /// Transcripts and histories of Claude Code (the default config folder
-    /// and every rush account's), Codex sessions, rush's drafts and cache,
-    /// Kanban's own stores, and the `extra` paths of the settings.
-    public static func standard(home: String, kanbanHome: String, extra: [String] = []) -> ScrubTargets {
+    /// Transcripts and histories of Claude Code (the default config folder,
+    /// the `claudeDirectories` of the Claude accounts and every rush
+    /// account's), Codex sessions, rush's drafts and cache, Kanban's own
+    /// stores, and the `extra` paths of the settings.
+    public static func standard(home: String, kanbanHome: String, extra: [String] = [],
+                                claudeDirectories: [String] = []) -> ScrubTargets {
         var roots: [String] = []
         var configs = [home + "/.claude"]
+        for dir in claudeDirectories where !configs.contains(dir) { configs.append(dir) }
         let accounts = home + "/.config/rush/claude"
         for name in (try? FileManager.default.contentsOfDirectory(atPath: accounts)) ?? [] {
             configs.append(accounts + "/" + name)

@@ -1422,7 +1422,7 @@ struct ContentView: View {
                 // A release can need a hook event the installed settings do
                 // not call yet, and without it the board reads the session
                 // wrong until the user opens Settings.
-                for assistant in CodingAssistant.allCases where assistant.supportsHooks {
+                for assistant in CodingAssistant.allCases where assistant.supportsHooks && assistant != .claude {
                     if HookManager.addMissingHooks(for: assistant) {
                         KanbanCodeLog.info("hooks", "added missing \(assistant.displayName) hooks")
                     }
@@ -1431,8 +1431,10 @@ struct ContentView: View {
                 if HookManager.refreshHookScript() {
                     KanbanCodeLog.info("hooks", "hook script refreshed to current release")
                 }
-                VaultHook.installWhereHooked()
-                PermissionHook.installWhereHooked()
+                // Claude's hooks in every Claude config folder (accounts),
+                // the vault and permission hooks: the same run as when the
+                // folders change, one at a time.
+                ClaudeAccountsSetup.refresh()
                 systemTray.setup(store: store)
                 await store.loadSettingsAndCache()
                 // Remote cards route their tmux names to their machines before

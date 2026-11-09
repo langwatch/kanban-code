@@ -610,7 +610,13 @@ extension MasterEngine {
             guard info.transcriptSize > 0 else {
                 throw MasterPeerError.notReady("\(peerName(from)) has no transcript for this card yet")
             }
-            let path = transcriptPath(cwd: cwd, sessionId: sessionId)
+            // Into the Claude config folder a session started here in that
+            // folder would use (its account's, or CLAUDE_CONFIG_DIR's), so
+            // the resume here runs as it.
+            let layout = platform.claudeLayout()
+            let path = layout.isStandardOnly
+                ? transcriptPath(cwd: cwd, sessionId: sessionId)
+                : "\(layout.directory(forPath: cwd))/projects/\(SessionFileMover.encodeProjectPath(cwd))/\(sessionId).jsonl"
             var raw = await Self.mirroredPrefix(
                 at: PeerTranscriptMirror.mirrorPath(
                     directory: (platform.kanbanHome as NSString).appendingPathComponent("peers"),

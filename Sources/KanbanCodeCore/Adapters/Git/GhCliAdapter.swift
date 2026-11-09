@@ -81,7 +81,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             let repoResult = try? await ShellCommand.run(
                 ghPath,
                 arguments: ["repo", "view", "--json", "owner,name"],
-                currentDirectory: repoRoot
+                currentDirectory: repoRoot,
+                environment: await ghEnvironment(repoRoot)
             )
             if let repoResult, repoResult.succeeded,
                let repoData = repoResult.stdout.data(using: .utf8),
@@ -107,7 +108,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
                 "pr", "list", "--state", "all", "--limit", "50",
                 "--json", "number,title,state,url,headRefName,reviewDecision",
             ],
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
 
         guard result.succeeded, !result.stdout.isEmpty else {
@@ -185,7 +187,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         let repoResult = try await ShellCommand.run(
             ghPath,
             arguments: ["repo", "view", "--json", "owner,name"],
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
         guard repoResult.succeeded,
               let repoData = repoResult.stdout.data(using: .utf8),
@@ -207,7 +210,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         let graphqlResult = try await ShellCommand.run(
             ghPath,
             arguments: ["api", "graphql", "-f", "query=\(query)"],
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
 
         guard graphqlResult.succeeded,
@@ -374,7 +378,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         let result = try await ShellCommand.run(
             ghPath,
             arguments: ["api", "graphql", "-f", "query=\(query)"],
-            currentDirectory: runDir
+            currentDirectory: runDir,
+            environment: await ghEnvironment(runDir)
         )
 
         // GraphQL may return partial data + errors, or fail entirely.
@@ -401,7 +406,7 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             // Retry branches as a single batch (they rarely fail)
             if !branchAliases.isEmpty {
                 let branchQuery = "query { repository(owner: \"\(ownerLogin)\", name: \"\(repoName)\") { \(branchAliases.map { alias, branch in "\(alias): pullRequests(headRefName: \"\(branch)\", first: 1, states: [OPEN, CLOSED, MERGED], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number title state url headRefName reviewDecision mergeStateStatus reviews(states: APPROVED) { totalCount } } }" }.joined(separator: "\n")) } }"
-                let brResult = try? await ShellCommand.run(ghPath, arguments: ["api", "graphql", "-f", "query=\(branchQuery)"], currentDirectory: runDir)
+                let brResult = try? await ShellCommand.run(ghPath, arguments: ["api", "graphql", "-f", "query=\(branchQuery)"], currentDirectory: runDir, environment: await ghEnvironment(runDir))
                 if let brData = brResult?.stdout.data(using: .utf8),
                    let brRoot = try? JSONSerialization.jsonObject(with: brData) as? [String: Any],
                    let brRepo = (brRoot["data"] as? [String: Any])?["repository"] as? [String: Any] {
@@ -418,7 +423,7 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             // Retry each PR number individually
             for (_, number) in numberAliases {
                 let singleQuery = "query { repository(owner: \"\(ownerLogin)\", name: \"\(repoName)\") { pullRequest(number: \(number)) { number title state url headRefName reviewDecision mergeStateStatus reviews(states: APPROVED) { totalCount } } } }"
-                let sResult = try? await ShellCommand.run(ghPath, arguments: ["api", "graphql", "-f", "query=\(singleQuery)"], currentDirectory: runDir)
+                let sResult = try? await ShellCommand.run(ghPath, arguments: ["api", "graphql", "-f", "query=\(singleQuery)"], currentDirectory: runDir, environment: await ghEnvironment(runDir))
                 guard let sData = sResult?.stdout.data(using: .utf8),
                       let sRoot = try? JSONSerialization.jsonObject(with: sData) as? [String: Any],
                       let sRepo = (sRoot["data"] as? [String: Any])?["repository"] as? [String: Any],
@@ -483,8 +488,21 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
             }
             """
 
+        // No checkout is named: the GitHub account is the one of a known
+        // checkout of this repository, one an account with a GitHub login
+        // claims first, then in path order.
+        let layout = ClaudeConfigDirectories.current
+        let checkout = slugLock.withLock {
+            slugCache.filter {
+                $0.value.owner.lowercased() == parts[0].lowercased() && $0.value.name.lowercased() == parts[1].lowercased()
+            }.keys.sorted()
+        }.min { lhs, rhs in
+            (layout.account(forPath: lhs)?.githubUser != nil ? 0 : 1) < (layout.account(forPath: rhs)?.githubUser != nil ? 0 : 1)
+        }
+        var environment: [String: String]?
+        if let checkout { environment = await ghEnvironment(checkout) }
         let result = try await ShellCommand.run(
-            ghPath, arguments: ["api", "graphql", "-f", "query=\(query)"])
+            ghPath, arguments: ["api", "graphql", "-f", "query=\(query)"], environment: environment)
 
         let combined = result.stderr + result.stdout
         if combined.localizedCaseInsensitiveContains("rate limit")
@@ -540,7 +558,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         let result = try await ShellCommand.run(
             ghPath,
             arguments: ["pr", "view", "\(prNumber)", "--json", "body"],
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
         guard result.succeeded, !result.stdout.isEmpty,
               let data = result.stdout.data(using: .utf8),
@@ -573,7 +592,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
                 "--json", "number,title,body,url,labels",
                 "--limit", "25",
             ] + filterArgs,
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
 
         guard result.succeeded, !result.stdout.isEmpty else { return [] }
@@ -594,6 +614,16 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         }
     }
 
+    /// The environment `gh` runs with in `directory`: the token of the
+    /// GitHub account of the Claude account that claims it, nil (the login
+    /// environment, the active `gh` account) otherwise.
+    private func ghEnvironment(_ directory: String) async -> [String: String]? {
+        let extra = await GitHubAccountTokens.shared.environment(
+            forPath: directory, layout: ClaudeConfigDirectories.current)
+        guard !extra.isEmpty else { return nil }
+        return ShellCommand.loginEnvironment.merging(extra) { _, new in new }
+    }
+
     /// Merge a PR using the configured merge command template.
     /// The template can contain `${number}` which gets replaced with the PR number.
     public func mergePR(repoRoot: String, prNumber: Int, commandTemplate: String) async throws -> MergeResult {
@@ -608,7 +638,8 @@ public final class GhCliAdapter: PRTrackerPort, @unchecked Sendable {
         let result = try await ShellCommand.run(
             executable,
             arguments: arguments,
-            currentDirectory: repoRoot
+            currentDirectory: repoRoot,
+            environment: await ghEnvironment(repoRoot)
         )
         KanbanCodeLog.info("merge", "gh merge exit=\(result.exitCode) stdout=[\(result.stdout.prefix(200))] stderr=[\(result.stderr.prefix(200))]")
         let output = (result.stdout + " " + result.stderr).lowercased()

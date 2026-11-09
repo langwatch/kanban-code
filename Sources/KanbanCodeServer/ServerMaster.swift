@@ -211,7 +211,9 @@ final class ServerMaster {
     /// The assistants' hooks drive the busy state, the queue and the
     /// notifications; the statusline feeds context usage.
     private func installHooks() {
-        for assistant in CodingAssistant.allCases where assistant.supportsHooks {
+        // Claude: every Claude config folder that exists (the accounts).
+        ClaudeAccountsSetup.refresh(installingHooks: true)
+        for assistant in CodingAssistant.allCases where assistant.supportsHooks && assistant != .claude {
             guard (try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/" + assistant.configDirName)) != nil else { continue }
             if !HookManager.isInstalled(for: assistant) {
                 do {
@@ -223,15 +225,23 @@ final class ServerMaster {
             }
         }
         _ = HookManager.refreshHookScript()
+        ClaudeAccountsSetup.serialized {
         if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") {
-            _ = try? VaultHook.install()
-            _ = try? PermissionHook.install()
+            _ = try? VaultHook.install(settingsPath: HookManager.defaultSettingsPath(for: .claude))
+            _ = try? PermissionHook.install(settingsPath: HookManager.defaultSettingsPath(for: .claude))
         }
         if FileManager.default.fileExists(atPath: VaultHook.codexHome) {
             _ = try? VaultHook.installCodex()
         }
-        if !HookManager.isStatusLineInstalled(for: .claude) {
-            try? HookManager.installStatusLine(for: .claude)
+        // The status line of every Claude config folder; an account folder
+        // keeps one of its own.
+        let standard = HookManager.defaultSettingsPath(for: .claude)
+        for path in HookManager.claudeSettingsPaths()
+        where FileManager.default.fileExists(atPath: (path as NSString).deletingLastPathComponent)
+            && HookManager.isRewritable(path)
+            && !HookManager.isStatusLineInstalled(for: .claude, settingsPath: path) {
+            try? HookManager.installStatusLine(for: .claude, settingsPath: path, replacingOwn: path == standard)
+        }
         }
     }
 

@@ -121,13 +121,26 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
     /// detector's highest-priority merge will let that win over the Claude detector's
     /// correct state. Symptom: archived Claude cards un-archive themselves.
     public func owns(sessionPath: String) -> Bool {
-        sessionPath.contains("/\(configDirName)/")
+        owns(sessionPath: sessionPath, claudeLayout: ClaudeConfigDirectories.current)
+    }
+
+    /// `owns(sessionPath:)` against a given layout. Claude also owns the
+    /// transcripts of every configured Claude config folder, which need not
+    /// be named `.claude` (`CLAUDE_CONFIG_DIR=~/.claude-work`).
+    public func owns(sessionPath: String, claudeLayout: ClaudeConfigLayout) -> Bool {
+        if sessionPath.contains("/\(configDirName)/") { return true }
+        guard self == .claude, !claudeLayout.isStandardOnly else { return false }
+        return claudeLayout.directory(containingSession: sessionPath) != nil
     }
 
     /// The assistant whose config directory contains this session path, or nil
     /// if the path is not under any known assistant directory (e.g. test fixtures).
     public static func owner(ofSessionPath path: String) -> CodingAssistant? {
-        for assistant in CodingAssistant.allCases where assistant.owns(sessionPath: path) {
+        owner(ofSessionPath: path, claudeLayout: ClaudeConfigDirectories.current)
+    }
+
+    public static func owner(ofSessionPath path: String, claudeLayout: ClaudeConfigLayout) -> CodingAssistant? {
+        for assistant in CodingAssistant.allCases where assistant.owns(sessionPath: path, claudeLayout: claudeLayout) {
             return assistant
         }
         return nil
@@ -137,7 +150,11 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
     /// this to drop clearly cross-assistant paths from polling while still
     /// accepting unowned test fixture paths.
     public func ownedByOther(sessionPath: String) -> Bool {
-        guard let owner = CodingAssistant.owner(ofSessionPath: sessionPath) else { return false }
+        ownedByOther(sessionPath: sessionPath, claudeLayout: ClaudeConfigDirectories.current)
+    }
+
+    public func ownedByOther(sessionPath: String, claudeLayout: ClaudeConfigLayout) -> Bool {
+        guard let owner = CodingAssistant.owner(ofSessionPath: sessionPath, claudeLayout: claudeLayout) else { return false }
         return owner != self
     }
 

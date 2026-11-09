@@ -13,11 +13,26 @@ public enum SessionIndexReader {
 
     /// Update the summary for a session in its sessions-index.json.
     /// Best-effort: finds the index file containing this session and updates the summary field.
-    public static func updateSummary(sessionId: String, summary: String, claudeDir: String? = nil) throws {
-        let baseDir = claudeDir
-            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+    /// With no `claudeDir`, looks in the projects folder of every Claude
+    /// config folder.
+    public static func updateSummary(
+        sessionId: String, summary: String, claudeDir: String? = nil,
+        layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
+    ) throws {
+        for baseDir in claudeDir.map({ [$0] }) ?? layout.projectsDirectories {
+            // A folder that cannot be read does not stop the others.
+            if claudeDir != nil {
+                if try updateSummary(sessionId: sessionId, summary: summary, in: baseDir) { return }
+            } else if (try? updateSummary(sessionId: sessionId, summary: summary, in: baseDir)) == true {
+                return
+            }
+        }
+    }
+
+    /// True once the session's entry was found and updated.
+    private static func updateSummary(sessionId: String, summary: String, in baseDir: String) throws -> Bool {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: baseDir) else { return }
+        guard fileManager.fileExists(atPath: baseDir) else { return false }
 
         let projectDirs = try fileManager.contentsOfDirectory(atPath: baseDir)
         for dirName in projectDirs {
@@ -40,9 +55,10 @@ public enum SessionIndexReader {
 
                 let updatedData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
                 try updatedData.write(to: URL(fileURLWithPath: indexPath))
-                return // Found and updated
+                return true // Found and updated
             }
         }
+        return false
     }
 
     /// Read all index entries from a sessions-index.json file.

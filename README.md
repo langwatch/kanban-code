@@ -133,6 +133,8 @@ Inside the app, each card has a native terminal emulator (powered by [SwiftTerm]
 
 Kanban Code automatically discovers all your Claude Code sessions from `~/.claude/projects/`. Past sessions, active sessions, sessions you started from the terminal — they all show up.
 
+**Several Claude accounts.** If you keep accounts apart with `CLAUDE_CONFIG_DIR` (say `~/.claude-work` for your work projects), list the folders in Settings > Claude Accounts: their sessions show too, cards in each account's projects start and resume with its folder, and `gh` can use a GitHub login per account. See [`docs/claude-accounts.md`](docs/claude-accounts.md).
+
 **BM25 full-text search** lets you find any session across your entire history. Search by prompt, conversation content, or project name. Results are ranked by relevance with a recency boost.
 
 **Fork** any session to branch off a new conversation with the same history — perfect for spinning up parallel tasks that share context, or exploring a different approach without losing your place. **Checkpoint** lets you roll back to any point in a conversation and continue from there. Both are dramatically faster than Claude Code's built-in equivalents, operating directly on the session files instead of going through the CLI.

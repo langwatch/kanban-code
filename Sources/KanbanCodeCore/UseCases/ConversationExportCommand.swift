@@ -113,7 +113,11 @@ public struct ConversationExportCommand: Sendable, Equatable {
 
     /// The card's transcript on this machine, as `transcriptPath(for:)`
     /// finds it, with `kanbanHome` defaulting to `~/.kanban-code`.
-    public static func transcriptPath(for link: Link, kanbanHome home: String?) -> String? {
+    public static func transcriptPath(
+        for link: Link, kanbanHome home: String?,
+        userHome: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
         let fm = FileManager.default
         if let path = link.sessionLink?.sessionPath, fm.fileExists(atPath: path) { return path }
         guard let sessionId = link.sessionLink?.sessionId, !sessionId.isEmpty else { return nil }
@@ -126,12 +130,24 @@ public struct ConversationExportCommand: Sendable, Equatable {
             )
             if fm.fileExists(atPath: mirror) { return mirror }
         }
-        let claudeDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
-            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".claude")
-        let projects = (claudeDir as NSString).appendingPathComponent("projects")
-        for dir in (try? fm.contentsOfDirectory(atPath: projects)) ?? [] {
-            let candidate = "\(projects)/\(dir)/\(sessionId).jsonl"
-            if fm.fileExists(atPath: candidate) { return candidate }
+        // In the app or server: its Claude config folders. In the export
+        // helper, its own process: this process's CLAUDE_CONFIG_DIR, then
+        // every folder the settings name.
+        let kanbanHome = home ?? (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
+        let layout: ClaudeConfigLayout
+        if ClaudeConfigDirectories.settingsPath
+            == ((kanbanHome as NSString).appendingPathComponent("settings.json") as NSString).standardizingPath {
+            layout = ClaudeConfigDirectories.current
+        } else {
+            let accounts = FileManager.default.contents(atPath: kanbanHome + "/settings.json")
+                .flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }?.claudeAccounts ?? []
+            layout = ClaudeConfigLayout(home: userHome, environment: environment, accounts: accounts)
+        }
+        for projects in layout.projectsDirectories {
+            for dir in (try? fm.contentsOfDirectory(atPath: projects)) ?? [] {
+                let candidate = "\(projects)/\(dir)/\(sessionId).jsonl"
+                if fm.fileExists(atPath: candidate) { return candidate }
+            }
         }
         return nil
     }

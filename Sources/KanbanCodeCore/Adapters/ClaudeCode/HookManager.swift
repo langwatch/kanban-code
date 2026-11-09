@@ -39,11 +39,22 @@ public enum HookManager {
 
     // MARK: - Check
 
-    /// Check if hooks are already installed for the given assistant.
+    /// Check if hooks are already installed for the given assistant. With no
+    /// `settingsPath`, Claude's hooks count as installed when every Claude
+    /// config folder has them.
     public static func isInstalled(for assistant: CodingAssistant, settingsPath: String? = nil) -> Bool {
-        guard assistant.supportsHooks else { return false }
+        isInstalled(for: assistant, settingsPaths: settingsPaths(for: assistant, settingsPath: settingsPath))
+    }
 
-        let path = settingsPath ?? defaultSettingsPath(for: assistant)
+    /// Installed in every file Kanban may write; one it leaves alone (not
+    /// JSON) does not keep the hooks from counting as installed.
+    static func isInstalled(for assistant: CodingAssistant, settingsPaths: [String]) -> Bool {
+        guard assistant.supportsHooks else { return false }
+        let writable = settingsPaths.count > 1 ? settingsPaths.filter(isRewritable) : settingsPaths
+        return !writable.isEmpty && writable.allSatisfy { isInstalled(for: assistant, at: $0) }
+    }
+
+    private static func isInstalled(for assistant: CodingAssistant, at path: String) -> Bool {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hooks = root["hooks"] as? [String: Any] else {
@@ -69,16 +80,38 @@ public enum HookManager {
     /// Add hook events a release needs that an earlier install did not have.
     ///
     /// Only for settings that already call the hook script: an assistant that
-    /// never had hooks is left to the user to set up in Settings.
+    /// never had hooks is left to the user to set up in Settings. Once one
+    /// Claude config folder has them, a folder that has none (an account
+    /// added later) gets them too, keeping a status line of its own and
+    /// leaving a settings file that is not JSON alone.
     @discardableResult
     public static func addMissingHooks(for assistant: CodingAssistant, settingsPath: String? = nil)
         -> Bool
     {
-        guard assistant.supportsHooks, !isInstalled(for: assistant, settingsPath: settingsPath),
-            registeredHooks(for: assistant, settingsPath: settingsPath) > 0
-        else { return false }
-        try? install(for: assistant, settingsPath: settingsPath)
-        return isInstalled(for: assistant, settingsPath: settingsPath)
+        addMissingHooks(for: assistant, settingsPaths: settingsPaths(for: assistant, settingsPath: settingsPath))
+    }
+
+    /// `addMissingHooks` over the given settings files.
+    @discardableResult
+    static func addMissingHooks(
+        for assistant: CodingAssistant, settingsPaths paths: [String], hookScriptPath: String? = nil,
+        statusLineScriptPath: String? = nil
+    ) -> Bool {
+        guard assistant.supportsHooks else { return false }
+        let hooked = Set(paths.filter { registeredHooks(for: assistant, at: $0) > 0 })
+        guard !hooked.isEmpty else { return false }
+        var changed = false
+        let standard = ClaudeConfigDirectories.current.standard + "/settings.json"
+        for path in paths where !isInstalled(for: assistant, at: path) && isRewritable(path) {
+            // As before in a file that had the hooks, `~/.claude`'s; any
+            // other keeps a status line of its own.
+            let added = hooked.contains(path) && (paths.count == 1 || path == standard)
+            if (try? install(for: assistant, at: path, hookScriptPath: hookScriptPath, replaceStatusLine: added,
+                             statusLineScriptPath: statusLineScriptPath)) != nil {
+                changed = true
+            }
+        }
+        return changed && paths.allSatisfy { isInstalled(for: assistant, at: $0) }
     }
 
     /// Rewrite the deployed hook script when a release changed its content.
@@ -100,9 +133,8 @@ public enum HookManager {
     }
 
     /// How many of the events this release needs already call the hook script.
-    private static func registeredHooks(for assistant: CodingAssistant, settingsPath: String?) -> Int
+    private static func registeredHooks(for assistant: CodingAssistant, at path: String) -> Int
     {
-        let path = settingsPath ?? defaultSettingsPath(for: assistant)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let hooks = root["hooks"] as? [String: Any]
@@ -121,17 +153,57 @@ public enum HookManager {
 
     // MARK: - Install
 
-    /// Install hooks for the given assistant.
+    /// Install hooks for the given assistant. With no `settingsPath`,
+    /// Claude's go into every Claude config folder.
     public static func install(
         for assistant: CodingAssistant,
         settingsPath: String? = nil,
-        hookScriptPath: String? = nil
+        hookScriptPath: String? = nil,
+        statusLineScriptPath: String? = nil
     ) throws {
         guard assistant.supportsHooks else {
             throw HookManagerError.unsupportedAssistant(assistant.displayName)
         }
+        if let settingsPath {
+            try install(for: assistant, at: settingsPath, hookScriptPath: hookScriptPath, replaceStatusLine: true,
+                        statusLineScriptPath: statusLineScriptPath)
+        } else {
+            // The status line of `~/.claude` is replaced as it always was;
+            // another folder keeps one of its own.
+            let standard = ClaudeConfigDirectories.current.standard + "/settings.json"
+            for path in settingsPaths(for: assistant, settingsPath: nil) {
+                try install(for: assistant, settingsPaths: [path], hookScriptPath: hookScriptPath,
+                            replacingOwnStatusLine: path == standard || assistant != .claude,
+                            statusLineScriptPath: statusLineScriptPath)
+            }
+        }
+    }
 
-        let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
+    /// `install` into each of several settings files. `replacingOwnStatusLine:
+    /// false` keeps a status line a file already has.
+    public static func install(
+        for assistant: CodingAssistant, settingsPaths: [String], hookScriptPath: String? = nil,
+        replacingOwnStatusLine: Bool = true, statusLineScriptPath: String? = nil
+    ) throws {
+        for path in settingsPaths {
+            // One file of several that does not parse is skipped, not
+            // replaced: it belongs to another account the user set up.
+            if !isRewritable(path) {
+                KanbanCodeLog.warn("hooks", "Not installing hooks into \(path): not a JSON object")
+                continue
+            }
+            try install(for: assistant, at: path, hookScriptPath: hookScriptPath, replaceStatusLine: replacingOwnStatusLine,
+                        statusLineScriptPath: statusLineScriptPath)
+        }
+    }
+
+    private static func install(
+        for assistant: CodingAssistant,
+        at resolvedSettingsPath: String,
+        hookScriptPath: String?,
+        replaceStatusLine: Bool,
+        statusLineScriptPath: String? = nil
+    ) throws {
         let scriptPath = hookScriptPath ?? defaultHookScriptPath()
 
         // Deploy the hook script to disk
@@ -189,7 +261,9 @@ public enum HookManager {
 
         // Also install statusline for context tracking (Claude only)
         if assistant == .claude {
-            try? installStatusLine(for: assistant, settingsPath: resolvedSettingsPath)
+            try? installStatusLine(
+                for: assistant, settingsPath: resolvedSettingsPath, scriptPath: statusLineScriptPath,
+                replacingOwn: replaceStatusLine)
         }
     }
 
@@ -203,12 +277,19 @@ public enum HookManager {
 
     // MARK: - Uninstall
 
-    /// Remove Kanban hooks from the given assistant's settings.
+    /// Remove Kanban hooks from the given assistant's settings, from every
+    /// Claude config folder with no `settingsPath`.
     public static func uninstall(for assistant: CodingAssistant, settingsPath: String? = nil) throws {
         guard assistant.supportsHooks else { return }
+        // Every folder is tried; the first failure is thrown after.
+        var failure: Error?
+        for path in settingsPaths(for: assistant, settingsPath: settingsPath) {
+            do { try uninstall(for: assistant, at: path) } catch { failure = failure ?? error }
+        }
+        if let failure { throw failure }
+    }
 
-        let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
-
+    private static func uninstall(for assistant: CodingAssistant, at resolvedSettingsPath: String) throws {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               var hooks = root["hooks"] as? [String: Any] else {
@@ -326,7 +407,10 @@ public enum HookManager {
     /// Check if the statusline script is installed for the given assistant.
     public static func isStatusLineInstalled(for assistant: CodingAssistant = .claude, settingsPath: String? = nil) -> Bool {
         guard assistant == .claude else { return false }
-        let path = settingsPath ?? defaultSettingsPath(for: assistant)
+        return settingsPaths(for: assistant, settingsPath: settingsPath).allSatisfy(isStatusLineInstalled(at:))
+    }
+
+    private static func isStatusLineInstalled(at path: String) -> Bool {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let statusLine = root["statusLine"] as? [String: Any],
@@ -336,14 +420,22 @@ public enum HookManager {
         return command.contains(".kanban-code/statusline.sh")
     }
 
-    /// Install the statusline script for context tracking.
+    /// Install the statusline script for context tracking, into every
+    /// Claude config folder with no `settingsPath`. `replacingOwn: false`
+    /// keeps a status line the user set.
     public static func installStatusLine(
         for assistant: CodingAssistant = .claude,
         settingsPath: String? = nil,
-        scriptPath: String? = nil
+        scriptPath: String? = nil,
+        replacingOwn: Bool = true
     ) throws {
         guard assistant == .claude else { return }
-        let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
+        for path in settingsPaths(for: assistant, settingsPath: settingsPath) where settingsPath != nil || isRewritable(path) {
+            try installStatusLine(at: path, scriptPath: scriptPath, replacingOwn: replacingOwn)
+        }
+    }
+
+    private static func installStatusLine(at resolvedSettingsPath: String, scriptPath: String?, replacingOwn: Bool) throws {
         let resolvedScriptPath = scriptPath ?? defaultStatusLineScriptPath()
 
         // Deploy script
@@ -364,6 +456,7 @@ public enum HookManager {
            cmd.contains(".kanban-code/statusline.sh") {
             return // Already installed
         }
+        if !replacingOwn, root["statusLine"] != nil { return }
 
         root["statusLine"] = [
             "type": "command",
@@ -384,6 +477,39 @@ public enum HookManager {
     /// Settings file path per assistant.
     public static func defaultSettingsPath(for assistant: CodingAssistant) -> String {
         (NSHomeDirectory() as NSString).appendingPathComponent("\(assistant.configDirName)/settings.json")
+    }
+
+    /// The `settings.json` of every Claude config folder that exists and
+    /// looks like Claude Code's (`ClaudeConfigLayout.writableDirectories`),
+    /// or of `~/.claude` when none does yet.
+    public static func claudeSettingsPaths(layout: ClaudeConfigLayout = ClaudeConfigDirectories.current) -> [String] {
+        var isDir: ObjCBool = false
+        let existing = layout.writableDirectories.filter {
+            FileManager.default.fileExists(atPath: $0, isDirectory: &isDir) && isDir.boolValue
+        }
+        // Folders often share one settings file through a symlink: once,
+        // spelled as ~/.claude's when it is that one.
+        var seen = Set<String>()
+        let folders = existing.isEmpty ? [layout.standard] : existing
+        let ordered = folders.filter { $0 == layout.standard } + folders.filter { $0 != layout.standard }
+        let kept = ordered.map { $0 + "/settings.json" }.filter { seen.insert(ClaudeConfigLayout.resolve($0)).inserted }
+        return folders.map { $0 + "/settings.json" }.filter { kept.contains($0) }
+    }
+
+    /// The files a nil `settingsPath` stands for.
+    static func settingsPaths(for assistant: CodingAssistant, settingsPath: String?) -> [String] {
+        if let settingsPath { return [settingsPath] }
+        return assistant == .claude ? claudeSettingsPaths() : [defaultSettingsPath(for: assistant)]
+    }
+
+    /// A settings file Kanban may rewrite: missing, or a JSON object. One
+    /// it cannot parse would be replaced by an empty one.
+    public static func isRewritable(_ path: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: path) else {
+            return !FileManager.default.fileExists(atPath: path)
+        }
+        if data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }) { return true }
+        return (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
     }
 
     private static func defaultSettingsPath() -> String {

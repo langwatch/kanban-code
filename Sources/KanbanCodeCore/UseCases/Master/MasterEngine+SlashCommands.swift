@@ -38,7 +38,8 @@ extension MasterEngine {
         let isRush = sessionName.flatMap(RushSessionName.rushId(fromName:)) != nil
         let commands = await Task.detached(priority: .userInitiated) {
             let cwd = SlashCommandSession.folder(transcriptPath: transcript, candidates: folders)
-            let config = SlashCommandSession.claudeConfigDirectory(transcriptPath: transcript, isRush: isRush)
+            let config = SlashCommandSession.claudeConfigDirectory(
+                transcriptPath: transcript, isRush: isRush, projectPath: link.projectPath ?? folders.first)
             let disk = ClaudeCommandFiles.commands(configDirectory: config, cwd: cwd)
             return SlashCommandCatalog.merged(assistant: assistant, sideChat: sideChat, disk: disk)
         }.value
@@ -75,16 +76,22 @@ public enum SlashCommandSession {
 
     /// The `CLAUDE_CONFIG_DIR` the session's Claude Code runs with, or nil
     /// for `~/.claude`: the rush account in use for a rush card, the
-    /// folder the transcript sits in, else this process's own variable.
+    /// folder the transcript sits in, else (no transcript yet) the account
+    /// that claims `projectPath`, else this process's own variable.
     public static func claudeConfigDirectory(
         transcriptPath: String?, isRush: Bool, home: String = NSHomeDirectory(),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        projectPath: String? = nil, layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
     ) -> String? {
         if let directory = SideChatSession.claudeConfigDirectory(
             transcriptPath: transcriptPath ?? "", isRush: isRush, home: home) {
             return directory
         }
         if transcriptPath != nil { return nil }
+        if !isRush, let projectPath, let account = layout.account(forPath: projectPath),
+           !layout.isStandard(account.configDirectory) {
+            return account.configDirectory
+        }
         return environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
     }
 }
