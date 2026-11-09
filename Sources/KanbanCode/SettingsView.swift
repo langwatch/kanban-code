@@ -112,6 +112,9 @@ struct SettingsView: View {
             AssistantsSettingsView(assistantStatus: $assistantStatus)
                 .tabItem { Label("Assistants", systemImage: "terminal") }
 
+            ClaudeAccountsSettingsView()
+                .tabItem { Label("Claude Accounts", systemImage: "person.2") }
+
             GeneralSettingsView(
                 ghAvailable: ghAvailable,
                 tmuxAvailable: tmuxAvailable

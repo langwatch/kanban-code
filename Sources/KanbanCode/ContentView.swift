@@ -1422,6 +1422,8 @@ struct ContentView: View {
                 // A release can need a hook event the installed settings do
                 // not call yet, and without it the board reads the session
                 // wrong until the user opens Settings.
+                // Claude's go into every Claude config folder (accounts);
+                // ClaudeAccountsSetup repeats this when the folders change.
                 for assistant in CodingAssistant.allCases where assistant.supportsHooks {
                     if HookManager.addMissingHooks(for: assistant) {
                         KanbanCodeLog.info("hooks", "added missing \(assistant.displayName) hooks")
