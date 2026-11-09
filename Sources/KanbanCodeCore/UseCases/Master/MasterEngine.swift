@@ -297,12 +297,24 @@ public final class MasterEngine {
                     return
                 }
 
+                // The Claude account of the project: its config folder, and
+                // where the new transcript can show up (every folder when
+                // the shell picks it).
+                let claudeLayout = ClaudeConfigDirectories.current
+                let claudeAccount = ClaudeAccountLaunch.forNewSession(
+                    assistant: assistant, isLocal: !isRemote, projectPath: projectPath, layout: claudeLayout)
+                let launchEnv = serviceExtraEnv
+                    .merging(claudeAccount.environment) { _, new in new }
+                    .merging(isRemote ? [:] : await gitHubEnvironment(projectPath)) { _, new in new }
+
                 // Snapshot existing session files for detection
                 let sessionFileExt = ".\(assistant.sessionFileExtension)"
                 let configDir = (NSHomeDirectory() as NSString).appendingPathComponent(assistant.configDirName)
-                let claudeProjectsDir = (configDir as NSString).appendingPathComponent("projects")
+                let claudeProjectsDirs = assistant == .claude && !isRemote
+                    ? claudeAccount.projectsDirectoriesToWatch(layout: claudeLayout)
+                    : [(configDir as NSString).appendingPathComponent("projects")]
                 let encodedProject = SessionFileMover.encodeProjectPath(projectPath)
-                let sessionDir = (claudeProjectsDir as NSString).appendingPathComponent(encodedProject)
+                let sessionDirs = claudeProjectsDirs.map { ($0 as NSString).appendingPathComponent(encodedProject) }
                 let existingCodexFiles = assistant == .codex
                     ? Set(CodexSessionDiscovery.sessionFiles())
                     : []
@@ -321,12 +333,13 @@ public final class MasterEngine {
                     // Codex stores sessions recursively under ~/.codex/sessions.
                     dirsToSnapshot = []
                 } else if worktreeName != nil {
-                    let allDirs = (try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? []
-                    dirsToSnapshot = [sessionDir] + allDirs
-                        .filter { $0.hasPrefix(encodedProject) && $0 != encodedProject }
-                        .map { (claudeProjectsDir as NSString).appendingPathComponent($0) }
+                    dirsToSnapshot = sessionDirs + claudeProjectsDirs.flatMap { claudeProjectsDir in
+                        ((try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? [])
+                            .filter { $0.hasPrefix(encodedProject) && $0 != encodedProject }
+                            .map { (claudeProjectsDir as NSString).appendingPathComponent($0) }
+                    }
                 } else {
-                    dirsToSnapshot = [sessionDir]
+                    dirsToSnapshot = sessionDirs
                 }
                 var existingFilesByDir: [String: Set<String>] = [:]
                 for dir in dirsToSnapshot {
@@ -342,9 +355,9 @@ public final class MasterEngine {
                     prompt: prompt,
                     worktreeName: launchWorktreeName,
                     shellOverride: shellOverride,
-                    extraEnv: serviceExtraEnv,
+                    extraEnv: launchEnv,
                     commandOverride: commandOverride,
-                    commandTemplate: commandTemplate,
+                    commandTemplate: claudeAccount.wrapping(commandTemplate: commandTemplate),
                     skipPermissions: skipPermissions,
                     preamble: preamble,
                     assistant: assistant,
@@ -441,12 +454,13 @@ public final class MasterEngine {
                             (tmpDir as NSString).appendingPathComponent(slug).appending("/chats")
                         }
                     } else if worktreeName != nil {
-                        let allDirs = (try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? []
-                        dirsToScan = allDirs
-                            .filter { $0.hasPrefix(encodedProject) }
-                            .map { (claudeProjectsDir as NSString).appendingPathComponent($0) }
+                        dirsToScan = claudeProjectsDirs.flatMap { claudeProjectsDir in
+                            ((try? FileManager.default.contentsOfDirectory(atPath: claudeProjectsDir)) ?? [])
+                                .filter { $0.hasPrefix(encodedProject) }
+                                .map { (claudeProjectsDir as NSString).appendingPathComponent($0) }
+                        }
                     } else {
-                        dirsToScan = [sessionDir]
+                        dirsToScan = sessionDirs
                     }
 
                     for dir in dirsToScan {
@@ -684,9 +698,14 @@ public final class MasterEngine {
         if assistant == .claude,
            let sessionLink = card.link.sessionLink,
            let sessionPath = sessionLink.sessionPath {
-            let expectedDir = platform.claudeProjectsDirectory + "/" + SessionFileMover.encodeProjectPath(projectPath)
+            // Within the transcript's own Claude config folder: the resume
+            // runs with that folder.
+            let projectsDir = ClaudeConfigDirectories.current.projectsDirectory(containingSession: sessionPath)
+                ?? platform.claudeProjectsDirectory
+            let expectedDir = projectsDir + "/" + SessionFileMover.encodeProjectPath(projectPath)
             let expectedPath = expectedDir + "/" + sessionId + ".jsonl"
             if sessionPath != expectedPath,
+               ClaudeConfigLayout.resolve(sessionPath) != ClaudeConfigLayout.resolve(expectedPath),
                FileManager.default.fileExists(atPath: sessionPath) {
                 KanbanCodeLog.info("resume", "Moving session file from worktree project key to \(expectedDir)")
                 if let newPath = try? SessionFileMover.moveSession(
@@ -939,13 +958,22 @@ public final class MasterEngine {
                     return
                 }
 
+                // The resume runs with the Claude config folder its
+                // transcript is in.
+                let claudeAccount = ClaudeAccountLaunch.forResume(
+                    assistant: assistant, isLocal: !isRemote, sessionId: sessionId,
+                    sessionPath: store.state.links[cardId]?.sessionLink?.sessionPath ?? card.link.sessionLink?.sessionPath,
+                    projectPath: card.link.projectPath ?? resumePath, layout: ClaudeConfigDirectories.current)
+                let resumeEnv = serviceExtraEnv
+                    .merging(claudeAccount.environment) { _, new in new }
+                    .merging(isRemote ? [:] : await gitHubEnvironment(card.link.projectPath ?? resumePath)) { _, new in new }
                 let actualTmuxName = try await launcher.resume(
                     sessionId: sessionId,
                     projectPath: resumePath,
                     shellOverride: shellOverride,
-                    extraEnv: serviceExtraEnv,
+                    extraEnv: resumeEnv,
                     commandOverride: commandOverride,
-                    commandTemplate: commandTemplate,
+                    commandTemplate: claudeAccount.wrapping(commandTemplate: commandTemplate),
                     skipPermissions: skipPermissions,
                     preamble: preamble,
                     assistant: assistant,

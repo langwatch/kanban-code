@@ -126,12 +126,17 @@ public struct ConversationExportCommand: Sendable, Equatable {
             )
             if fm.fileExists(atPath: mirror) { return mirror }
         }
-        let claudeDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
-            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".claude")
-        let projects = (claudeDir as NSString).appendingPathComponent("projects")
-        for dir in (try? fm.contentsOfDirectory(atPath: projects)) ?? [] {
-            let candidate = "\(projects)/\(dir)/\(sessionId).jsonl"
-            if fm.fileExists(atPath: candidate) { return candidate }
+        // This process's CLAUDE_CONFIG_DIR first, then every Claude config
+        // folder the settings name (this runs as its own process).
+        let kanbanHome = home ?? (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
+        let accounts = FileManager.default.contents(atPath: kanbanHome + "/settings.json")
+            .flatMap { try? JSONDecoder().decode(Settings.self, from: $0) }?.claudeAccounts ?? []
+        let layout = ClaudeConfigLayout(environment: ProcessInfo.processInfo.environment, accounts: accounts)
+        for projects in layout.projectsDirectories {
+            for dir in (try? fm.contentsOfDirectory(atPath: projects)) ?? [] {
+                let candidate = "\(projects)/\(dir)/\(sessionId).jsonl"
+                if fm.fileExists(atPath: candidate) { return candidate }
+            }
         }
         return nil
     }

@@ -78,8 +78,12 @@ public enum VaultHook {
     /// Installs it when the Kanban Code hooks of Claude Code are installed,
     /// and for Codex when Codex is set up on this machine.
     public static func installWhereHooked() {
-        if HookManager.isInstalled(for: .claude), (try? install()) == true {
-            KanbanCodeLog.info("hooks", "installed the vault Bash hook")
+        // Per Claude config folder: each that has the Kanban Code hooks.
+        for path in HookManager.claudeSettingsPaths()
+        where HookManager.isInstalled(for: .claude, settingsPath: path) {
+            if (try? install(settingsPath: path)) == true {
+                KanbanCodeLog.info("hooks", "installed the vault Bash hook in \(path)")
+            }
         }
         if FileManager.default.fileExists(atPath: codexHome), (try? installCodex()) == true {
             KanbanCodeLog.info("hooks", "installed the vault Bash hook for Codex")
@@ -87,12 +91,20 @@ public enum VaultHook {
     }
 
     /// Writes the script and adds the hook to the Claude settings when
-    /// missing. Returns whether anything changed.
+    /// missing, to every Claude config folder with no `settingsPath`.
+    /// Returns whether anything changed.
     @discardableResult
     public static func install(settingsPath: String? = nil, scriptPath: String? = nil) throws -> Bool {
+        var changed = false
+        for path in settingsPath.map({ [$0] }) ?? HookManager.claudeSettingsPaths() {
+            if try install(at: path, scriptPath: scriptPath) { changed = true }
+        }
+        return changed
+    }
+
+    private static func install(at path: String, scriptPath: String?) throws -> Bool {
         let script = scriptPath ?? Self.scriptPath
         var changed = try writeScript(script)
-        let path = settingsPath ?? HookManager.defaultSettingsPath(for: .claude)
         var root: [String: Any] = [:]
         if let data = FileManager.default.contents(atPath: path) {
             guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return changed }

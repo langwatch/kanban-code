@@ -5,14 +5,27 @@ import Foundation
 /// Mirrors claude-resume's moveSession() logic.
 public enum SessionFileMover {
 
-    /// Move a session file to a new project folder.
-    /// Returns the new file path.
+    /// The `projects/` folder a transcript (`<config>/projects/<key>/<id>.jsonl`)
+    /// is in, or the default config folder's when the path has another shape.
+    public static func projectsDirectory(
+        of transcriptPath: String,
+        layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
+    ) -> String {
+        if let known = layout.projectsDirectory(containingSession: transcriptPath) { return known }
+        let projects = ((transcriptPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        if (projects as NSString).lastPathComponent == "projects" { return projects }
+        return layout.defaultDirectory + "/projects"
+    }
+
+    /// Move a session file to a new project folder of the same Claude config
+    /// folder: `claude --resume` finds a session only in the folder it runs
+    /// with. Returns the new file path.
     public static func moveSession(
         sessionId: String,
         fromPath: String,
         toProjectPath: String
     ) throws -> String {
-        let projectsDir = NSHomeDirectory() + "/.claude/projects"
+        let projectsDir = projectsDirectory(of: fromPath)
         let targetDirName = encodeProjectPath(toProjectPath)
         let targetDir = projectsDir + "/" + targetDirName
         let targetPath = targetDir + "/" + sessionId + ".jsonl"

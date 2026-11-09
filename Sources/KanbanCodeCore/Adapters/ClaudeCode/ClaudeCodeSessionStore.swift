@@ -2,8 +2,13 @@ import Foundation
 
 /// Implements SessionStore for Claude Code .jsonl files.
 public final class ClaudeCodeSessionStore: SessionStore, @unchecked Sendable {
+    private let claudeLayout: @Sendable () -> ClaudeConfigLayout
 
-    public init() {}
+    /// `claudeLayout` decides where `writeSession` puts a migrated session:
+    /// the config folder of the account that claims its project.
+    public init(claudeLayout: (@Sendable () -> ClaudeConfigLayout)? = nil) {
+        self.claudeLayout = claudeLayout ?? { ClaudeConfigDirectories.current }
+    }
 
     public func readTranscript(sessionPath: String) async throws -> [ConversationTurn] {
         try await TranscriptReader.readTurns(from: sessionPath)
@@ -57,7 +62,10 @@ public final class ClaudeCodeSessionStore: SessionStore, @unchecked Sendable {
     }
 
     public func writeSession(turns: [ConversationTurn], sessionId: String, projectPath: String?) async throws -> String {
-        let base = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
+        // The config folder a session started in this project runs with,
+        // so `claude --resume` there finds the migrated one.
+        let layout = claudeLayout()
+        let base = (projectPath.map { layout.directory(forPath: $0) } ?? layout.defaultDirectory) + "/projects"
         let encodedPath: String
         if let projectPath {
             encodedPath = SessionFileMover.encodeProjectPath(projectPath)

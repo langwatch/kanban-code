@@ -211,7 +211,9 @@ final class ServerMaster {
     /// The assistants' hooks drive the busy state, the queue and the
     /// notifications; the statusline feeds context usage.
     private func installHooks() {
-        for assistant in CodingAssistant.allCases where assistant.supportsHooks {
+        // Claude: every Claude config folder that exists (the accounts).
+        ClaudeAccountsSetup.refresh(installingHooks: true)
+        for assistant in CodingAssistant.allCases where assistant.supportsHooks && assistant != .claude {
             guard (try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/" + assistant.configDirName)) != nil else { continue }
             if !HookManager.isInstalled(for: assistant) {
                 do {
@@ -223,10 +225,6 @@ final class ServerMaster {
             }
         }
         _ = HookManager.refreshHookScript()
-        if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") {
-            _ = try? VaultHook.install()
-            _ = try? PermissionHook.install()
-        }
         if FileManager.default.fileExists(atPath: VaultHook.codexHome) {
             _ = try? VaultHook.installCodex()
         }

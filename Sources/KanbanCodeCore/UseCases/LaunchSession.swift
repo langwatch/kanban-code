@@ -118,9 +118,13 @@ public final class LaunchSession: SessionLauncher, @unchecked Sendable {
     }
 
     /// The part of `extraEnv` the tmux session carries itself (the card's
-    /// id and session token), so it never shows in the pane.
+    /// id and session token), so it never shows in the pane, plus the
+    /// Claude config folder, which the command line carries too.
     static func sessionEnvironment(_ extraEnv: [String: String]) -> [String: String] {
-        extraEnv.filter { InheritedSessionEnvironment.sessionOwned.contains($0.key) }
+        extraEnv.filter {
+            InheritedSessionEnvironment.sessionOwned.contains($0.key)
+                || InheritedSessionEnvironment.sessionAndCommand.contains($0.key)
+        }
     }
 
     // MARK: - Private

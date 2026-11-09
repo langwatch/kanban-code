@@ -283,14 +283,46 @@ public enum RushClaudeAccounts {
 }
 
 /// Keychain for Claude, files for the rest, as the assistants do on a Mac.
+///
+/// The Claude login is the one of the folder remote machines get
+/// (`ClaudeConfigLayout.machineLoginDirectory`, Settings > Claude accounts),
+/// read when it is used: the store is made before the settings are.
 public struct MacLoginStore: LocalLoginStore {
     public static let keychainService = "Claude Code-credentials"
     private let home: String
     private let account: String
+    private let claudeLayout: @Sendable () -> ClaudeConfigLayout
 
-    public init(home: String = NSHomeDirectory(), account: String = NSUserName()) {
+    public init(
+        home: String = NSHomeDirectory(), account: String = NSUserName(),
+        claudeLayout: (@Sendable () -> ClaudeConfigLayout)? = nil
+    ) {
         self.home = home
         self.account = account
+        self.claudeLayout = claudeLayout ?? { ClaudeConfigDirectories.current }
+    }
+
+    /// Where the Claude login lives: its Keychain service, its file (Linux,
+    /// or a Mac without the Keychain item) and the account file.
+    struct ClaudeLoginLocation: Equatable {
+        var keychainService: String
+        var credentialsFile: String
+        var accountFile: String
+    }
+
+    func claudeLoginLocation() -> ClaudeLoginLocation {
+        let layout = claudeLayout()
+        let directory = layout.machineLoginDirectory
+        if layout.isStandard(directory), layout.keychainService(for: directory) == Self.keychainService {
+            return ClaudeLoginLocation(
+                keychainService: Self.keychainService,
+                credentialsFile: "\(home)/\(AssistantLoginKind.claude.remoteRelativePath)",
+                accountFile: "\(home)/.claude.json")
+        }
+        return ClaudeLoginLocation(
+            keychainService: layout.keychainService(for: directory),
+            credentialsFile: directory + "/.credentials.json",
+            accountFile: layout.accountFile(for: directory))
     }
 
     /// `security` exits with this when the Keychain has no such item.
@@ -306,7 +338,7 @@ public struct MacLoginStore: LocalLoginStore {
             do {
                 result = try await ShellCommand.run(
                     "/usr/bin/security",
-                    arguments: ["find-generic-password", "-s", Self.keychainService, "-a", account, "-w"],
+                    arguments: ["find-generic-password", "-s", claudeLoginLocation().keychainService, "-a", account, "-w"],
                     timeout: 20)
             } catch {
                 return .failed("Keychain read: \(error.localizedDescription)")
@@ -325,7 +357,7 @@ public struct MacLoginStore: LocalLoginStore {
     }
 
     private func readFile(_ kind: AssistantLoginKind) -> LocalLoginRead {
-        let path = "\(home)/\(kind.remoteRelativePath)"
+        let path = kind == .claude ? claudeLoginLocation().credentialsFile : "\(home)/\(kind.remoteRelativePath)"
         guard FileManager.default.fileExists(atPath: path) else { return .absent }
         guard let data = FileManager.default.contents(atPath: path) else { return .failed("\(path) is not readable") }
         return .found(data)
@@ -337,7 +369,7 @@ public struct MacLoginStore: LocalLoginStore {
             guard let text = String(data: data, encoding: .utf8) else { return }
             let result = try await ShellCommand.run(
                 "/usr/bin/security",
-                arguments: ["add-generic-password", "-U", "-s", Self.keychainService, "-a", account, "-w", text],
+                arguments: ["add-generic-password", "-U", "-s", claudeLoginLocation().keychainService, "-a", account, "-w", text],
                 timeout: 20)
             guard result.succeeded else {
                 throw NSError(domain: "MacLoginStore", code: Int(result.exitCode),
@@ -352,7 +384,7 @@ public struct MacLoginStore: LocalLoginStore {
     }
 
     public func claudeAccount() async -> [String: Any]? {
-        guard let data = FileManager.default.contents(atPath: "\(home)/.claude.json"),
+        guard let data = FileManager.default.contents(atPath: claudeLoginLocation().accountFile),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object["oauthAccount"] as? [String: Any]
     }

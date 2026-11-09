@@ -16,11 +16,21 @@ public enum InheritedSessionEnvironment {
         // A shell that held an Anthropic API key would make every session
         // the app starts bill that key instead of the signed-in account.
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        // The Claude and GitHub account a card's session runs as (Claude
+        // accounts): an app started from it would run every card as that
+        // card's accounts. A shell rc that sets them still does, per pane.
+        "CLAUDE_CONFIG_DIR", "GH_TOKEN",
     ]
 
     /// The variables a card's session gets from the tmux session itself
-    /// (`new-session -e`), never typed into its pane.
-    public static let sessionOwned: Set<String> = ["KANBAN_CARD_ID", "KANBAN_CARD_TOKEN"]
+    /// (`new-session -e`), never typed into its pane. `GH_TOKEN` is the
+    /// token of the GitHub account of the card's project (Claude accounts).
+    public static let sessionOwned: Set<String> = ["KANBAN_CARD_ID", "KANBAN_CARD_TOKEN", "GH_TOKEN"]
+
+    /// Variables a card's session gets both ways: from the tmux session, so
+    /// a user's own launch command sees them too, and in front of the
+    /// command, so a value the shell sets on its way (direnv) does not win.
+    public static let sessionAndCommand: Set<String> = ["CLAUDE_CONFIG_DIR"]
 
     /// The names in `environment` that came from the session the app was
     /// launched in. The temporary folder variables count when they point
