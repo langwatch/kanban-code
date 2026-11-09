@@ -150,6 +150,24 @@ struct ClaudeMultiFolderHookTests {
         #expect(!FileManager.default.fileExists(atPath: root + "/none/settings.json"))
     }
 
+    @Test("A folder already partly hooked keeps its own status line when a release adds a hook event")
+    func upgradeKeepsStatusLine() throws {
+        let root = try tempDir("upgrade")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let script = root + "/.kanban-code/hook.sh"
+        let status = root + "/.kanban-code/statusline.sh"
+        let a = root + "/a/settings.json", b = root + "/b/settings.json"
+        for dir in ["/a", "/b"] { try FileManager.default.createDirectory(atPath: root + dir, withIntermediateDirectories: true) }
+        try HookManager.install(for: .claude, settingsPaths: [a], hookScriptPath: script, statusLineScriptPath: status)
+        // b has one Kanban hook of an older release and a status line of its own.
+        let old = #"{"statusLine":{"type":"command","command":"mine"},"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"\#(script)"}]}]}}"#
+        try old.write(toFile: b, atomically: true, encoding: .utf8)
+        #expect(HookManager.addMissingHooks(for: .claude, settingsPaths: [a, b], hookScriptPath: script, statusLineScriptPath: status))
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: b))) as? [String: Any]
+        #expect((object?["statusLine"] as? [String: Any])?["command"] as? String == "mine")
+        #expect(HookManager.isInstalled(for: .claude, settingsPath: b))
+    }
+
     @Test("Only Claude folders that exist are written, ~/.claude when none does, a shared file once")
     func existingFoldersOnly() throws {
         let root = try tempDir("existing")
@@ -169,6 +187,12 @@ struct ClaudeMultiFolderHookTests {
         try FileManager.default.createDirectory(atPath: root + "/.claude-s", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: root + "/.claude-s/settings.json", withDestinationPath: root + "/.claude/settings.json")
         #expect(HookManager.claudeSettingsPaths(layout: layout) == [root + "/.claude/settings.json", root + "/.claude-w/settings.json"])
+
+        // A CLAUDE_CONFIG_DIR folder listed first sharing ~/.claude's file: ~/.claude's spelling stays.
+        try FileManager.default.createDirectory(atPath: root + "/.claude-e", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: root + "/.claude-e/settings.json", withDestinationPath: root + "/.claude/settings.json")
+        let withEnv = ClaudeConfigLayout(home: root, environment: ["CLAUDE_CONFIG_DIR": root + "/.claude-e"])
+        #expect(HookManager.claudeSettingsPaths(layout: withEnv) == [root + "/.claude/settings.json"])
     }
 }
 
@@ -259,7 +283,8 @@ struct ClaudeAccountLaunchTests {
         let unset = ClaudeAccountLaunch(directory: "/h/.claude", environment: [:], unsetsConfigDirectory: true)
         #expect(unset.preamble(shell: "/bin/zsh") == "unset CLAUDE_CONFIG_DIR")
         #expect(unset.preamble(shell: nil) == "unset CLAUDE_CONFIG_DIR")
-        #expect(unset.preamble(shell: "/opt/homebrew/bin/fish") == "begin; set -e CLAUDE_CONFIG_DIR; true; end")
+        // Global only: fish's plain `set -e` would erase a universal variable.
+        #expect(unset.preamble(shell: "/opt/homebrew/bin/fish") == "begin; set -eg CLAUDE_CONFIG_DIR; true; end")
         #expect(MasterEngine.joinedPreamble(nil, nil) == nil)
         #expect(MasterEngine.joinedPreamble("a", nil) == "a")
         #expect(MasterEngine.joinedPreamble("a", "b") == "a && b")
@@ -316,11 +341,15 @@ struct ClaudeAccountSessionEnvironmentTests {
     @Test("An app started from a card's shell drops the accounts Kanban gave it, and only those")
     func inherited() {
         let marker = InheritedSessionEnvironment.accountMarker
-        let card = ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t", marker: "1", "HOME": "/h"]
-        #expect(InheritedSessionEnvironment.inherited(in: card) == ["CLAUDE_CONFIG_DIR", "GH_TOKEN", marker])
-        // The user's own exports stay.
+        let card = ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t", marker: "CLAUDE_CONFIG_DIR,GH_TOKEN", "HOME": "/h"]
+        #expect(InheritedSessionEnvironment.inherited(in: card).sorted() == ["CLAUDE_CONFIG_DIR", "GH_TOKEN", marker])
+        // Kanban gave only the folder: the user's own GH_TOKEN stays.
+        let folderOnly = ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "mine", marker: "CLAUDE_CONFIG_DIR"]
+        #expect(InheritedSessionEnvironment.inherited(in: folderOnly).sorted() == ["CLAUDE_CONFIG_DIR", marker])
+        // Without the marker, the user's own exports stay.
         #expect(InheritedSessionEnvironment.inherited(in: ["CLAUDE_CONFIG_DIR": "/h/.claude-w", "GH_TOKEN": "t"]).isEmpty)
-        #expect(InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil, accountMarked: true).contains("GH_TOKEN"))
+        #expect(InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil, accountMarker: "GH_TOKEN").contains("GH_TOKEN"))
+        #expect(!InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil, accountMarker: "GH_TOKEN").contains("CLAUDE_CONFIG_DIR"))
         #expect(!InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: nil).contains("GH_TOKEN"))
     }
 }
@@ -339,6 +368,20 @@ struct ClaudeTranscriptFolderTests {
         let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
         #expect(object?["cwd"] as? String == "/new/place")
         #expect(!FileManager.default.fileExists(atPath: from))
+    }
+
+    @Test("A move to the key a transcript already has, spelled through a symlink, keeps the file")
+    func moverSameFile() throws {
+        let root = try tempDir("samefile")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let real = root + "/.claude-w/projects/-p/s.jsonl"
+        try writeTranscript(real, cwd: "/p")
+        try FileManager.default.createSymbolicLink(atPath: root + "/link", withDestinationPath: root + "/.claude-w")
+        let moved = try SessionFileMover.moveSession(
+            sessionId: "s", fromPath: root + "/link/projects/-p/s.jsonl", toProjectPath: "/p",
+            projectsDirectory: root + "/.claude-w/projects")
+        #expect(moved == real)
+        #expect(FileManager.default.fileExists(atPath: real))
     }
 
     @Test("A session migrated from another assistant goes where its project's account looks")

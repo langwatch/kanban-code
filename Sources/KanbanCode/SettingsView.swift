@@ -290,7 +290,7 @@ struct AssistantsSettingsView: View {
                             } else {
                                 Button("Install Hooks") {
                                     do {
-                                        try HookManager.install(for: assistant)
+                                        try ClaudeAccountsSetup.serialized { try HookManager.install(for: assistant) }
                                         assistantStatus[assistant] = AssistantStatus(
                                             available: status.available,
                                             hooksInstalled: true,

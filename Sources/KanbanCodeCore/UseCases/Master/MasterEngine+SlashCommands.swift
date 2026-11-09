@@ -39,7 +39,7 @@ extension MasterEngine {
         let commands = await Task.detached(priority: .userInitiated) {
             let cwd = SlashCommandSession.folder(transcriptPath: transcript, candidates: folders)
             let config = SlashCommandSession.claudeConfigDirectory(
-                transcriptPath: transcript, isRush: isRush, projectPath: folders.first)
+                transcriptPath: transcript, isRush: isRush, projectPath: link.projectPath ?? folders.first)
             let disk = ClaudeCommandFiles.commands(configDirectory: config, cwd: cwd)
             return SlashCommandCatalog.merged(assistant: assistant, sideChat: sideChat, disk: disk)
         }.value

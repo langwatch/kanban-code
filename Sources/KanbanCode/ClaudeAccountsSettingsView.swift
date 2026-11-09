@@ -7,7 +7,9 @@ import KanbanCodeCore
 struct ClaudeAccountsSettingsView: View {
     private let settingsStore = SettingsStore()
     @State private var accounts: [ClaudeAccount] = []
-    @State private var machineLogin: String = ""
+    /// The row whose login the machines get, nil for the default. A row,
+    /// not a folder, so it follows its folder being retyped.
+    @State private var loginRow: Int?
     @State private var loaded = false
     @State private var saveTask: Task<Void, Never>?
     @State private var hooksInstalled: [String: Bool] = [:]
@@ -37,7 +39,9 @@ struct ClaudeAccountsSettingsView: View {
                         Spacer()
                         Button(role: .destructive) {
                             guard accounts.indices.contains(index) else { return }
-                            if machineLogin == accounts[index].configDirectory { machineLogin = "" }
+                            if let row = loginRow {
+                                loginRow = row == index ? nil : (row > index ? row - 1 : row)
+                            }
                             accounts.remove(at: index)
                             scheduleSave()
                         } label: {
@@ -59,15 +63,16 @@ struct ClaudeAccountsSettingsView: View {
             }
 
             Section("Remote Machines") {
-                Picker("Login for machines", selection: $machineLogin) {
-                    Text("Default").tag("")
-                    // Tagged by folder, listed by position: two rows may share
-                    // a folder while being edited (flagged on the rows).
-                    ForEach(Array(uniqueFolders.enumerated()), id: \.offset) { _, account in
-                        Text(account.name.isEmpty ? account.configDirectory : account.name).tag(account.configDirectory)
+                Picker("Login for machines", selection: $loginRow) {
+                    Text("Default (~/.claude)").tag(Int?.none)
+                    ForEach(accounts.indices, id: \.self) { index in
+                        if accounts.indices.contains(index), !accounts[index].configDirectory.isEmpty {
+                            Text(accounts[index].name.isEmpty ? accounts[index].configDirectory : accounts[index].name)
+                                .tag(Int?.some(index))
+                        }
                     }
                 }
-                .onChange(of: machineLogin) { scheduleSave() }
+                .onChange(of: loginRow) { scheduleSave() }
                 Text("boxd and ssh machines hold one Claude login, kept in sync with this Mac's. Pick whose.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -82,10 +87,7 @@ struct ClaudeAccountsSettingsView: View {
         }
     }
 
-    private var uniqueFolders: [ClaudeAccount] {
-        var seen = Set<String>()
-        return accounts.filter { !$0.configDirectory.isEmpty && seen.insert($0.configDirectory).inserted }
-    }
+
 
     @ViewBuilder
     private func accountRows(_ index: Int) -> some View {
@@ -152,11 +154,6 @@ struct ClaudeAccountsSettingsView: View {
             get: { accounts.indices.contains(index) ? accounts[index][keyPath: keyPath] : "" },
             set: { value in
                 guard accounts.indices.contains(index) else { return }
-                // The machines' login follows its folder being renamed.
-                if keyPath == \ClaudeAccount.configDirectory, machineLogin == accounts[index].configDirectory,
-                   !machineLogin.isEmpty {
-                    machineLogin = value
-                }
                 accounts[index][keyPath: keyPath] = value
                 scheduleSave()
             }
@@ -197,7 +194,11 @@ struct ClaudeAccountsSettingsView: View {
         do {
             let settings = try await settingsStore.read()
             accounts = settings.claudeAccounts
-            machineLogin = settings.claudeMachineLoginDirectory ?? ""
+            let home = NSHomeDirectory()
+            let saved = settings.claudeMachineLoginDirectory.flatMap { ClaudeConfigLayout.expand($0, home: home) }
+            loginRow = saved.flatMap { saved in
+                settings.claudeAccounts.firstIndex { ClaudeConfigLayout.expand($0.configDirectory, home: home) == saved }
+            }
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -209,7 +210,7 @@ struct ClaudeAccountsSettingsView: View {
     private func scheduleSave() {
         guard loaded, loadError == nil else { return }
         let accounts = self.accounts
-        let machineLogin = self.machineLogin
+        let machineLogin = loginRow.flatMap { accounts.indices.contains($0) ? accounts[$0].configDirectory : nil } ?? ""
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(500))
@@ -228,27 +229,38 @@ struct ClaudeAccountsSettingsView: View {
         }
     }
 
-    private func refreshHookStatus() {
+    /// A folder the row's hook status and button apply to: usable, and one
+    /// Claude Code has used (otherwise the row says to run it once).
+    private func claudeFolder(of account: ClaudeAccount) -> String? {
         let home = NSHomeDirectory()
+        guard let folder = ClaudeConfigLayout.expand(account.configDirectory, home: home),
+              ClaudeConfigLayout.isUsableConfigDirectory(folder, home: home),
+              ClaudeConfigLayout.looksLikeClaudeFolder(folder) else { return nil }
+        return folder
+    }
+
+    private func refreshHookStatus() {
         var status: [String: Bool] = [:]
         for account in accounts {
-            guard let folder = ClaudeConfigLayout.expand(account.configDirectory, home: home),
-                  FileManager.default.fileExists(atPath: folder) else { continue }
+            guard let folder = claudeFolder(of: account) else { continue }
             status[account.configDirectory] = HookManager.isInstalled(for: .claude, settingsPath: folder + "/settings.json")
         }
         hooksInstalled = status
     }
 
     private func installHooks(for account: ClaudeAccount) {
-        guard let folder = ClaudeConfigLayout.expand(account.configDirectory, home: NSHomeDirectory()) else { return }
+        guard let folder = claudeFolder(of: account) else { return }
         let path = folder + "/settings.json"
         guard HookManager.isRewritable(path) else {
             KanbanCodeLog.warn("hooks", "Not installing hooks into \(path): not a JSON object")
             return
         }
-        try? HookManager.install(for: .claude, settingsPath: path)
-        _ = try? VaultHook.install(settingsPath: path)
-        _ = try? PermissionHook.install(settingsPath: path)
+        ClaudeAccountsSetup.serialized {
+            // The folder keeps a status line of its own.
+            try? HookManager.install(for: .claude, settingsPaths: [path], replacingOwnStatusLine: false)
+            _ = try? VaultHook.install(settingsPath: path)
+            _ = try? PermissionHook.install(settingsPath: path)
+        }
         refreshHookStatus()
     }
 }

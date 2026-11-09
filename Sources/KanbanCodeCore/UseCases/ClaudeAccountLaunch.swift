@@ -93,11 +93,13 @@ public struct ClaudeAccountLaunch: Sendable, Equatable {
     /// command stays a word the shell resolves, so an alias or function
     /// named `claude` (Claude Code's local install) keeps working, and a
     /// launch command of the user's own is covered too. `shell` is the
-    /// pane's shell (fish has no `unset`).
+    /// pane's shell. fish has no `unset`, and its `set -e` would erase a
+    /// universal variable for good: only the global one goes (an inherited
+    /// or direnv value), a universal one stays and wins.
     public func preamble(shell: String?) -> String? {
         guard unsetsConfigDirectory else { return nil }
         if let shell, (shell as NSString).lastPathComponent == "fish" {
-            return "begin; set -e CLAUDE_CONFIG_DIR; true; end"
+            return "begin; set -eg CLAUDE_CONFIG_DIR; true; end"
         }
         return "unset CLAUDE_CONFIG_DIR"
     }

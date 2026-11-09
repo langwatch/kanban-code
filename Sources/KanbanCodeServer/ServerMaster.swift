@@ -225,6 +225,7 @@ final class ServerMaster {
             }
         }
         _ = HookManager.refreshHookScript()
+        ClaudeAccountsSetup.serialized {
         if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") {
             _ = try? VaultHook.install(settingsPath: HookManager.defaultSettingsPath(for: .claude))
             _ = try? PermissionHook.install(settingsPath: HookManager.defaultSettingsPath(for: .claude))
@@ -240,6 +241,7 @@ final class ServerMaster {
             && HookManager.isRewritable(path)
             && !HookManager.isStatusLineInstalled(for: .claude, settingsPath: path) {
             try? HookManager.installStatusLine(for: .claude, settingsPath: path, replacingOwn: path == standard)
+        }
         }
     }
 

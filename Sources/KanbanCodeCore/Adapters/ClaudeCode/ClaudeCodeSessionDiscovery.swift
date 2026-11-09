@@ -226,7 +226,7 @@ public final class ClaudeCodeSessionDiscovery: SessionDiscovery, @unchecked Send
 
         // Evict entire directories that were removed, also those of a
         // config folder that is gone or no longer configured.
-        for removedDir in Set(dirMtimes.keys).subtracting(seenDirs) {
+        for removedDir in Set(dirMtimes.keys).union(dirSessionIds.keys).subtracting(seenDirs) {
             dirMtimes.removeValue(forKey: removedDir)
             dirSkippedIds.removeValue(forKey: removedDir)
             if let ids = dirSessionIds.removeValue(forKey: removedDir) {

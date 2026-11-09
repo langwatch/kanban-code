@@ -13,6 +13,12 @@ public enum ClaudeAccountsSetup {
     /// them (the headless server, which always runs with hooks). Otherwise
     /// only where the user already opted in once (`addMissingHooks`).
     /// Folders other than `~/.claude` keep a status line of their own.
+    /// Runs `body`, which writes Claude settings files, one at a time with
+    /// `refresh` and every other caller.
+    public static func serialized<T>(_ body: () throws -> T) rethrows -> T {
+        try lock.withLock(body)
+    }
+
     public static func refresh(installingHooks: Bool = false) {
         lock.lock()
         defer { lock.unlock() }

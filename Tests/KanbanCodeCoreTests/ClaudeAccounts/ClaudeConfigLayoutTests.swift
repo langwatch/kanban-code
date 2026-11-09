@@ -53,6 +53,8 @@ struct ClaudeConfigLayoutTests {
         #expect(layout.directories == ["/home/u/.claude-env", "/home/u/.claude", "/home/u/.claude-work"])
         #expect(!layout.isStandardOnly)
         #expect(layout.accounts.map(\.name) == ["Work", "Again", "Standard"])
+        // Nor the login shell's CLAUDE_CONFIG_DIR when it is the home folder.
+        #expect(ClaudeConfigLayout(home: home, environment: ["CLAUDE_CONFIG_DIR": "~"]).defaultDirectory == "/home/u/.claude")
     }
 
     @Test("Two spellings of one folder through a symlink count once")

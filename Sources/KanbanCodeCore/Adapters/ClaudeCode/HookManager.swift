@@ -101,8 +101,11 @@ public enum HookManager {
         let hooked = Set(paths.filter { registeredHooks(for: assistant, at: $0) > 0 })
         guard !hooked.isEmpty else { return false }
         var changed = false
+        let standard = ClaudeConfigDirectories.current.standard + "/settings.json"
         for path in paths where !isInstalled(for: assistant, at: path) && isRewritable(path) {
-            let added = hooked.contains(path)
+            // As before in a file that had the hooks, `~/.claude`'s; any
+            // other keeps a status line of its own.
+            let added = hooked.contains(path) && (paths.count == 1 || path == standard)
             if (try? install(for: assistant, at: path, hookScriptPath: hookScriptPath, replaceStatusLine: added,
                              statusLineScriptPath: statusLineScriptPath)) != nil {
                 changed = true
@@ -484,11 +487,13 @@ public enum HookManager {
         let existing = layout.writableDirectories.filter {
             FileManager.default.fileExists(atPath: $0, isDirectory: &isDir) && isDir.boolValue
         }
-        // Folders often share one settings file through a symlink: once.
+        // Folders often share one settings file through a symlink: once,
+        // spelled as ~/.claude's when it is that one.
         var seen = Set<String>()
-        return (existing.isEmpty ? [layout.standard] : existing)
-            .map { $0 + "/settings.json" }
-            .filter { seen.insert(ClaudeConfigLayout.resolve($0)).inserted }
+        let folders = existing.isEmpty ? [layout.standard] : existing
+        let ordered = folders.filter { $0 == layout.standard } + folders.filter { $0 != layout.standard }
+        let kept = ordered.map { $0 + "/settings.json" }.filter { seen.insert(ClaudeConfigLayout.resolve($0)).inserted }
+        return folders.map { $0 + "/settings.json" }.filter { kept.contains($0) }
     }
 
     /// The files a nil `settingsPath` stands for.

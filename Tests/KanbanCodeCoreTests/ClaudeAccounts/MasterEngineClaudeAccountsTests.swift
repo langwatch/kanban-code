@@ -107,7 +107,7 @@ struct MasterEngineClaudeAccountsTests {
         #expect(!command.contains("gho_test"))
         #expect(session.environment["CLAUDE_CONFIG_DIR"] == h.account)
         #expect(session.environment["GH_TOKEN"] == "gho_test")
-        #expect(session.environment[InheritedSessionEnvironment.accountMarker] == "1")
+        #expect(session.environment[InheritedSessionEnvironment.accountMarker] == "CLAUDE_CONFIG_DIR,GH_TOKEN")
 
         let transcript = "\(h.account)/projects/\(SessionFileMover.encodeProjectPath(project))/new-session.jsonl"
         try writeTranscript(transcript, cwd: project)

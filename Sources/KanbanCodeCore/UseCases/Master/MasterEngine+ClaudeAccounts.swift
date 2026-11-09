@@ -13,7 +13,8 @@ extension MasterEngine {
     func accountEnvironment(_ account: ClaudeAccountLaunch, projectPath: String, isRemote: Bool) async -> [String: String] {
         guard !isRemote else { return [:] }
         var env = account.environment.merging(await gitHubEnvironment(projectPath)) { _, new in new }
-        if !env.isEmpty { env[InheritedSessionEnvironment.accountMarker] = "1" }
+        // The marker names what Kanban set, so only that is dropped again.
+        if !env.isEmpty { env[InheritedSessionEnvironment.accountMarker] = env.keys.sorted().joined(separator: ",") }
         return env
     }
 

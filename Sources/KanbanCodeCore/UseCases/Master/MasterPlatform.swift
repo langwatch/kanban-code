@@ -112,9 +112,16 @@ public struct MasterPlatform: Sendable {
     /// Tokens of the GitHub logins the accounts name.
     public var gitHubTokens: GitHubAccountTokens = .shared
 
-    /// The shell a card's tmux pane runs (the user's login shell).
-    public var paneShell: @Sendable () -> String? = {
-        ShellCommand.loginEnvironment["SHELL"] ?? ProcessInfo.processInfo.environment["SHELL"]
+    /// The shell a card's tmux pane runs: tmux's `default-shell` (a
+    /// tmux.conf may name another than the login shell), else `SHELL`.
+    public var paneShell: @Sendable () async -> String? = {
+        if let tmux = ShellCommand.findExecutable("tmux"),
+           let result = try? await ShellCommand.run(tmux, arguments: ["show-options", "-gv", "default-shell"], timeout: 5),
+           result.succeeded {
+            let shell = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !shell.isEmpty { return shell }
+        }
+        return ShellCommand.loginEnvironment["SHELL"] ?? ProcessInfo.processInfo.environment["SHELL"]
     }
 
     public init() {}

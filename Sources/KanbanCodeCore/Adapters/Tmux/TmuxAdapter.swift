@@ -114,9 +114,10 @@ public final class TmuxAdapter: TmuxManagerPort, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init)
         let marker = try? await runTmux(["show-environment", "-g", InheritedSessionEnvironment.accountMarker])
-        let accountMarked = marker?.succeeded == true
-            && marker?.stdout.hasPrefix(InheritedSessionEnvironment.accountMarker + "=") == true
-        _ = try? await runTmux(InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: value, accountMarked: accountMarked))
+        let prefix = InheritedSessionEnvironment.accountMarker + "="
+        let markerValue = marker.flatMap { $0.succeeded && $0.stdout.hasPrefix(prefix) ? $0.stdout : nil }
+            .map { String($0.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines) }
+        _ = try? await runTmux(InheritedSessionEnvironment.tmuxUnsetArguments(serverTMPDIR: value, accountMarker: markerValue))
     }
 
     public func killSession(name: String) async throws {

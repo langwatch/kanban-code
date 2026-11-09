@@ -20,9 +20,10 @@ public enum InheritedSessionEnvironment {
     ]
 
     /// Set in a card's session when Kanban gave it the variables of a Claude
-    /// account (`accountNames`). Only then are those dropped: an app started
-    /// from that session would otherwise run every card as that card's
-    /// accounts, while a user's own `CLAUDE_CONFIG_DIR` or `GH_TOKEN` stays.
+    /// account (`accountNames`), to the names it gave, comma separated. Only
+    /// those are dropped: an app started from that session would otherwise
+    /// run every card as that card's accounts, while a user's own
+    /// `CLAUDE_CONFIG_DIR` or `GH_TOKEN` stays.
     public static let accountMarker = "KANBAN_CLAUDE_ACCOUNT"
     public static let accountNames: [String] = ["CLAUDE_CONFIG_DIR", "GH_TOKEN"]
 
@@ -41,8 +42,8 @@ public enum InheritedSessionEnvironment {
     /// into a rush session's own folder.
     public static func inherited(in environment: [String: String]) -> [String] {
         var out = environment.keys.filter { names.contains($0) }
-        if environment[accountMarker] != nil {
-            out += accountNames.filter { environment[$0] != nil }
+        if let marked = environment[accountMarker] {
+            out += markedNames(marked).filter { environment[$0] != nil }
         }
         for name in temporaryFolderNames {
             if let tmp = environment[name], isSessionFolder(tmp) { out.append(name) }
@@ -61,10 +62,16 @@ public enum InheritedSessionEnvironment {
     /// server's global environment. A tmux server keeps the environment of
     /// the process that started it, so a server first started from an agent's
     /// shell would give every later pane that agent's card and session.
-    public static func tmuxUnsetArguments(serverTMPDIR: String?, accountMarked: Bool = false) -> [String] {
+    /// The account variables a marker value names.
+    static func markedNames(_ marker: String) -> [String] {
+        let listed = Set(marker.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        return accountNames.filter { listed.contains($0) }
+    }
+
+    public static func tmuxUnsetArguments(serverTMPDIR: String?, accountMarker: String? = nil) -> [String] {
         var names = names.sorted()
         if let tmp = serverTMPDIR, isSessionFolder(tmp) { names += temporaryFolderNames }
-        if accountMarked { names += accountNames }
+        if let accountMarker { names += markedNames(accountMarker) }
         var args: [String] = []
         for name in names {
             if !args.isEmpty { args.append(";") }

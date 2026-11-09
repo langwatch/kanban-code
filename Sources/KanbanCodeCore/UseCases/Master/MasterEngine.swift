@@ -358,7 +358,8 @@ public final class MasterEngine {
                     commandOverride: commandOverride,
                     commandTemplate: commandTemplate,
                     skipPermissions: skipPermissions,
-                    preamble: Self.joinedPreamble(preamble, claudeAccount.preamble(shell: platform.paneShell())),
+                    preamble: Self.joinedPreamble(
+                        preamble, claudeAccount.preamble(shell: claudeAccount.unsetsConfigDirectory ? await platform.paneShell() : nil)),
                     assistant: assistant,
                     service: resolvedService,
                     modelOverride: effectiveModelOverride
@@ -975,7 +976,8 @@ public final class MasterEngine {
                     commandOverride: commandOverride,
                     commandTemplate: commandTemplate,
                     skipPermissions: skipPermissions,
-                    preamble: Self.joinedPreamble(preamble, claudeAccount.preamble(shell: platform.paneShell())),
+                    preamble: Self.joinedPreamble(
+                        preamble, claudeAccount.preamble(shell: claudeAccount.unsetsConfigDirectory ? await platform.paneShell() : nil)),
                     assistant: assistant,
                     service: resolvedService,
                     modelOverride: effectiveModelOverride

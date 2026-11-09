@@ -74,7 +74,9 @@ public struct ClaudeConfigLayout: Sendable, Equatable {
         let standard = home + "/.claude"
         self.standard = standard
         self.resolvedStandard = Self.resolve(standard)
-        let fromEnvironment = environment["CLAUDE_CONFIG_DIR"].flatMap { Self.expand($0, home: home) }
+        let fromEnvironment = environment["CLAUDE_CONFIG_DIR"]
+            .flatMap { Self.expand($0, home: home) }
+            .flatMap { Self.isUsableConfigDirectory($0, home: home) ? $0 : nil }
         self.environmentSpelling = fromEnvironment == nil ? nil : environment["CLAUDE_CONFIG_DIR"]
         self.defaultDirectory = fromEnvironment ?? standard
 

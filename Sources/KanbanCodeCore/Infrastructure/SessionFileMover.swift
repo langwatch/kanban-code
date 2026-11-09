@@ -6,7 +6,8 @@ import Foundation
 public enum SessionFileMover {
 
     /// The `projects/` folder a transcript (`<config>/projects/<key>/<id>.jsonl`)
-    /// is in, or the default config folder's when the path has another shape.
+    /// is in, or `~/.claude`'s when the path has another shape (as
+    /// `MasterPlatform.claudeProjectsDirectory`).
     public static func projectsDirectory(
         of transcriptPath: String,
         layout: ClaudeConfigLayout = ClaudeConfigDirectories.current
@@ -14,7 +15,7 @@ public enum SessionFileMover {
         if let known = layout.projectsDirectory(containingSession: transcriptPath) { return known }
         let projects = ((transcriptPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
         if (projects as NSString).lastPathComponent == "projects" { return projects }
-        return layout.defaultDirectory + "/projects"
+        return layout.standard + "/projects"
     }
 
     /// Move a session file to a new project folder of the same Claude config
@@ -69,8 +70,9 @@ public enum SessionFileMover {
         let newContent = newLines.joined(separator: "\n")
         try newContent.write(toFile: targetPath, atomically: true, encoding: .utf8)
 
-        // Remove original (only if different path)
-        if fromPath != targetPath {
+        // Remove original (only if another file: one spelled through a
+        // symlink is the same file, just rewritten)
+        if fromPath != targetPath, ClaudeConfigLayout.resolve(fromPath) != ClaudeConfigLayout.resolve(targetPath) {
             try? fm.removeItem(atPath: fromPath)
         }
 
