@@ -677,7 +677,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUs
             let request = MainActor.assumeIsolated { AppComposition.shared.store.state.attentionRequests[attentionId] }
             if let request, request.options.indices.contains(index) {
                 let resolution = request.options[index]
-                Task { _ = await MacVaultDevice.answer(request, option: resolution) }
+                Task {
+                    // Nothing else shows a banner answer that did not go through.
+                    if case .failed(let problem) = await MacVaultDevice.answer(request, option: resolution) {
+                        try? await MacOSNotificationClient().sendNotification(
+                            title: "\(resolution) did not go through", message: problem, imageData: nil, cardId: nil)
+                    }
+                }
             }
             completionHandler()
             return

@@ -291,7 +291,7 @@ public struct VaultEditRequest: Codable, Sendable, Equatable {
         if let leasePolicy {
             lines.append(leasePolicy.everyUseAsks ? "Lease time: every use asks" : "Lease time: \(AttentionCopy.duration(leasePolicy.leaseSeconds))")
         }
-        if let aws { lines.append("AWS role: \(aws.roleArn ?? "none (session token)") from \(aws.sourceSecret)") }
+        if let aws { lines.append("AWS role: \(aws.roleArn ?? "none (session token)") from \(aws.sourceLabel)") }
         if let label { lines.append("Label: \(label.isEmpty ? "(derived from the name)" : label)") }
         return lines
     }
@@ -443,6 +443,7 @@ public actor VaultBroker {
 
     static let lockedWhy = "it opens only with your Touch ID or Face ID"
     static let mintWhy = "its long-lived AWS key opens only with your Touch ID or Face ID"
+    static let ssoWhy = "its credentials come from the Mac's AWS SSO sign-in, only when you approve on the Mac"
 
     private var pending: [String: Pending] = [:]
     /// Recent value checks, for `compare(_:caller:now:)`'s limit.
@@ -585,12 +586,19 @@ public actor VaultBroker {
         return source
     }
 
+    /// Whether an AWS profile's credentials are minted on a device: from a
+    /// sealed long-lived key, or from the Mac's SSO sign-in.
+    private func mintsOnDevice(_ s: VaultSecret) async -> Bool {
+        guard let role = s.aws else { return false }
+        return role.isSso ? true : await sealedSource(of: s) != nil
+    }
+
     /// Whether handing out `s` first needs a device: its sealed value, or
     /// credentials only the device can mint.
     private func needsDevice(_ s: VaultSecret, now: Date) async -> String? {
-        if s.aws != nil {
-            guard await sealedSource(of: s) != nil, heldAws(s, now: now) == nil else { return nil }
-            return Self.mintWhy
+        if let role = s.aws {
+            guard await mintsOnDevice(s), heldAws(s, now: now) == nil else { return nil }
+            return role.isSso ? Self.ssoWhy : Self.mintWhy
         }
         return s.isSealed && heldValue(s, now: now) == nil ? Self.lockedWhy : nil
     }
@@ -602,8 +610,14 @@ public actor VaultBroker {
         case .release, .lease:
             for s in secrets {
                 if let role = s.aws {
+                    let sessionName = "kanban-\(caller.cardId ?? "outside")"
+                    if role.isSso {
+                        guard heldAws(s, now: now) == nil else { continue }
+                        out.awsSso = (out.awsSso ?? []) + [.init(profile: s.name, role: role, sessionName: sessionName)]
+                        continue
+                    }
                     guard let source = await sealedSource(of: s), let item = source.unsealItem, heldAws(s, now: now) == nil else { continue }
-                    out.aws.append(.init(profile: s.name, key: item, role: role, sessionName: "kanban-\(caller.cardId ?? "outside")"))
+                    out.aws.append(.init(profile: s.name, key: item, role: role, sessionName: sessionName))
                 } else if s.isSealed, heldValue(s, now: now) == nil, let item = s.unsealItem {
                     out.secrets.append(item)
                 }
@@ -889,9 +903,11 @@ public actor VaultBroker {
                     awsHeld[s.name] = IssuedAws(credentials: fresh, expiresAt: expires, issuedAt: now, role: role, secretUpdatedAt: s.updatedAt)
                 }
                 note = "minted on the device"
-            } else if await sealedSource(of: s) != nil {
+            } else if await mintsOnDevice(s) {
                 guard let kept = heldAws(s, now: now) else {
-                    return .denied("\(s.name): its credentials are minted on Rogerio's Mac or phone, and none are held; ask again")
+                    return .denied(role.isSso
+                        ? "\(s.name): its credentials are minted on Rogerio's Mac from its AWS SSO sign-in, and none came back; ask again and approve it on the Mac"
+                        : "\(s.name): its credentials are minted on Rogerio's Mac or phone, and none are held; ask again")
                 }
                 credentials = kept.credentials
                 note = "credentials a device minted \(Int(now.timeIntervalSince(kept.issuedAt) / 60)) min ago"

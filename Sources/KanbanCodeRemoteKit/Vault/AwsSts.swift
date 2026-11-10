@@ -8,14 +8,18 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Long-lived AWS keys as a vault secret stores them.
+/// Long-lived AWS keys as a vault secret stores them, or the temporary
+/// credentials of an SSO session (with `sessionToken`) that sign the
+/// AssumeRole narrowing them.
 public struct AwsAccessKey: Codable, Sendable, Equatable {
     public var accessKeyId: String
     public var secretAccessKey: String
+    public var sessionToken: String?
 
-    public init(accessKeyId: String, secretAccessKey: String) {
+    public init(accessKeyId: String, secretAccessKey: String, sessionToken: String? = nil) {
         self.accessKeyId = accessKeyId
         self.secretAccessKey = secretAccessKey
+        self.sessionToken = sessionToken
     }
 }
 
@@ -44,23 +48,64 @@ public struct AwsProcessCredentials: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// An AWS profile the vault serves as short-lived credentials: STS
-/// AssumeRole (or GetSessionToken without a role) with the long-lived key
-/// in `sourceSecret`, whose value is `{"accessKeyId","secretAccessKey"}`.
+/// An AWS profile the vault serves as short-lived credentials. The base
+/// credentials come from one of two sources:
+/// - `sourceSecret`: a long-lived key whose value is
+///   `{"accessKeyId","secretAccessKey"}`, used for STS AssumeRole (or
+///   GetSessionToken without a role);
+/// - `ssoProfile`: a profile of the Mac's `~/.aws/config` signed in through
+///   IAM Identity Center; the Mac exports its credentials, then assumes
+///   `roleArn` with them when one is set.
 public struct VaultAwsRole: Codable, Sendable, Equatable, Hashable {
+    /// Empty for an SSO profile.
     public var sourceSecret: String
+    public var ssoProfile: String?
     public var roleArn: String?
     /// Session policies narrowing the role, e.g. ReadOnlyAccess.
     public var policyArns: [String]
     public var durationSeconds: Int
     public var region: String?
 
-    public init(sourceSecret: String, roleArn: String?, policyArns: [String] = [], durationSeconds: Int = 3600, region: String? = nil) {
+    public init(sourceSecret: String, roleArn: String?, policyArns: [String] = [], durationSeconds: Int = 3600,
+                region: String? = nil, ssoProfile: String? = nil) {
         self.sourceSecret = sourceSecret
+        self.ssoProfile = ssoProfile
         self.roleArn = roleArn
         self.policyArns = policyArns
         self.durationSeconds = durationSeconds
         self.region = region
+    }
+
+    /// A profile minted from the Mac's SSO sign-in.
+    public static func sso(profile: String, roleArn: String? = nil, policyArns: [String] = [], durationSeconds: Int = 3600,
+                           region: String? = nil) -> VaultAwsRole {
+        VaultAwsRole(sourceSecret: "", roleArn: roleArn, policyArns: policyArns, durationSeconds: durationSeconds,
+                     region: region, ssoProfile: profile)
+    }
+
+    public var isSso: Bool { !(ssoProfile ?? "").isEmpty }
+
+    public var hasRole: Bool { !(roleArn ?? "").isEmpty }
+
+    /// Where the credentials come from, for people: "SSO profile lw-prod-sso"
+    /// or "key AWS_KEY_X".
+    public var sourceLabel: String {
+        if let ssoProfile, isSso { return "SSO profile \(ssoProfile)" }
+        return "key \(sourceSecret)"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceSecret, ssoProfile, roleArn, policyArns, durationSeconds, region
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sourceSecret = try c.decodeIfPresent(String.self, forKey: .sourceSecret) ?? ""
+        ssoProfile = try c.decodeIfPresent(String.self, forKey: .ssoProfile)
+        roleArn = try c.decodeIfPresent(String.self, forKey: .roleArn)
+        policyArns = try c.decodeIfPresent([String].self, forKey: .policyArns) ?? []
+        durationSeconds = try c.decodeIfPresent(Int.self, forKey: .durationSeconds) ?? 3600
+        region = try c.decodeIfPresent(String.self, forKey: .region)
     }
 }
 
@@ -91,25 +136,39 @@ public struct AwsSts: Sendable {
     public enum StsError: Error, CustomStringConvertible {
         case http(Int, String)
         case unreadable
+        /// STS no longer knows the long-lived key: it was deleted or rotated.
+        case keyGone(String)
 
         public var description: String {
             switch self {
             case .http(let status, let message): "STS answered HTTP \(status): \(message)"
             case .unreadable: "STS answered something unreadable"
+            case .keyGone(let name):
+                "The long-lived AWS key \(name) no longer works (deleted or rotated): this profile mints nothing until it gets a new key or an SSO profile"
             }
+        }
+
+        /// The answer STS gives a key that does not exist (any more).
+        public var isUnknownKey: Bool {
+            guard case .http(let status, let message) = self, status == 403 else { return false }
+            let lower = message.lowercased()
+            return lower.contains("security token included in the request is invalid") || lower.contains("invalidclienttokenid")
         }
     }
 
     /// Session lengths to try, longest first: a role allows up to its
     /// MaxSessionDuration (1 to 12 hours), a user's session token up to 36.
-    public static func durations(role: Bool) -> [Int] {
-        role ? [43200, 28800, 14400, 7200, 3600] : [129_600, 43200, 3600]
+    /// A role assumed with temporary credentials (role chaining) gets one
+    /// hour at most.
+    public static func durations(role: Bool, chained: Bool = false) -> [Int] {
+        if chained { return [3600] }
+        return role ? [43200, 28800, 14400, 7200, 3600] : [129_600, 43200, 3600]
     }
 
     /// Credentials for the longest session STS grants: a length it refuses
     /// as too long is tried again shorter.
     public func longestCredentials(key: AwsAccessKey, role: VaultAwsRole, sessionName: String) async throws -> AwsProcessCredentials {
-        let lengths = Self.durations(role: !(role.roleArn ?? "").isEmpty)
+        let lengths = Self.durations(role: role.hasRole, chained: key.sessionToken != nil)
         for (i, seconds) in lengths.enumerated() {
             do {
                 return try await credentials(key: key, role: role, sessionName: sessionName, seconds: seconds)
@@ -150,9 +209,11 @@ public struct AwsSts: Sendable {
         var request = URLRequest(url: endpoint, timeoutInterval: 20)
         request.httpMethod = "POST"
         request.httpBody = Data(body.utf8)
+        var headers = ["content-type": "application/x-www-form-urlencoded; charset=utf-8"]
+        if let token = key.sessionToken, !token.isEmpty { headers["x-amz-security-token"] = token }
         let signed = Self.sign(
             method: "POST", url: endpoint, body: Data(body.utf8),
-            headers: ["content-type": "application/x-www-form-urlencoded; charset=utf-8"],
+            headers: headers,
             key: key, region: region, service: "sts", date: Date()
         )
         for (name, value) in signed where name != "host" { request.setValue(value, forHTTPHeaderField: name) }

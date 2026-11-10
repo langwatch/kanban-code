@@ -44,6 +44,41 @@ export interface AwsProcessCredentials {
   Expiration: string;
 }
 
+/** Where an AWS profile's credentials come from: a long-lived key, or an SSO profile of the Mac's ~/.aws/config. */
+export interface VaultAwsRole {
+  sourceSecret: string;
+  ssoProfile?: string | null;
+  roleArn?: string | null;
+  policyArns: string[];
+  durationSeconds?: number;
+  region?: string | null;
+}
+
+/**
+ * The role `kv aws-source` stores: the profile keeps its role and session
+ * policies, and its credentials come from `sso` (or the key `key`).
+ * A profile narrowed by session policies keeps a role to apply them to.
+ */
+export function awsSourceRole(
+  current: VaultAwsRole,
+  change: { sso?: string; key?: string; roleArn?: string; noRole?: boolean; region?: string }
+): VaultAwsRole {
+  if (!!change.sso === !!change.key) throw new VaultCliError("kv aws-source: give exactly one of --sso <profile> or --key <secret>");
+  const roleArn = change.noRole ? null : change.roleArn ?? current.roleArn ?? null;
+  if (!roleArn && current.policyArns.length > 0) {
+    throw new VaultCliError(
+      "kv aws-source: this profile is narrowed by session policies, which need a role to apply to; keep --role-arn"
+    );
+  }
+  return {
+    ...current,
+    sourceSecret: change.key ?? "",
+    ssoProfile: change.sso ?? null,
+    roleArn,
+    region: change.region ?? current.region ?? null,
+  };
+}
+
 export interface VaultSecretInfo {
   name: string;
   tier: "open" | "judged" | "ask" | "never";
@@ -52,7 +87,7 @@ export interface VaultSecretInfo {
   tags: string[];
   sources: string[];
   updatedAt: string;
-  aws?: { sourceSecret: string; roleArn?: string; policyArns: string[] } | null;
+  aws?: VaultAwsRole | null;
   label?: string | null;
   key?: string | null;
   project?: string | null;
@@ -838,6 +873,9 @@ export const USAGE = `kv: secrets from the Kanban Code vault
   kv request NAME[:scope] [NAME..] --reason "..."           ask once for the card's task (the secret's lease time)
   kv aws <profile> [--reason "..."]                         AWS credential_process JSON (short-lived STS credentials,
                                                             minted on Rogerio's Mac or phone when he approves)
+  kv aws-source <profile> --sso <aws-profile> | --key <secret> [--role-arn ARN | --no-role] [--region R] [--reason "..."]
+                                                            where a profile's credentials come from: an SSO profile of
+                                                            the Mac's ~/.aws/config, or a long-lived key (asks Rogerio)
   kv set KEY [--project P|.] [--env E] [--tier open|judged|ask|never] [--rules "..."] [--label "..."] [--tag t]
          [--reason "..."] [--lease 1h|--every-use-asks]     value from stdin; with --project the secret is the
                                                             project's own (. is this folder's), else shared.
@@ -1049,6 +1087,27 @@ export async function runKv(argv: string[], io: VaultIO = defaultIO()): Promise<
       const r = await client.decide("aws", { mode: "aws", names: [profile], command: invokingCommand(), reason, ...ctx });
       if (r.status !== "granted" || !r.credentials) throw deniedError(r);
       out(JSON.stringify(r.credentials) + "\n");
+      return 0;
+    }
+
+    case "aws-source": {
+      const reason = checkedReason(takeOption(args, "--reason"), io.env, false);
+      const sso = takeOption(args, "--sso");
+      const key = takeOption(args, "--key");
+      const roleArn = takeOption(args, "--role-arn");
+      const region = takeOption(args, "--region");
+      const noRole = takeFlag(args, "--no-role");
+      const profile = args[0];
+      if (!profile) throw new VaultCliError("kv aws-source <profile> --sso <aws-profile> | --key <secret> [--role-arn ARN | --no-role]");
+      const name = profile.startsWith("aws:") ? profile : `aws:${profile}`;
+      const { body: secrets } = await client.call<VaultSecretInfo[]>("GET", "secrets");
+      const current = secrets.find((s) => s.name === name)?.aws;
+      if (!current) throw new VaultCliError(`kv aws-source: ${name} is not an AWS profile in the vault`);
+      const aws = awsSourceRole(current, { sso, key, roleArn, noRole, region });
+      const { body } = await client.call<VaultResponse>("PATCH", `secrets/${encodeURIComponent(name)}`, { aws, reason });
+      const r = body.status === "pending" ? await waitPending(client, body) : body;
+      if (r.status !== "granted") throw deniedError(r);
+      io.stderr(`kv: ${r.message}\n`);
       return 0;
     }
 

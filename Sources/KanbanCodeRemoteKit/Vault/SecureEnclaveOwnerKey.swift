@@ -83,10 +83,11 @@ public struct SecureEnclaveOwnerKey: Sendable {
     /// Answers a request's challenge on this device: the biometry prompt,
     /// then the unlocking, off the main thread.
     public func answer(_ challenge: VaultUnsealChallenge, reason: String,
-                       mint: @escaping VaultUnsealer.Mint = VaultUnsealer.liveMint) async throws -> VaultUnsealed {
+                       mint: @escaping VaultUnsealer.Mint = VaultUnsealer.liveMint,
+                       sso: @escaping AwsSso.Source = AwsSso.unavailable) async throws -> VaultUnsealed {
         let key = try unlocked(reason: reason)
         return try await Task.detached(priority: .userInitiated) {
-            try await VaultUnsealer.answer(challenge, key: key, mint: mint)
+            try await VaultUnsealer.answer(challenge, key: key, mint: mint, sso: sso)
         }.value
     }
 }

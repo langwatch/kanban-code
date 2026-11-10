@@ -217,6 +217,34 @@ Feature: Vault projects, environments and card identity
     And it asks for the longest session, falling back to shorter ones the role allows
     And the master serves later allowed requests from them until 15 minutes before they expire
 
+  Scenario: AWS credentials are minted from the Mac's SSO sign-in
+    Given an AWS profile whose source is an SSO profile of the Mac's ~/.aws/config
+    When a request for the profile is approved on the Mac
+    Then the Mac runs "aws configure export-credentials" for that SSO profile
+    And with a role set, it assumes the role with those credentials and the profile's session policies
+    And only temporary credentials go back to the master
+
+  Scenario: A read-only profile never hands out the SSO role itself
+    Given an SSO-sourced profile narrowed by a session policy but with no role to apply it to
+    When a request for the profile is approved on the Mac
+    Then nothing is minted and the Mac says why
+
+  Scenario: An expired SSO sign-in says how to sign in again
+    Given the Mac's SSO sign-in has expired or never happened
+    When a request for an SSO-sourced profile is approved on the Mac
+    Then the approval shows "AWS SSO session expired: run aws sso login --sso-session <session> on the Mac, then approve again"
+    And the request stays open, so approving again after the sign-in releases it
+    And the Mac never starts the browser sign-in itself
+
+  Scenario: The phone cannot mint from SSO
+    When a request for an SSO-sourced profile is approved on the phone
+    Then the phone says to approve it on the Mac
+
+  Scenario: A deleted long-lived key says so
+    Given an AWS profile whose long-lived key STS no longer knows
+    When a device approves a request for the profile
+    Then the device says the key no longer works instead of the raw STS answer
+
   Scenario: The audit log is a hash chain
     When the vault writes an audit line
     Then the line carries the hash of the line before it

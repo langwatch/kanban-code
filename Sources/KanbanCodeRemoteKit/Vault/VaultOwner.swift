@@ -134,22 +134,47 @@ public struct VaultUnsealChallenge: Codable, Sendable, Equatable, Hashable {
         }
     }
 
+    /// Short-lived AWS credentials the Mac mints from its own SSO sign-in
+    /// (`role.ssoProfile`), narrowed by `role.roleArn` when one is set.
+    public struct AwsSsoMint: Codable, Sendable, Equatable, Hashable {
+        public var profile: String
+        public var role: VaultAwsRole
+        public var sessionName: String
+
+        public init(profile: String, role: VaultAwsRole, sessionName: String) {
+            self.profile = profile
+            self.role = role
+            self.sessionName = sessionName
+        }
+    }
+
     /// Secrets whose values the master needs back.
     public var secrets: [Item]
     public var aws: [AwsMint]
+    /// Optional on the wire: a device built before SSO profiles reads
+    /// the rest of the challenge.
+    public var awsSso: [AwsSsoMint]?
     /// Secrets the device encrypts again to `resealTo` (a device joins or
     /// leaves); only the new ciphertext goes back.
     public var reseal: [Item]
     public var resealTo: [VaultOwnerRecipient]
 
-    public init(secrets: [Item] = [], aws: [AwsMint] = [], reseal: [Item] = [], resealTo: [VaultOwnerRecipient] = []) {
+    public init(secrets: [Item] = [], aws: [AwsMint] = [], awsSso: [AwsSsoMint]? = nil, reseal: [Item] = [],
+                resealTo: [VaultOwnerRecipient] = []) {
         self.secrets = secrets
         self.aws = aws
+        self.awsSso = awsSso
         self.reseal = reseal
         self.resealTo = resealTo
     }
 
-    public var isEmpty: Bool { secrets.isEmpty && aws.isEmpty && reseal.isEmpty }
+    public var isEmpty: Bool { secrets.isEmpty && aws.isEmpty && (awsSso ?? []).isEmpty && reseal.isEmpty }
+
+    /// What the device's audit record names for the AWS profiles it mints.
+    public var awsRoles: [String] {
+        aws.map { $0.role.roleArn ?? "session of \($0.key.name)" }
+            + (awsSso ?? []).map { [$0.role.roleArn, $0.role.sourceLabel].compactMap { $0 }.joined(separator: " via ") }
+    }
 
     /// What approving does on the device, for the detail sheet. Built from
     /// the challenge itself, not from what the master says about it.
@@ -160,6 +185,11 @@ public struct VaultUnsealChallenge: Codable, Sendable, Equatable, Hashable {
         }
         for mint in aws {
             rows.append(("Mints here", "AWS credentials for \(mint.role.roleArn ?? "a session of \(mint.key.name)")"
+                + (mint.role.policyArns.isEmpty ? "" : "\nlimited by \(mint.role.policyArns.joined(separator: ", "))")))
+        }
+        for mint in awsSso ?? [] {
+            rows.append(("Mints here", "AWS credentials from the Mac's \(mint.role.sourceLabel)"
+                + (mint.role.roleArn.map { "\nas \($0)" } ?? "")
                 + (mint.role.policyArns.isEmpty ? "" : "\nlimited by \(mint.role.policyArns.joined(separator: ", "))")))
         }
         if !reseal.isEmpty {
@@ -205,7 +235,8 @@ public enum VaultUnsealer {
         return value
     }
 
-    public static func answer(_ challenge: VaultUnsealChallenge, key: any AgeP256Key, mint: Mint = liveMint) async throws -> VaultUnsealed {
+    public static func answer(_ challenge: VaultUnsealChallenge, key: any AgeP256Key, mint: Mint = liveMint,
+                              sso: AwsSso.Source = AwsSso.unavailable) async throws -> VaultUnsealed {
         var out = VaultUnsealed(device: VaultOwnerRecipient.fingerprint(of: key.recipient.text))
         for item in challenge.secrets {
             out.values[item.name] = try open(item, key: key)
@@ -218,9 +249,29 @@ public enum VaultUnsealer {
         }
         for aws in challenge.aws {
             let longLived = try JSONDecoder().decode(AwsAccessKey.self, from: Data(try open(aws.key, key: key).utf8))
-            out.credentials[aws.profile] = try await mint(longLived, aws.role, aws.sessionName)
+            do {
+                out.credentials[aws.profile] = try await mint(longLived, aws.role, aws.sessionName)
+            } catch let error as AwsSts.StsError where error.isUnknownKey {
+                throw AwsSts.StsError.keyGone(aws.key.name)
+            }
+        }
+        for aws in challenge.awsSso ?? [] {
+            out.credentials[aws.profile] = try await ssoCredentials(aws, mint: mint, sso: sso)
         }
         return out
+    }
+
+    /// The credentials of an SSO profile: the sign-in's own, or a role
+    /// assumed with them. Session policies need a role to apply to, so a
+    /// narrowed profile without one gets nothing.
+    static func ssoCredentials(_ aws: VaultUnsealChallenge.AwsSsoMint, mint: Mint, sso: AwsSso.Source) async throws -> AwsProcessCredentials {
+        guard let profile = aws.role.ssoProfile, aws.role.isSso else { throw AwsSso.SsoError.failed("\(aws.profile) names no SSO profile") }
+        guard aws.role.hasRole || aws.role.policyArns.isEmpty else { throw AwsSso.SsoError.cannotNarrow(aws.profile) }
+        let signedIn = try await sso(profile)
+        guard aws.role.hasRole else { return signedIn }
+        let key = AwsAccessKey(accessKeyId: signedIn.AccessKeyId, secretAccessKey: signedIn.SecretAccessKey,
+                               sessionToken: signedIn.SessionToken)
+        return try await mint(key, aws.role, aws.sessionName)
     }
 }
 
@@ -347,7 +398,7 @@ public struct VaultDeviceApprovals: Sendable {
         if let master = request.machineId { fields["master"] = master }
         if let challenge = request.unseal, error == nil, !AttentionCopy.isDenial(resolution) {
             if !challenge.secrets.isEmpty { fields["unlocked"] = challenge.secrets.map(\.name) }
-            if !challenge.aws.isEmpty { fields["awsRole"] = challenge.aws.map { $0.role.roleArn ?? "session of \($0.key.name)" }.joined(separator: ", ") }
+            if !challenge.awsRoles.isEmpty { fields["awsRole"] = challenge.awsRoles.joined(separator: ", ") }
             if !challenge.reseal.isEmpty { fields["resealedTo"] = challenge.resealTo.map(\.fingerprint) }
         }
         if let error { fields["error"] = error }

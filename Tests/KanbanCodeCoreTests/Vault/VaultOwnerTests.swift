@@ -72,11 +72,12 @@ private struct World {
 
     /// What the Mac does when the human approves: unlock, hand over, answer.
     func approve(_ response: VaultResponse, _ option: String = "Approve once", key: (any AgeP256Key)? = nil,
-                 mint: @escaping VaultUnsealer.Mint = { _, _, _ in throw VaultError.invalid("no STS in this test") }) async throws -> VaultResponse {
+                 mint: @escaping VaultUnsealer.Mint = { _, _, _ in throw VaultError.invalid("no STS in this test") },
+                 sso: @escaping AwsSso.Source = AwsSso.unavailable) async throws -> VaultResponse {
         let id = try #require(response.id)
         let request = try #require(approvals.lock.withLock { approvals.raised.first { $0.id == id } })
         if let challenge = request.unseal {
-            let unsealed = try await VaultUnsealer.answer(challenge, key: key ?? mac, mint: mint)
+            let unsealed = try await VaultUnsealer.answer(challenge, key: key ?? mac, mint: mint, sso: sso)
             await broker.deliver(id: id, unsealed: unsealed)
         }
         approvals.answer(id, option)
@@ -504,6 +505,137 @@ struct VaultDeviceAwsTests {
     private actor Tried {
         var seconds: [Int] = []
         func add(_ s: Int) { seconds.append(s) }
+    }
+}
+
+@Suite("AWS credentials minted from the Mac's SSO sign-in")
+struct VaultSsoAwsTests {
+    static let role = "arn:aws:iam::1:role/OrganizationAccountAccessRole"
+    static let readOnly = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+
+    private func world(_ roles: [String: VaultAwsRole], tier: VaultTier = .judged) async throws -> World {
+        let w = try await makeWorld(activate: false, jev: AllowJev())
+        for (name, role) in roles {
+            try await w.store.upsert(VaultSecret(name: name, value: "", tier: tier, aws: role))
+        }
+        let keys = [w.mac.owner("Mac"), VaultOwnerRecipient(name: "Recovery key", kind: .recovery, publicKey: w.recovery.recipient.text)]
+        #expect(await w.broker.setOwnerKeys(keys, caller: settings, trusted: true).status == .granted)
+        return w
+    }
+
+    private static func credentials(_ id: String, token: String = "sso-token") -> AwsProcessCredentials {
+        AwsProcessCredentials(AccessKeyId: id, SecretAccessKey: "x", SessionToken: token,
+                              Expiration: ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600)))
+    }
+
+    @Test func aProfileMapsToItsSsoProfileAndTheMacHandsItsCredentials() async throws {
+        let w = try await world(["aws:lw-dev": .sso(profile: "lw-dev-sso")])
+        let asked = await w.broker.release(VaultReleaseRequest(mode: "aws", names: ["aws:lw-dev"], command: "kubectl get pods"), caller: card)
+        // Jev allows it, but only the Mac holds the sign-in: a human approves.
+        #expect(asked.status == .pending)
+        let request = try #require(w.approvals.last)
+        #expect(request.vault?.whys == [VaultBroker.ssoWhy])
+        #expect(request.needsDeviceKey)
+        #expect(request.unseal?.awsSso?.first?.role.ssoProfile == "lw-dev-sso")
+        #expect(request.unseal?.aws.isEmpty == true)
+        let asked_ = Asked()
+        let done = try await w.approve(asked, mint: { _, _, _ in throw VaultError.invalid("no role to assume") },
+                                       sso: { profile in await asked_.add(profile); return Self.credentials("ASIASSO") })
+        #expect(done.status == .granted && done.credentials?.AccessKeyId == "ASIASSO")
+        #expect(await asked_.profiles == ["lw-dev-sso"])
+    }
+
+    @Test func aReadOnlyProfileAssumesItsRoleWithTheSessionPolicySignedBySso() async throws {
+        let w = try await world(["aws:lw-prod:read": .sso(profile: "lw-prod-sso", roleArn: Self.role, policyArns: [Self.readOnly])], tier: .ask)
+        let asked = await w.broker.release(VaultReleaseRequest(mode: "aws", names: ["aws:lw-prod:read"]), caller: card)
+        let done = try await w.approve(asked, mint: { key, role, _ in
+            #expect(key.accessKeyId == "ASIASSO" && key.sessionToken == "sso-token")
+            #expect(role.roleArn == Self.role && role.policyArns == [Self.readOnly])
+            return Self.credentials("ASIAREAD", token: "narrowed")
+        }, sso: { _ in Self.credentials("ASIASSO") })
+        #expect(done.credentials?.AccessKeyId == "ASIAREAD")
+    }
+
+    @Test func aNarrowedProfileWithoutARoleNeverHandsTheSsoRoleItself() async throws {
+        let mint = VaultUnsealChallenge.AwsSsoMint(profile: "aws:lw-prod:read",
+                                                   role: .sso(profile: "lw-prod-sso", policyArns: [Self.readOnly]), sessionName: "s")
+        await #expect(throws: AwsSso.SsoError.cannotNarrow("aws:lw-prod:read")) {
+            try await VaultUnsealer.answer(VaultUnsealChallenge(awsSso: [mint]), key: SoftwareOwnerKey(),
+                                           sso: { _ in Self.credentials("ADMIN") })
+        }
+    }
+
+    @Test func thePhoneCannotMintFromSso() async throws {
+        let mint = VaultUnsealChallenge.AwsSsoMint(profile: "aws:lw-dev", role: .sso(profile: "lw-dev-sso"), sessionName: "s")
+        await #expect(throws: AwsSso.SsoError.onlyOnMac) {
+            try await VaultUnsealer.answer(VaultUnsealChallenge(awsSso: [mint]), key: SoftwareOwnerKey())
+        }
+    }
+
+    @Test func anExpiredSignInSaysHowToSignInAgain() throws {
+        let config = """
+        [profile lw-prod-sso]
+        sso_session = langwatch-sso
+        sso_account_id = 1
+        [sso-session langwatch-sso]
+        sso_start_url = https://example.awsapps.com/start
+        """
+        let session = AwsSso.ssoSession(ofProfile: "lw-prod-sso", config: config)
+        #expect(session == "langwatch-sso")
+        #expect(AwsSso.ssoSession(ofProfile: "other", config: config) == nil)
+        for stderr in ["Error loading SSO Token: Token for langwatch-sso does not exist",
+                       "Error when retrieving token from sso: Token has expired and refresh failed",
+                       "The SSO session associated with this profile has expired or is otherwise invalid."] {
+            #expect(throws: AwsSso.SsoError.expired(profile: "lw-prod-sso", session: "langwatch-sso")) {
+                try AwsSso.credentials(exitCode: 255, stdout: "", stderr: stderr, profile: "lw-prod-sso", session: session)
+            }
+        }
+        #expect(AwsSso.SsoError.expired(profile: "lw-prod-sso", session: "langwatch-sso").description
+            == "AWS SSO session expired: run aws sso login --sso-session langwatch-sso on the Mac, then approve again")
+        #expect(throws: AwsSso.SsoError.profileMissing("nope")) {
+            try AwsSso.credentials(exitCode: 253, stdout: "", stderr: "Unable to retrieve credentials: The config profile (nope) could not be found",
+                                   profile: "nope", session: nil)
+        }
+    }
+
+    @Test func exportCredentialsOutputIsRead() throws {
+        let out = #"{"Version": 1, "AccessKeyId": "ASIA1", "SecretAccessKey": "s", "SessionToken": "t", "Expiration": "2026-11-11T05:01:35+00:00"}"#
+        let c = try AwsSso.credentials(exitCode: 0, stdout: out, stderr: "", profile: "p", session: nil)
+        #expect(c.AccessKeyId == "ASIA1" && c.expiresAt != nil)
+        #expect(throws: (any Error).self) { try AwsSso.credentials(exitCode: 0, stdout: "{}", stderr: "", profile: "p", session: nil) }
+        #expect(AwsSso.exportArguments(profile: "p") == ["configure", "export-credentials", "--profile", "p", "--format", "process"])
+    }
+
+    @Test func aRoleStoredBeforeSsoStillDecodes() throws {
+        let old = #"{"sourceSecret":"AWS_KEY","roleArn":"arn:x","policyArns":[],"durationSeconds":3600}"#
+        let role = try JSONDecoder().decode(VaultAwsRole.self, from: Data(old.utf8))
+        #expect(!role.isSso && role.sourceSecret == "AWS_KEY")
+        let sso = try JSONDecoder().decode(VaultAwsRole.self, from: JSONEncoder().encode(VaultAwsRole.sso(profile: "p")))
+        #expect(sso.isSso && sso.sourceSecret.isEmpty)
+    }
+
+    @Test func aDeletedLongLivedKeySaysSo() async throws {
+        let w = try await makeWorld(activate: false, jev: AllowJev())
+        try await w.store.upsert(VaultSecret(name: "AWS_ROOT", value: VaultDeviceAwsTests.longLived, tier: .never))
+        try await w.store.upsert(VaultSecret(name: "aws:lw-root-tf", value: "", tier: .ask, aws: VaultAwsRole(sourceSecret: "AWS_ROOT", roleArn: nil)))
+        let keys = [w.mac.owner("Mac"), VaultOwnerRecipient(name: "Recovery key", kind: .recovery, publicKey: w.recovery.recipient.text)]
+        #expect(await w.broker.setOwnerKeys(keys, caller: settings, trusted: true).status == .granted)
+        let asked = await w.broker.release(VaultReleaseRequest(mode: "aws", names: ["aws:lw-root-tf"]), caller: card)
+        let challenge = try #require(w.approvals.last?.unseal)
+        do {
+            _ = try await VaultUnsealer.answer(challenge, key: w.mac, mint: { _, _, _ in
+                throw AwsSts.StsError.http(403, "The security token included in the request is invalid.")
+            })
+            Issue.record("minting with a deleted key must fail")
+        } catch let error as AwsSts.StsError {
+            #expect(error.description.contains("AWS_ROOT no longer works"))
+        }
+        _ = asked
+    }
+
+    private actor Asked {
+        var profiles: [String] = []
+        func add(_ p: String) { profiles.append(p) }
     }
 }
 

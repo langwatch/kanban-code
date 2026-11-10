@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   EXIT_DENIED,
+  awsSourceRole,
   VaultClient,
   checkedReason,
   describeInvoker,
@@ -830,4 +831,27 @@ test("kv run also gives a project secret under its bare key, unless two released
   });
   assert.deepEqual(withShortNames({ "a/dev/KEY": "1", "b/dev/KEY": "2" }), { "a/dev/KEY": "1", "b/dev/KEY": "2" });
   assert.deepEqual(withShortNames({ "a/dev/KEY": "1", KEY: "0" }), { "a/dev/KEY": "1", KEY: "0" });
+});
+
+test("kv aws-source moves a profile onto an SSO profile and keeps its role and session policies", () => {
+  const read = {
+    sourceSecret: "AWS_KEY_ROOT",
+    roleArn: "arn:aws:iam::1:role/OrganizationAccountAccessRole",
+    policyArns: ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
+    durationSeconds: 3600,
+  };
+  const moved = awsSourceRole(read, { sso: "prod-sso", region: "eu-central-1" });
+  assert.equal(moved.sourceSecret, "");
+  assert.equal(moved.ssoProfile, "prod-sso");
+  assert.equal(moved.roleArn, read.roleArn);
+  assert.deepEqual(moved.policyArns, read.policyArns);
+  assert.equal(moved.region, "eu-central-1");
+
+  // A read-only profile never loses the role its session policy applies to.
+  assert.throws(() => awsSourceRole(read, { sso: "prod-sso", noRole: true }), /session policies/);
+
+  const admin = { sourceSecret: "AWS_KEY_ROOT", roleArn: "arn:aws:iam::2:role/R", policyArns: [] };
+  assert.equal(awsSourceRole(admin, { sso: "dev-sso", noRole: true }).roleArn, null);
+  assert.throws(() => awsSourceRole(admin, {}), /exactly one/);
+  assert.throws(() => awsSourceRole(admin, { sso: "a", key: "b" }), /exactly one/);
 });

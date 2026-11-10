@@ -45,7 +45,7 @@ enum MacVaultDevice {
         do {
             let passed = try await AttentionAnswerGate.pass(request, option: option, unlock: { challenge in
                 guard key.exists else { throw NoKey() }
-                return try await key.answer(challenge, reason: "\(option): \(request.title)")
+                return try await key.answer(challenge, reason: "\(option): \(request.title)", sso: ssoCredentials)
             }, confirm: {
                 await AppDelegate.confirmWithBiometry(reason: "\(option): \(request.title)")
             })
@@ -57,7 +57,10 @@ enum MacVaultDevice {
             let text = describe(error)
             approvals.record(request, resolution: option, error: text)
             KanbanCodeLog.warn("vault", "Unlocking for \(request.id) on this Mac failed: \(text)")
-            return isCancel(error) ? .cancelled : .failed("Not unlocked: \(text)")
+            if isCancel(error) { return .cancelled }
+            // A minting failure already says what to do; "Not unlocked"
+            // would point at the device key, which worked.
+            return .failed(error is AwsSso.SsoError || error is AwsSts.StsError ? text : "Not unlocked: \(text)")
         }
         if let problem = await AppServices.resolveAttention?(request.id, option, unsealed, noteFollows) {
             if request.kind == .vaultApproval { approvals.record(request, resolution: option, error: problem) }
@@ -65,6 +68,20 @@ enum MacVaultDevice {
         }
         if request.kind == .vaultApproval { approvals.record(request, resolution: option) }
         return .sent
+    }
+
+    /// The credentials of a profile of this Mac's `~/.aws/config`, from
+    /// its IAM Identity Center sign-in. The sign-in itself (a browser
+    /// login) is never started from here.
+    static let ssoCredentials: AwsSso.Source = { profile in
+        guard let aws = ShellCommand.findExecutable("aws") else { throw AwsSso.SsoError.noCli }
+        let environment = ShellCommand.loginEnvironment.filter { !AwsSso.ignoredEnvironment.contains($0.key) }
+        let result = try await ShellCommand.run(aws, arguments: AwsSso.exportArguments(profile: profile),
+                                                environment: environment, timeout: 30)
+        let configPath = environment["AWS_CONFIG_FILE"] ?? NSHomeDirectory() + "/.aws/config"
+        let config = (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+        return try AwsSso.credentials(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
+                                      profile: profile, session: AwsSso.ssoSession(ofProfile: profile, config: config))
     }
 
     static func isCancel(_ error: Error) -> Bool {
@@ -79,6 +96,7 @@ enum MacVaultDevice {
         case let e as Age.AgeError: e.description
         case let e as SecureEnclaveOwnerKey.KeyError: e.description
         case let e as AwsSts.StsError: e.description
+        case let e as AwsSso.SsoError: e.description
         case let e as VaultError: e.description
         default: error.localizedDescription
         }

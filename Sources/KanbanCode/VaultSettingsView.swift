@@ -358,7 +358,7 @@ private struct VaultSecretEditor: View {
                         .frame(minHeight: 70)
                 }
                 if let aws = secret.aws {
-                    LabeledContent("AWS role", value: aws.roleArn ?? "session token of \(aws.sourceSecret)")
+                    LabeledContent("AWS role", value: aws.roleArn ?? (aws.isSso ? "the \(aws.sourceLabel) itself" : "session token of \(aws.sourceSecret)"))
                     if !aws.policyArns.isEmpty {
                         LabeledContent("Session policy", value: aws.policyArns.joined(separator: ", "))
                     }
