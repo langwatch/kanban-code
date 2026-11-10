@@ -71,17 +71,51 @@ enum MacVaultDevice {
     }
 
     /// The credentials of a profile of this Mac's `~/.aws/config`, from
-    /// its IAM Identity Center sign-in. The sign-in itself (a browser
-    /// login) is never started from here.
+    /// its IAM Identity Center sign-in. A missing or expired sign-in opens
+    /// the browser login (`aws sso login`) and tries once more after it.
     static let ssoCredentials: AwsSso.Source = { profile in
         guard let aws = ShellCommand.findExecutable("aws") else { throw AwsSso.SsoError.noCli }
         let environment = ShellCommand.loginEnvironment.filter { !AwsSso.ignoredEnvironment.contains($0.key) }
+        do {
+            return try await exportSsoCredentials(aws: aws, profile: profile, environment: environment)
+        } catch AwsSso.SsoError.expired(let expiredProfile, let session) {
+            try await SsoSignIn.shared.signIn(aws: aws, profile: expiredProfile, session: session, environment: environment)
+            return try await exportSsoCredentials(aws: aws, profile: profile, environment: environment)
+        }
+    }
+
+    private static func exportSsoCredentials(aws: String, profile: String,
+                                             environment: [String: String]) async throws -> AwsProcessCredentials {
         let result = try await ShellCommand.run(aws, arguments: AwsSso.exportArguments(profile: profile),
                                                 environment: environment, timeout: 30)
         let configPath = environment["AWS_CONFIG_FILE"] ?? NSHomeDirectory() + "/.aws/config"
         let config = (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
         return try AwsSso.credentials(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
                                       profile: profile, session: AwsSso.ssoSession(ofProfile: profile, config: config))
+    }
+
+    /// One browser sign-in at a time: requests that find the session
+    /// expired together wait on the same login.
+    private actor SsoSignIn {
+        static let shared = SsoSignIn()
+        private var running: [String: Task<Void, Error>] = [:]
+
+        func signIn(aws: String, profile: String, session: String?, environment: [String: String]) async throws {
+            let key = session ?? "profile:\(profile)"
+            if let task = running[key] { return try await task.value }
+            let arguments = AwsSso.loginArguments(profile: profile, session: session)
+            let task = Task<Void, Error> {
+                KanbanCodeLog.info("vault", "AWS SSO sign-in expired, opening the browser login (aws \(arguments.joined(separator: " ")))")
+                let result = try await ShellCommand.run(aws, arguments: arguments, environment: environment,
+                                                        timeout: AwsSso.loginTimeout)
+                guard result.exitCode == 0 else {
+                    throw AwsSso.SsoError.expired(profile: profile, session: session)
+                }
+            }
+            running[key] = task
+            defer { running[key] = nil }
+            try await task.value
+        }
     }
 
     static func isCancel(_ error: Error) -> Bool {

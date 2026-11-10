@@ -27,7 +27,7 @@ public enum AwsSso {
             switch self {
             case .expired(let profile, let session):
                 let login = session.map { "aws sso login --sso-session \($0)" } ?? "aws sso login --profile \(profile)"
-                return "AWS SSO session expired: run \(login) on the Mac, then approve again"
+                return "AWS SSO sign-in on the Mac expired and the browser login did not finish: run \(login) on the Mac, then approve again"
             case .profileMissing(let profile):
                 return "The AWS profile \(profile) is not set up on the Mac (~/.aws/config)"
             case .noCli:
@@ -46,6 +46,15 @@ public enum AwsSso {
     public static func exportArguments(profile: String) -> [String] {
         ["configure", "export-credentials", "--profile", profile, "--format", "process"]
     }
+
+    /// The CLI arguments of the browser sign-in that renews a profile's
+    /// session.
+    public static func loginArguments(profile: String, session: String?) -> [String] {
+        session.map { ["sso", "login", "--sso-session", $0] } ?? ["sso", "login", "--profile", profile]
+    }
+
+    /// How long the browser sign-in may take before the request fails.
+    public static let loginTimeout: TimeInterval = 300
 
     /// Environment variables that would make the CLI ignore `--profile`'s
     /// sign-in or pick up other credentials: they are left out of its run.

@@ -591,7 +591,10 @@ struct VaultSsoAwsTests {
             }
         }
         #expect(AwsSso.SsoError.expired(profile: "lw-prod-sso", session: "langwatch-sso").description
-            == "AWS SSO session expired: run aws sso login --sso-session langwatch-sso on the Mac, then approve again")
+            == "AWS SSO sign-in on the Mac expired and the browser login did not finish: run aws sso login --sso-session langwatch-sso on the Mac, then approve again")
+        #expect(AwsSso.loginArguments(profile: "lw-prod-sso", session: "langwatch-sso")
+            == ["sso", "login", "--sso-session", "langwatch-sso"])
+        #expect(AwsSso.loginArguments(profile: "legacy-sso", session: nil) == ["sso", "login", "--profile", "legacy-sso"])
         #expect(throws: AwsSso.SsoError.profileMissing("nope")) {
             try AwsSso.credentials(exitCode: 253, stdout: "", stderr: "Unable to retrieve credentials: The config profile (nope) could not be found",
                                    profile: "nope", session: nil)

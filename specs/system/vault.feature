@@ -229,12 +229,18 @@ Feature: Vault projects, environments and card identity
     When a request for the profile is approved on the Mac
     Then nothing is minted and the Mac says why
 
-  Scenario: An expired SSO sign-in says how to sign in again
+  Scenario: An expired SSO sign-in opens the browser login on the Mac
     Given the Mac's SSO sign-in has expired or never happened
     When a request for an SSO-sourced profile is approved on the Mac
-    Then the approval shows "AWS SSO session expired: run aws sso login --sso-session <session> on the Mac, then approve again"
+    Then the Mac runs "aws sso login --sso-session <session>", which opens the sign-in in the browser
+    And once Rogerio signs in, the credentials are minted and the request is released
+    And requests that find the sign-in expired at the same time share one browser login
+
+  Scenario: A browser login that does not finish says how to sign in again
+    Given the Mac opened the SSO browser login
+    When the sign-in fails or takes more than 5 minutes
+    Then the approval shows "AWS SSO sign-in on the Mac expired and the browser login did not finish: run aws sso login --sso-session <session> on the Mac, then approve again"
     And the request stays open, so approving again after the sign-in releases it
-    And the Mac never starts the browser sign-in itself
 
   Scenario: The phone cannot mint from SSO
     When a request for an SSO-sourced profile is approved on the phone
