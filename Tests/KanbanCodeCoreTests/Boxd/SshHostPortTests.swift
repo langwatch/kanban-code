@@ -119,13 +119,30 @@ struct SshHostPortTests {
         #expect(old.sshMachines.isEmpty)
 
         let settings = BoxdSettings(sshMachines: [SshMachine(name: "box", target: "root@h", repoRoot: "~/code")])
-        let decoded = try JSONDecoder().decode(BoxdSettings.self, from: JSONEncoder().encode(settings))
+        let encoded = try JSONEncoder().encode(settings)
+        #expect(!(String(data: encoded, encoding: .utf8) ?? "").contains(#""id""#))
+        let decoded = try JSONDecoder().decode(BoxdSettings.self, from: encoded)
         #expect(decoded.sshMachines == settings.sshMachines)
+        #expect(decoded.sshMachines[0].id != settings.sshMachines[0].id)
+        #expect(Set([decoded.sshMachines[0], settings.sshMachines[0]]).count == 1)
         #expect(decoded.sshMachine(named: "box")?.target == "root@h")
         #expect(decoded.sshMachine(named: "other") == nil)
 
         let partial = try JSONDecoder().decode(SshMachine.self, from: Data(#"{"name":"box","target":"root@h"}"#.utf8))
         #expect(partial.repoRoot == SshMachine.defaultRepoRoot)
+        #expect(!partial.id.uuidString.isEmpty)
+
+        // Two separately created machines with the same fields compare equal despite distinct runtime ids
+        let otherCopy = SshMachine(name: "box", target: "root@h")
+        #expect(partial == otherCopy)
+        #expect(partial.id != otherCopy.id)
+
+        // Changing name preserves the stable id
+        var mutableMachine = partial
+        let originalId = mutableMachine.id
+        mutableMachine.name = "renamed-box"
+        #expect(mutableMachine.id == originalId)
+        #expect(mutableMachine.name == "renamed-box")
     }
 
     // MARK: - Commands
