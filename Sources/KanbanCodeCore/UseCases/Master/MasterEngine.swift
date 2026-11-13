@@ -366,10 +366,12 @@ public final class MasterEngine {
                 // Once tmux exists, prompt delivery is best-effort: a readiness
                 // timeout must not turn a live Codex session into a failed launch.
                 var promptDeliveryError: String?
+                var assistantReady = false
                 if !prompt.isEmpty || !images.isEmpty {
                     do {
                         let imageSender = ImageSender(tmux: tmux)
                         try await imageSender.waitForReady(sessionName: tmuxName, assistant: assistant)
+                        assistantReady = true
 
                         if let preparation = boxdPreparation, !images.isEmpty {
                             // The clipboard does not reach the machine: the
@@ -486,8 +488,21 @@ public final class MasterEngine {
                 }
 
                 store.dispatch(.launchCompleted(cardId: cardId, tmuxName: tmuxName, sessionLink: sessionLink, worktreeLink: worktreeLink, isRemote: isRemote))
-                if let promptDeliveryError, assistant.supportsImageUpload && !images.isEmpty {
-                    store.dispatch(.setError("Initial prompt/image delivery failed: \(promptDeliveryError)"))
+                if let promptDeliveryError {
+                    if !assistantReady {
+                        // Nothing reached the assistant: the prompt waits on
+                        // the card, where the board, the phone and
+                        // `kanban remote show` all list it.
+                        let imagePaths = images.compactMap(\.tempPath)
+                        store.dispatch(.addQueuedPrompt(
+                            cardId: cardId,
+                            prompt: QueuedPrompt(body: prompt, sendAutomatically: false,
+                                                 imagePaths: imagePaths.isEmpty ? nil : imagePaths),
+                            placement: .front))
+                    }
+                    store.dispatch(.setError(Self.promptDeliveryFailure(
+                        assistant: assistant, cardName: store.state.links[cardId]?.name,
+                        error: promptDeliveryError, queued: !assistantReady)))
                 }
                 completion?(promptDeliveryError)
             } catch {
@@ -496,6 +511,16 @@ public final class MasterEngine {
                 completion?(error.localizedDescription)
             }
         }
+    }
+
+    /// The error shown when the first prompt of a launch did not reach the
+    /// assistant, so a card that stopped before its agent started says why.
+    nonisolated static func promptDeliveryFailure(assistant: CodingAssistant, cardName: String?, error: String, queued: Bool) -> String {
+        let card = cardName.map { " in \"\($0)\"" } ?? ""
+        let next = queued
+            ? "The first prompt was not sent and waits in the card's queue. Check its terminal."
+            : "Check its terminal."
+        return "\(assistant.displayName)\(card) did not get its first prompt: \(error). \(next)"
     }
 
     /// The shell override, environment and preamble of a mutagen launch.

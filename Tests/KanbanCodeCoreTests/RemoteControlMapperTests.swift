@@ -244,6 +244,38 @@ struct RemoteControlMapperTests {
         }
     }
 
+    @Test("a card another master runs is live as its owner reports, not by this master's sessions")
+    func foreignCardLiveness() {
+        // The box serves a card the Mac runs on rush: the box has no
+        // rush-0be6d045 of its own, the Mac reports the session idle.
+        var link = Self.link(tmux: TmuxLink(sessionName: "rush-0be6d045"))
+        link.ownerMachine = "machine_mac"
+        var state = AppState()
+        state.localMachineId = "machine_box"
+        state.peerStatuses["peer_mac"] = PeerStatus(
+            peerId: "peer_mac", machine: MachineIdentity(id: "machine_mac", name: "Mac"), online: true)
+        state.links[link.id] = link
+        state.peerCards[link.id] = PeerCardState(isLive: true, isBusy: false)
+        state.rebuildCards()
+        let box = MachineIdentity(id: "machine_box", name: "box")
+        func wire() -> RemoteCard {
+            RemoteBoardMapper.card(state.cards[0], liveSessions: state.tmuxSessions, machine: box,
+                                   machineNames: state.peerMachineNames)
+        }
+        #expect(state.tmuxSessions.isEmpty)
+        #expect(wire().isLive)
+        #expect(wire().machineId == "machine_mac")
+
+        state.peerCards[link.id] = PeerCardState(isLive: false, isBusy: false)
+        state.rebuildCards()
+        #expect(!wire().isLive)
+
+        state.peerCards[link.id] = PeerCardState(isLive: true, isBusy: false)
+        state.peerStatuses["peer_mac"]?.online = false
+        state.rebuildCards()
+        #expect(!wire().isLive)
+    }
+
     @Test("remote control settings are off by default and round trip")
     func settings() throws {
         let decoded = try JSONDecoder().decode(Settings.self, from: Data("{}".utf8))

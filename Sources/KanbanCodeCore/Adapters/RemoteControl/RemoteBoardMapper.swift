@@ -61,7 +61,7 @@ public enum RemoteBoardMapper {
             worktreePath: link.worktreeLink?.path,
             assistant: link.effectiveAssistant.rawValue,
             runtime: runtime(of: link),
-            isLive: isLive(link, liveSessions: liveSessions),
+            isLive: card.owner.map { $0.online && ownerReportsLive(link) } ?? isLive(link, liveSessions: liveSessions),
             isBusy: card.activityState == .activelyWorking || link.isLaunching == true,
             sessionId: link.sessionLink?.sessionId,
             terminals: terminals(of: link),
@@ -131,6 +131,15 @@ public enum RemoteBoardMapper {
     public static func isLive(_ link: Link, liveSessions: Set<String>) -> Bool {
         guard let tmux = link.tmuxLink, tmux.isShellOnly != true, tmux.isPrimaryDead != true else { return false }
         return liveSessions.contains(tmux.sessionName)
+    }
+
+    /// Whether the session of a card another master runs is live. Its tmux
+    /// or rush session is on the owner, never among this master's, so the
+    /// owner's word decides: the board marks the primary dead when the owner
+    /// reports it stopped (`BoardStore.rebuildCards`).
+    public static func ownerReportsLive(_ link: Link) -> Bool {
+        guard let tmux = link.tmuxLink, tmux.isShellOnly != true else { return false }
+        return tmux.isPrimaryDead != true
     }
 
     /// The session prompts go to, when it is live.

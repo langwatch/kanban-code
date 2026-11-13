@@ -43,6 +43,8 @@ describe("runtime descriptor", () => {
     assert.equal(x.selfCompact, false);
     const args = x.buildArgs({ sessionId: "sid", slug: "agent", resume: false, skipPermissions: true, model: "gpt-5.5" });
     assert.deepEqual(args, [
+      "-c",
+      "check_for_update_on_startup=false",
       "--no-alt-screen",
       "--dangerously-bypass-approvals-and-sandbox",
       "--dangerously-bypass-hook-trust",
@@ -57,6 +59,8 @@ describe("runtime descriptor", () => {
     const x = runtimeSpec("codex");
     const args = x.buildArgs({ sessionId: "sid", slug: "agent", resume: true, skipPermissions: true });
     assert.deepEqual(args, [
+      "-c",
+      "check_for_update_on_startup=false",
       "--no-alt-screen",
       "--dangerously-bypass-approvals-and-sandbox",
       "--dangerously-bypass-hook-trust",
@@ -502,7 +506,7 @@ describe("codex agent launch (real tmux)", { skip: !hasTmux() }, () => {
     const launch = { cwd: workspace, bin: "true", nameTimeoutMs: 0 };
     const result = ensureAgentSession(identity, launch);
     assert.equal(result.action, "launched");
-    assert.match(result.command!, /true --no-alt-screen --dangerously-bypass-approvals-and-sandbox/);
+    assert.match(result.command!, /true -c check_for_update_on_startup=false --no-alt-screen --dangerously-bypass-approvals-and-sandbox/);
     assert.equal(result.named, false);
     const card = readLinks().find((l) => l.name === slug);
     assert.equal(card?.assistant, "codex");

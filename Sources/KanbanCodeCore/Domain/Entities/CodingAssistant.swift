@@ -97,10 +97,14 @@ public enum CodingAssistant: String, Codable, Sendable, CaseIterable {
     }
 
     /// Extra flags required for interactive startup in a tmux pane.
+    ///
+    /// Codex asks whether to update before it draws its composer when a newer
+    /// release is out, and an unattended launch would wait on that question
+    /// forever, so the startup update check is off.
     public var interactiveLaunchFlags: [String] {
         switch self {
         case .claude, .gemini: []
-        case .codex: ["--no-alt-screen"]
+        case .codex: ["-c", "check_for_update_on_startup=false", "--no-alt-screen"]
         }
     }
 

@@ -97,8 +97,10 @@ const codex: RuntimeSpec = {
     // alt-screen). The bypass flags are Codex's equivalent of Claude's
     // --dangerously-skip-permissions; --dangerously-bypass-hook-trust skips the
     // interactive hook-trust gate so our hooks run unattended. These are global
-    // flags and must come before the `resume` subcommand.
-    const args = ["--no-alt-screen"];
+    // flags and must come before the `resume` subcommand. With the startup
+    // update check on, a newer codex release makes it ask whether to update
+    // before it draws its composer, and nobody is there to answer.
+    const args = ["-c", "check_for_update_on_startup=false", "--no-alt-screen"];
     if (skipPermissions) {
       args.push("--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust");
     }

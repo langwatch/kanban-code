@@ -161,6 +161,7 @@ struct CodingAssistantTests {
         let command = CodingAssistant.codex.launchCommand(skipPermissions: true, worktreeName: "ignored")
         #expect(command.contains("codex"))
         #expect(command.contains("--no-alt-screen"))
+        #expect(command.contains("-c check_for_update_on_startup=false"))
         #expect(command.contains("--dangerously-bypass-approvals-and-sandbox"))
         #expect(!command.contains("--worktree"))
     }
@@ -168,7 +169,7 @@ struct CodingAssistantTests {
     @Test("Codex resume command uses resume subcommand")
     func codexResumeCommand() {
         let command = CodingAssistant.codex.resumeCommand(sessionId: "session-123", skipPermissions: true)
-        #expect(command == "codex resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen session-123")
+        #expect(command == "codex resume --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false --no-alt-screen session-123")
     }
 
     // MARK: - APIService command building
@@ -219,13 +220,13 @@ struct CodingAssistantTests {
             modelFlag: "qwen3-coder-next:cloud"
         )
         let cmd = CodingAssistant.codex.resumeCommand(sessionId: "abc-123", skipPermissions: true, service: service)
-        #expect(cmd == "ollama launch codex --model qwen3-coder-next:cloud -- resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen abc-123")
+        #expect(cmd == "ollama launch codex --model qwen3-coder-next:cloud -- resume --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false --no-alt-screen abc-123")
     }
 
     @Test("resumeCommand without service is unchanged for codex")
     func resumeCommandCodexNoService() {
         let cmd = CodingAssistant.codex.resumeCommand(sessionId: "abc-123", skipPermissions: true, service: nil)
-        #expect(cmd == "codex resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen abc-123")
+        #expect(cmd == "codex resume --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false --no-alt-screen abc-123")
     }
 
     @Test("launchCommand with worktree and ollama service places worktree after separator")
@@ -314,7 +315,7 @@ struct CodingAssistantTests {
             sessionId: "session-1",
             skipPermissions: true,
             modelOverride: "gpt-5.4"
-        ) == "codex --model gpt-5.4 resume --dangerously-bypass-approvals-and-sandbox --no-alt-screen session-1")
+        ) == "codex --model gpt-5.4 resume --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false --no-alt-screen session-1")
     }
 
     @Test("Model override is escaped as one shell argument")
