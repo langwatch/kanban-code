@@ -66,21 +66,6 @@ public enum HookManager {
         isInstalled(for: .claude, settingsPath: claudeSettingsPath)
     }
 
-    /// Add hook events a release needs that an earlier install did not have.
-    ///
-    /// Only for settings that already call the hook script: an assistant that
-    /// never had hooks is left to the user to set up in Settings.
-    @discardableResult
-    public static func addMissingHooks(for assistant: CodingAssistant, settingsPath: String? = nil)
-        -> Bool
-    {
-        guard assistant.supportsHooks, !isInstalled(for: assistant, settingsPath: settingsPath),
-            registeredHooks(for: assistant, settingsPath: settingsPath) > 0
-        else { return false }
-        try? install(for: assistant, settingsPath: settingsPath)
-        return isInstalled(for: assistant, settingsPath: settingsPath)
-    }
-
     /// Rewrite the deployed hook script when a release changed its content.
     ///
     /// Only for a script that is already on disk: a machine that never
@@ -96,26 +81,6 @@ public enum HookManager {
             return true
         } catch {
             return false
-        }
-    }
-
-    /// How many of the events this release needs already call the hook script.
-    private static func registeredHooks(for assistant: CodingAssistant, settingsPath: String?) -> Int
-    {
-        let path = settingsPath ?? defaultSettingsPath(for: assistant)
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let hooks = root["hooks"] as? [String: Any]
-        else { return 0 }
-
-        return requiredHooks(for: assistant).count { eventName in
-            guard let groups = hooks[eventName] as? [[String: Any]] else { return false }
-            return groups.contains { group in
-                guard let entries = group["hooks"] as? [[String: Any]] else { return false }
-                return entries.contains {
-                    ($0["command"] as? String)?.contains(".kanban-code/hook.sh") == true
-                }
-            }
         }
     }
 
@@ -137,13 +102,13 @@ public enum HookManager {
         // Deploy the hook script to disk
         try deployHookScript(to: scriptPath)
 
-        // Read existing settings
-        var root: [String: Any]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        // Read existing settings; a file that does not parse is not replaced.
+        var root: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: resolvedSettingsPath) {
+            guard let existing = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                throw HookManagerError.unreadableSettings(resolvedSettingsPath)
+            }
             root = existing
-        } else {
-            root = [:]
         }
 
         var hooks = root["hooks"] as? [String: Any] ?? [:]
@@ -185,12 +150,13 @@ public enum HookManager {
         try fileManager.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: resolvedSettingsPath))
+        try HookRestorer.writeSettings(data, to: resolvedSettingsPath)
 
         // Also install statusline for context tracking (Claude only)
         if assistant == .claude {
             try? installStatusLine(for: assistant, settingsPath: resolvedSettingsPath)
         }
+        HookRestorer.setOptedIn(true, for: assistant, kanbanHome: (scriptPath as NSString).deletingLastPathComponent)
     }
 
     /// Backward-compatible: install Claude hooks only.
@@ -203,10 +169,20 @@ public enum HookManager {
 
     // MARK: - Uninstall
 
-    /// Remove Kanban hooks from the given assistant's settings.
-    public static func uninstall(for assistant: CodingAssistant, settingsPath: String? = nil) throws {
+    /// Remove Kanban hooks from the given assistant's settings, and stop
+    /// `HookRestorer` from putting them back. The choice is recorded in
+    /// `kanbanHome`, by default `~/.kanban-code` when the default settings
+    /// file is the one changed.
+    public static func uninstall(
+        for assistant: CodingAssistant,
+        settingsPath: String? = nil,
+        kanbanHome: String? = nil
+    ) throws {
         guard assistant.supportsHooks else { return }
 
+        if let home = kanbanHome ?? (settingsPath == nil ? HookRestorer.defaultKanbanHome : nil) {
+            HookRestorer.setOptedIn(false, for: assistant, kanbanHome: home)
+        }
         let resolvedSettingsPath = settingsPath ?? defaultSettingsPath(for: assistant)
 
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: resolvedSettingsPath)),
@@ -238,7 +214,7 @@ public enum HookManager {
         root["hooks"] = hooks
 
         let newData = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try newData.write(to: URL(fileURLWithPath: resolvedSettingsPath))
+        try HookRestorer.writeSettings(newData, to: resolvedSettingsPath)
     }
 
     /// Backward-compatible: uninstall Claude hooks only.
@@ -248,7 +224,7 @@ public enum HookManager {
 
     // MARK: - Private
 
-    private static func deployHookScript(to path: String) throws {
+    static func deployHookScript(to path: String) throws {
         let fm = FileManager.default
         let dir = (path as NSString).deletingLastPathComponent
         try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -376,7 +352,7 @@ public enum HookManager {
         try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: resolvedSettingsPath))
+        try HookRestorer.writeSettings(data, to: resolvedSettingsPath)
     }
 
     // MARK: - Paths
@@ -398,7 +374,7 @@ public enum HookManager {
         (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code/statusline.sh")
     }
 
-    private static func deployStatusLineScript(to path: String) throws {
+    static func deployStatusLineScript(to path: String) throws {
         let fm = FileManager.default
         let dir = (path as NSString).deletingLastPathComponent
         try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -453,11 +429,14 @@ public enum HookManager {
 
 public enum HookManagerError: LocalizedError {
     case unsupportedAssistant(String)
+    case unreadableSettings(String)
 
     public var errorDescription: String? {
         switch self {
         case .unsupportedAssistant(let name):
             "\(name) does not support Kanban hook installation"
+        case .unreadableSettings(let path):
+            "\(path) is not a JSON object, left as it is"
         }
     }
 }

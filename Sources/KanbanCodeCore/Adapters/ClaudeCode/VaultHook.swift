@@ -108,7 +108,7 @@ public enum VaultHook {
         hooks["PreToolUse"] = groups
         root["hooks"] = hooks
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: URL(fileURLWithPath: path))
+        try HookRestorer.writeSettings(data, to: path)
         return true
     }
 
@@ -239,7 +239,7 @@ public enum VaultHook {
         return out + "\""
     }
 
-    private static func writeScript(_ script: String) throws -> Bool {
+    static func writeScript(_ script: String) throws -> Bool {
         guard (try? String(contentsOfFile: script, encoding: .utf8)) != scriptContent else { return false }
         try FileManager.default.createDirectory(atPath: (script as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try scriptContent.write(toFile: script, atomically: true, encoding: .utf8)

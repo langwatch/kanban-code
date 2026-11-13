@@ -1420,13 +1420,11 @@ struct ContentView: View {
                 }
                 registerMemoryDiagnosticsProviders()
                 // A release can need a hook event the installed settings do
-                // not call yet, and without it the board reads the session
-                // wrong until the user opens Settings.
-                for assistant in CodingAssistant.allCases where assistant.supportsHooks {
-                    if HookManager.addMissingHooks(for: assistant) {
-                        KanbanCodeLog.info("hooks", "added missing \(assistant.displayName) hooks")
-                    }
-                }
+                // not call yet, and something else can rewrite the settings
+                // without the Kanban hooks: what is missing goes back now
+                // and every few minutes.
+                Self.restoreMissingHooks()
+                Task.detached { await Self.keepHooksInPlace() }
                 // The deployed script can lag the release the same way.
                 if HookManager.refreshHookScript() {
                     KanbanCodeLog.info("hooks", "hook script refreshed to current release")
@@ -3326,6 +3324,24 @@ struct ContentView: View {
             }
         }
         return out
+    }
+
+    /// Adds back the Kanban entries missing from the settings of the
+    /// assistants whose hooks the user installed.
+    nonisolated static func restoreMissingHooks() {
+        for assistant in CodingAssistant.allCases where assistant.supportsHooks {
+            let restored = HookRestorer.restoreMissing(for: assistant)
+            if !restored.isEmpty {
+                KanbanCodeLog.info("hooks", "restored \(assistant.displayName) hooks missing from its settings: \(restored.joined(separator: ", "))")
+            }
+        }
+    }
+
+    nonisolated static func keepHooksInPlace() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(120))
+            restoreMissingHooks()
+        }
     }
 
     @MainActor

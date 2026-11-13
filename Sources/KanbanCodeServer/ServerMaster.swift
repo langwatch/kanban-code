@@ -188,6 +188,7 @@ final class ServerMaster {
         Task { await engine.runAttentionMonitor() }
         Task { await engine.runAttentionPeerSync() }
         Task { await self.settingsLoop() }
+        Task { await self.keepHooksInPlace() }
         orchestrator.start()
         let orchestrator = self.orchestrator
         let store = self.store
@@ -213,6 +214,7 @@ final class ServerMaster {
     private func installHooks() {
         for assistant in CodingAssistant.allCases where assistant.supportsHooks {
             guard (try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/" + assistant.configDirName)) != nil else { continue }
+            guard HookRestorer.recordedOptIn(for: assistant) != false else { continue }
             if !HookManager.isInstalled(for: assistant) {
                 do {
                     try HookManager.install(for: assistant)
@@ -223,7 +225,8 @@ final class ServerMaster {
             }
         }
         _ = HookManager.refreshHookScript()
-        if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude") {
+        if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude"),
+           HookRestorer.recordedOptIn(for: .claude) != false {
             _ = try? VaultHook.install()
             _ = try? PermissionHook.install()
         }
@@ -232,6 +235,21 @@ final class ServerMaster {
         }
         if !HookManager.isStatusLineInstalled(for: .claude) {
             try? HookManager.installStatusLine(for: .claude)
+        }
+    }
+
+    /// Something else can rewrite the assistant settings without the
+    /// Kanban hooks (a test, a tool, the sync of a broken copy): what is
+    /// missing goes back every few minutes.
+    private func keepHooksInPlace() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(120))
+            for assistant in CodingAssistant.allCases where assistant.supportsHooks {
+                let restored = HookRestorer.restoreMissing(for: assistant)
+                if !restored.isEmpty {
+                    say("restored \(assistant.displayName) hooks missing from its settings: \(restored.joined(separator: ", "))")
+                }
+            }
         }
     }
 

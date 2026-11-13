@@ -284,6 +284,19 @@ struct AssistantsSettingsView: View {
                                 Text("Installed")
                                     .foregroundStyle(.secondary)
                                     .font(.caption)
+                                Button("Uninstall") {
+                                    do {
+                                        try HookManager.uninstall(for: assistant)
+                                        assistantStatus[assistant] = AssistantStatus(
+                                            available: status.available,
+                                            hooksInstalled: false,
+                                            enabled: status.enabled
+                                        )
+                                    } catch {
+                                        // Show error
+                                    }
+                                }
+                                .controlSize(.small)
                             } else {
                                 Button("Install Hooks") {
                                     do {
