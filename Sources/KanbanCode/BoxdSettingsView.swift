@@ -105,7 +105,7 @@ struct BoxdSettingsView: View {
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 130)
                         Button {
-                            sshMachines.removeAll { $0.name == machine.name && $0.target == machine.target }
+                            sshMachines.removeAll { $0.id == machine.id }
                             scheduleSave()
                         } label: {
                             Image(systemName: "minus.circle")
@@ -340,6 +340,7 @@ struct BoxdSettingsView: View {
             claudeOAuthToken: claudeOAuthToken.trimmingCharacters(in: .whitespacesAndNewlines),
             sshMachines: sshMachines.map {
                 SshMachine(
+                    id: $0.id,
                     name: $0.name.trimmingCharacters(in: .whitespacesAndNewlines),
                     target: $0.target.trimmingCharacters(in: .whitespacesAndNewlines),
                     repoRoot: $0.repoRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
