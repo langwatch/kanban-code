@@ -90,7 +90,8 @@ class KanbanUITestCase: XCTestCase {
         app.buttons["attach"].tap()
         app.buttons["Photos"].firstMatch.tap()
         // The system picker: pick the first photo, then Done.
-        let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        let photo = app.images.matching(identifier: "PXGGridLayout-Info")
+            .matching(NSPredicate(format: "NOT label BEGINSWITH[c] 'video'")).firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 15), "no photos in the simulator; add one with xcrun simctl addmedia")
         // The picker's first-run privacy notice covers the grid.
         let close = app.buttons["Close"].firstMatch
@@ -98,6 +99,23 @@ class KanbanUITestCase: XCTestCase {
         sleep(1)
         // The grid sits under an overlay that XCUITest counts as covering it.
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(waitEnabled(done))
+        done.tap()
+    }
+
+    /// Picks the first video of the library through + > Photos.
+    func pickFirstVideo() {
+        app.buttons["attach"].tap()
+        app.buttons["Photos"].firstMatch.tap()
+        let grid = app.images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 15))
+        let close = app.buttons["Close"].firstMatch
+        if close.waitForExistence(timeout: 2) { close.tap() }
+        sleep(1)
+        let video = grid.matching(NSPredicate(format: "label BEGINSWITH[c] 'video'")).firstMatch
+        XCTAssertTrue(video.exists, "no video in the picker; add one with xcrun simctl addmedia: \(grid.allElementsBoundByIndex.map { $0.label })")
+        video.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let done = app.buttons["Done"].firstMatch
         XCTAssertTrue(waitEnabled(done))
         done.tap()

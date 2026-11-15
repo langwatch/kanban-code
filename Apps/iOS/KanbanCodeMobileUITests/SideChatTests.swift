@@ -18,13 +18,20 @@ final class SideChatTests: KanbanUITestCase {
         composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: text.count))
     }
 
-    func testCatchUpButtonShowsTheSummaryAndItsLinksReachOldMessages() throws {
+    private func catchUp() {
+        clearComposer()
+        composer.tap()
+        composer.typeText("/catchup")
+        app.buttons["send"].tap()
+    }
+
+    func testCatchUpShowsTheSummaryAndItsLinksReachOldMessages() throws {
         openCard("card_catchup")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        let button = app.buttons["catchUp"]
-        XCTAssertTrue(button.waitForExistence(timeout: 5))
-        shot("60-catchup-button")
-        button.tap()
+        // The composer row holds only + next to the text, no catch-up button.
+        XCTAssertFalse(app.buttons["catchUp"].exists)
+        shot("60-composer-row")
+        catchUp()
 
         XCTAssertTrue(panel.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["catchUpReport"].waitForExistence(timeout: 15))
@@ -59,7 +66,7 @@ final class SideChatTests: KanbanUITestCase {
         let reopened = app.staticTexts["catchUpReopened"]
         let refresh = app.buttons["catchUpRefresh"]
 
-        app.buttons["catchUp"].tap()
+        catchUp()
         XCTAssertTrue(refresh.waitForExistence(timeout: 20))
         // A run made on an earlier pass of this test comes back reopened: start from a new one.
         if reopened.exists {
@@ -69,7 +76,7 @@ final class SideChatTests: KanbanUITestCase {
         panel.tap()
         XCTAssertTrue(waitFor(5) { !panel.exists })
 
-        app.buttons["catchUp"].tap()
+        catchUp()
         XCTAssertTrue(reopened.waitForExistence(timeout: 3), "the kept catch-up did not come back at once")
         XCTAssertTrue(refresh.exists)
         shot("67-catchup-reopened")

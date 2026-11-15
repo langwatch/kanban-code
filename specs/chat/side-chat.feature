@@ -79,8 +79,9 @@ Feature: Side chat (/btw and /catchup)
       | What else happened |
 
   Scenario: Catch up from the button
-    When I use the catch-up button in the composer
+    When I use the catch-up button in the composer on the Mac
     Then the same summary shows as for "/catchup"
+    And the phone composer has no catch-up button, only + next to the text
 
   Scenario: The scope starts at my last message
     Given I sent "refactor the billing webhooks"

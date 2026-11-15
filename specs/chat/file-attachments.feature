@@ -58,6 +58,14 @@ Feature: Any file attached to a chat message
     When I pick "Choose File" in the + menu and pick "report.pdf"
     Then it uploads with progress and the message carries its "[File: ...]" line
 
+  Scenario: The phone attaches a video from Photos
+    Given the iPhone app on a master that lists the "files" feature
+    When I pick "Photos" in the + menu
+    Then the picker shows videos next to the images
+    When I pick a video
+    Then it uploads as a file with a film chip, like one picked in Files
+    And the images picked with it still go inline
+
   Scenario: The CLI sends a file
     When I run "kanban remote send <card> 'look at this' --file demo.mp4"
     Then the file is uploaded to the master that owns the card

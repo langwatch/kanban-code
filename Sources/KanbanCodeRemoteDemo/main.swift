@@ -590,6 +590,20 @@ final class DemoHost: RemoteControlHost {
         return card
     }
 
+    /// Files attached in the clients land under a Kanban home of the demo's own.
+    func storePromptFileChunk(cardId: String, _ chunk: RemotePromptFileChunk) async throws -> RemotePromptFile {
+        _ = try cardState(cardId)
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("kanban-code-remote-demo").path
+        do {
+            return try PromptFileStore.receive(chunk, kanbanHome: home)
+        } catch let error as PromptFileError {
+            switch error {
+            case .badRequest(let message), .tooLarge(let message): throw RemoteHostError.badRequest(message)
+            case .offsetMismatch: throw RemoteHostError.conflict(error.localizedDescription)
+            }
+        }
+    }
+
     func sendPrompt(cardId: String, _ request: RemotePromptRequest, images: [RemotePromptImages.Decoded]) async throws {
         let c = try cardState(cardId)
         guard c.card.isLive else { throw RemoteHostError.conflict("card \(cardId) has no live session; resume it first") }

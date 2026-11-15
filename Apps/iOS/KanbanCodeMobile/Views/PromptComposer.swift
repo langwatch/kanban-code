@@ -56,9 +56,12 @@ struct PromptComposer<Extra: View>: View {
             }
             composer
         }
+        // Videos go as files, so they show only when the master takes files,
+        // and then the image limit does not cap the selection.
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItems,
-                      maxSelectionCount: max(1, RemoteImage.maxCount - draft.images.count),
-                      matching: .images, preferredItemEncoding: .compatible)
+                      maxSelectionCount: supportsFiles ? nil : max(1, RemoteImage.maxCount - draft.images.count),
+                      matching: supportsFiles ? .any(of: [.images, .videos]) : .images,
+                      preferredItemEncoding: .compatible)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
@@ -264,7 +267,7 @@ struct PromptComposer<Extra: View>: View {
                     imageInsertion = caretOffset
                     showPhotoPicker = true
                 }
-                .disabled(!draft.canAddImages)
+                .disabled(!draft.canAddImages && !supportsFiles)
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
                     Button("Camera", systemImage: "camera") {
                         imageInsertion = caretOffset
@@ -384,15 +387,32 @@ struct PromptComposer<Extra: View>: View {
         return try? Data(contentsOf: url)
     }
 
+    /// Images go inline; a video is exported to a file and uploads like
+    /// one picked in Files.
     private func addPhotos(_ items: [PhotosPickerItem]) async {
         var failed = 0
+        var refusals: [String] = []
         for item in items {
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                guard supportsFiles, let client = board.client,
+                      let movie = try? await item.loadTransferable(type: PickedMovie.self) else {
+                    failed += 1
+                    continue
+                }
+                if let refusal = draft.attachFile(at: movie.url, client: client, cardId: card.id, movesSource: true) {
+                    refusals.append(refusal)
+                }
+                continue
+            }
             guard let data = try? await item.loadTransferable(type: Data.self), insertImage(data) else {
                 failed += 1
                 continue
             }
         }
-        if failed > 0 { sendError = failed == 1 ? "One image could not be attached." : "\(failed) images could not be attached." }
+        if failed > 0 {
+            refusals.append(failed == 1 ? "One item could not be attached." : "\(failed) items could not be attached.")
+        }
+        if !refusals.isEmpty { sendError = refusals.joined(separator: "\n") }
     }
 
     /// Attaches an image with its marker where the caret was when + was
@@ -593,6 +613,24 @@ enum FileIcon {
         case "txt", "md", "log", "csv", "json", "yaml", "yml", "xml": "doc.plaintext"
         case "swift", "ts", "tsx", "js", "py", "go", "rs", "rb", "java", "kt", "c", "h", "cpp", "sh", "html", "css": "chevron.left.forwardslash.chevron.right"
         default: "doc"
+        }
+    }
+}
+
+/// A video picked in Photos, exported to a folder of its own in the app's
+/// temporary directory; the upload moves it away from there.
+private struct PickedMovie: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let folder = FileManager.default.temporaryDirectory
+                .appendingPathComponent("picked-videos", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent(received.file.lastPathComponent)
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
         }
     }
 }

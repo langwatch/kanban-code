@@ -345,9 +345,7 @@ struct ChatPane: View {
                                    sentCount += 1
                                    transcript.appendPending(text, imageCount: images.count)
                                }) {
-                    if supportsSideChat {
-                        catchUpButton
-                    }
+                    EmptyView()
                 }
             } else {
                 // The same status the Mac shows in the card: a start or a

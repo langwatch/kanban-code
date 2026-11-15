@@ -276,6 +276,28 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         XCTAssertTrue(composer.exists)
     }
 
+    func testAttachAVideoFromThePhotoLibrary() throws {
+        openCard("card_wait")
+        XCTAssertTrue(app.buttons["attach"].waitForExistence(timeout: 10))
+        clearComposer()
+        pickFirstVideo()
+        // A video goes as a file: a chip, not an inline image.
+        let chip = app.descendants(matching: .any).matching(identifier: "fileAttachment").firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "attachment").firstMatch.exists)
+        composer.tap()
+        composer.typeText("What is in this clip?")
+        tapConversation()
+        sleep(1)
+        shot("26c-video-attached")
+        let send = app.buttons["send"]
+        XCTAssertTrue(waitEnabled(send), "the upload did not finish")
+        send.tap()
+        XCTAssertTrue(waitFor(15) { message(containing: "What is in this clip?").exists })
+        XCTAssertTrue(waitFor(5) { !chip.exists })
+        shot("26d-video-sent")
+    }
+
     // MARK: Selection
 
     func testPartOfAMessageCanBeSelected() throws {

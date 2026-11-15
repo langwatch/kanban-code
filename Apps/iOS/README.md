@@ -36,7 +36,7 @@ Pass links with `url=http://127.0.0.1:...`: the printed ones use the Tailscale a
 - `--tmux-socket kc-demo` makes the demo's tmux cards real tmux sessions on a server of their own (`tmux -L kc-demo`), which the terminal scroll test needs.
 - The demo changes as the tests use it (queued prompts get sent), so restart it before a full run.
 - The keyboard tests need the software keyboard: turn off Simulator > I/O > Keyboard > Connect Hardware Keyboard (`defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false` before booting).
-- The image test picks the first photo in the library: `xcrun simctl addmedia booted <png>` once.
+- The image and video tests pick the first photo and the first video in the library: `xcrun simctl addmedia booted <png> <mp4>` once.
 
 `IOS_SIM="iPhone 17"` picks another simulator. The project file is generated from `project.yml` and not committed; run `make ios-project` after pulling.
 

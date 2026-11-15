@@ -160,9 +160,10 @@ final class ComposerDraft {
 
     /// Attaches a file picked from Files and uploads it to where the card's
     /// assistant runs. The file is first copied to a temporary folder, so
-    /// the picker's access ending does not cut the upload. Returns why it
-    /// cannot be attached, or nil once it is on its way.
-    func attachFile(at url: URL, client: RemoteClient, cardId: String) -> String? {
+    /// the picker's access ending does not cut the upload; a file the app
+    /// owns (`movesSource`, a video exported from Photos) is moved there
+    /// instead. Returns why it cannot be attached, or nil once it is on its way.
+    func attachFile(at url: URL, client: RemoteClient, cardId: String, movesSource: Bool = false) -> String? {
         let scoped = url.startAccessingSecurityScopedResource()
         let name = PromptFiles.safeName(url.lastPathComponent)
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
@@ -177,6 +178,7 @@ final class ComposerDraft {
         }
         if let refusal {
             if scoped { url.stopAccessingSecurityScopedResource() }
+            if movesSource { try? FileManager.default.removeItem(at: url) }
             return refusal
         }
         let id = addFile(name: name, size: size)
@@ -190,7 +192,11 @@ final class ComposerDraft {
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                     let copy = folder.appendingPathComponent(name)
-                    try FileManager.default.copyItem(at: url, to: copy)
+                    if movesSource {
+                        try FileManager.default.moveItem(at: url, to: copy)
+                    } else {
+                        try FileManager.default.copyItem(at: url, to: copy)
+                    }
                     return copy
                 }.value
                 try Task.checkCancellation()
