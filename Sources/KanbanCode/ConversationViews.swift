@@ -144,7 +144,8 @@ struct SidebarConversationRows: View {
                     .foregroundStyle(.tertiary)
                 Text(conversation.displayTitle)
                     .font(.app(.caption, weight: conversation.unread ? .semibold : .regular))
-                    .foregroundStyle(conversation.title == nil ? .secondary : .primary)
+                    // Weight alone barely shows in dark mode: read rows also step back in color.
+                    .foregroundStyle(conversation.unread || selected ? .primary : .secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
             }
