@@ -846,6 +846,60 @@ struct MasterHandoverTests {
         #expect(box.store.state.links["card_new"]?.ownerMachine == mac.identity.id)
     }
 
+    @Test("a card whose transcript is gone does not move, and one released that way comes back with the reason")
+    func goneTranscriptDoesNotMove() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("gone-transcript-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let origin = "\(root)/origin/widgets.git"
+        let repoA = "\(root)/mac/widgets"
+        try FileManager.default.createDirectory(atPath: "\(root)/origin", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: "\(root)/mac", withIntermediateDirectories: true)
+        try await sh(["git", "init", "--bare", "-q", origin], in: root)
+        try await sh(["git", "clone", "-q", origin, repoA], in: root)
+        try await sh(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], in: repoA)
+        try await sh(["git", "push", "-q", "origin", "HEAD"], in: repoA)
+
+        let mac = try TestMaster(name: "mac", root: root)
+        let box = try TestMaster(name: "box", root: root)
+        try await mac.serve()
+        try await box.serve()
+        try await mac.start(peerURL: box.url, peerToken: box.tokenForPeer)
+        try await box.start(peerURL: mac.url, peerToken: mac.tokenForPeer)
+        defer { mac.server.stop(); box.server.stop() }
+
+        // A card from months ago: Claude Code cleaned up its transcript.
+        let sessionId = "0f1e2d3c-aaaa-bbbb-cccc-000000000009"
+        let gone = mac.engine.transcriptPath(cwd: "\(repoA)/.claude/worktrees/old-work", sessionId: sessionId)
+        mac.store.dispatch(.createManualTask(Link(
+            id: "card_old", name: "Old work", projectPath: repoA, column: .backlog,
+            sessionLink: SessionLink(sessionId: sessionId, sessionPath: gone)
+        )))
+        await mac.peerSync.pullAll()
+        await box.peerSync.pullAll()
+
+        await #expect(throws: MasterPeerError.self) { try await mac.engine.moveCard("card_old", to: "box") }
+        #expect(mac.store.state.links["card_old"].map { mac.store.state.isOwnedLocally($0) } == true)
+        #expect(mac.store.state.links["card_old"]?.migrating == nil)
+
+        // Released before this check existed: the box sends it back instead of waiting for it.
+        mac.store.dispatch(.releaseCardOwnership(cardId: "card_old", to: box.identity.id))
+        await box.peerSync.pullAll()
+        #expect(await box.engine.adoptOrHandBack(cardId: "card_old"))
+        #expect(box.store.state.links["card_old"]?.ownerMachine == mac.identity.id)
+
+        await mac.peerSync.pullAll()
+        #expect(await mac.engine.adoptOrHandBack(cardId: "card_old"))
+        let back = mac.store.state.links["card_old"]
+        #expect(back?.ownerMachine == mac.identity.id)
+        #expect(back?.migrating == nil)
+        guard case .failed(let line) = mac.store.state.cardStarts["card_old"] else {
+            Issue.record("the card does not say why it came back")
+            return
+        }
+        #expect(line.contains("no longer has this card's conversation"))
+        #expect(box.tmux.created.isEmpty)
+    }
+
     @Test("an adoption that may work on a later try leaves the card where it is")
     func transientFailureKeepsTheCard() {
         #expect(MasterPeerError.noProject("x").refusesAdoption)

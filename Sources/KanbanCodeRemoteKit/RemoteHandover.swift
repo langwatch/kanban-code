@@ -80,6 +80,9 @@ public struct RemoteHandoverInfo: Codable, Sendable, Equatable {
     /// Set when the card is coming back: the master it was released to
     /// could not adopt it, for this reason.
     public var refusal: String?
+    /// The card names a transcript the releasing master no longer has,
+    /// such as one Claude Code cleaned up: no try will bring it.
+    public var transcriptMissing: Bool?
 
     public init(cardId: String, sessionId: String?, assistant: String, projectPath: String?, cwd: String?,
                 repoUrl: String?, branch: String?, worktreeName: String?, patch: String?, transcriptSize: Int) {

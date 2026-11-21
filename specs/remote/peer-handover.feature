@@ -41,3 +41,15 @@ Feature: A card started on another master
     When the adoption fails for a reason that may pass, such as the releasing master being offline
     Then the card stays released
     And the other master tries again
+
+  Scenario: A card whose conversation is gone
+    Given a card whose transcript no longer exists on its master, such as one Claude Code cleaned up after its cleanup period
+    When it is moved or resumed on another master
+    Then the card does not move
+    And the card shows that its conversation is gone from this machine
+
+  Scenario: A card released before its conversation was found gone
+    Given a card released to another master by a master that no longer has its transcript
+    When the other master tries to adopt it
+    Then it sends the card back with the reason, as for any card it cannot take
+    And it does not keep trying

@@ -350,6 +350,9 @@ extension MasterEngine {
                 localTranscript: link.sessionLink?.sessionPath,
                 remoteCwd: remote.remoteCwd)
         }
+        if let transcript = link.sessionLink?.sessionPath, !FileManager.default.fileExists(atPath: transcript) {
+            throw MasterPeerError.failed("its conversation is gone from this machine, so there is nothing to continue on \(peerName(machineId))")
+        }
         // The conversation runs in one place only.
         for name in link.tmuxLink?.allSessionNames ?? [] {
             try? await tmux.killSession(name: name)
@@ -445,6 +448,7 @@ extension MasterEngine {
             info.repoHasCommits = await Self.git(["rev-parse", "--verify", "-q", "HEAD"], in: repoRoot)?.succeeded == true
         }
         info.refusal = refusedHandovers[cardId]
+        if let transcript, !FileManager.default.fileExists(atPath: transcript) { info.transcriptMissing = true }
         if let launch {
             info.launchPrompt = launch.prompt
             info.launchWorktree = launch.worktree
@@ -606,6 +610,9 @@ extension MasterEngine {
         var sessionLink: SessionLink?
         if let sessionId = info.sessionId {
             guard assistant == .claude else { throw MasterPeerError.failed("only Claude conversations move between masters") }
+            if info.transcriptMissing == true {
+                throw MasterPeerError.failed("\(peerName(from)) no longer has this card's conversation")
+            }
             // An empty transcript would replace the conversation with nothing.
             guard info.transcriptSize > 0 else {
                 throw MasterPeerError.notReady("\(peerName(from)) has no transcript for this card yet")
