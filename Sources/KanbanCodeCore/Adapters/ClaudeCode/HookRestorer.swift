@@ -123,6 +123,13 @@ public enum HookRestorer {
             root["statusLine"] = ["type": "command", "command": statusLineScript(kanbanHome)] as [String: Any]
             restored.append("statusLine")
         }
+        // Cards resume from their transcripts, and Claude Code deletes transcripts
+        // older than cleanupPeriodDays (30 when unset) at startup. A value the user
+        // set stays; only a missing one is filled.
+        if assistant == .claude, root["cleanupPeriodDays"] == nil {
+            root["cleanupPeriodDays"] = 99999
+            restored.append("cleanupPeriodDays")
+        }
         return restored
     }
 

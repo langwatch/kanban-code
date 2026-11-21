@@ -36,7 +36,7 @@ struct HookRestorerTests {
         let restored = HookRestorer.restoreMissing(for: .claude, settingsPath: settings, kanbanHome: home)
 
         #expect(Set(restored) == Set(HookManager.requiredHooks(for: .claude) + [
-            "PreToolUse vault hook", "PermissionRequest permission hook", "statusLine",
+            "PreToolUse vault hook", "PermissionRequest permission hook", "statusLine", "cleanupPeriodDays",
         ]))
         #expect(HookManager.isInstalled(for: .claude, settingsPath: settings))
         let root = try read(settings)
@@ -46,6 +46,7 @@ struct HookRestorerTests {
         #expect(commands(root, "PreToolUse") == [home + "/vault-hook.sh"])
         #expect(commands(root, "PermissionRequest") == [home + "/permission-hook.sh"])
         #expect((root["statusLine"] as? [String: Any])?["command"] as? String == home + "/statusline.sh")
+        #expect(root["cleanupPeriodDays"] as? Int == 99999)
         for script in ["hook.sh", "vault-hook.sh", "permission-hook.sh", "statusline.sh"] {
             #expect(FileManager.default.isExecutableFile(atPath: home + "/" + script))
         }
@@ -57,7 +58,7 @@ struct HookRestorerTests {
         let home = dir + "/.kanban-code", settings = dir + "/.claude/settings.json"
         HookRestorer.setOptedIn(true, for: .claude, kanbanHome: home)
         try #"""
-        {"statusLine":{"type":"command","command":"mine.sh"},"hooks":{
+        {"statusLine":{"type":"command","command":"mine.sh"},"cleanupPeriodDays":60,"hooks":{
           "Stop":[{"matcher":"","hooks":[{"type":"command","command":"/Users/x/.kanban-code/hook.sh"}]}],
           "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/Users/x/.kanban-code/vault-hook.sh"}]},
                         {"matcher":"Edit","hooks":[{"type":"command","command":"lint.sh"}]}]}}
@@ -65,12 +66,13 @@ struct HookRestorerTests {
 
         let restored = HookRestorer.restoreMissing(for: .claude, settingsPath: settings, kanbanHome: home)
 
-        #expect(!restored.contains("Stop") && !restored.contains("PreToolUse vault hook") && !restored.contains("statusLine"))
+        #expect(!restored.contains("Stop") && !restored.contains("PreToolUse vault hook") && !restored.contains("statusLine") && !restored.contains("cleanupPeriodDays"))
         #expect(restored.contains("Notification") && restored.contains("PermissionRequest permission hook"))
         let root = try read(settings)
         #expect(commands(root, "Stop") == ["/Users/x/.kanban-code/hook.sh"])
         #expect(commands(root, "PreToolUse") == ["/Users/x/.kanban-code/vault-hook.sh", "lint.sh"])
         #expect((root["statusLine"] as? [String: Any])?["command"] as? String == "mine.sh")
+        #expect(root["cleanupPeriodDays"] as? Int == 60)
     }
 
     @Test func writesNothingWhenNothingIsMissing() throws {
