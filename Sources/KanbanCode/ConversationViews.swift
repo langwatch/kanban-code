@@ -134,6 +134,7 @@ struct SidebarConversationRows: View {
     let conversations: [RemoteConversation]
     let openId: String?
     let isCardSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ForEach(conversations.filter { !$0.archived }) { conversation in
@@ -144,8 +145,12 @@ struct SidebarConversationRows: View {
                     .foregroundStyle(.tertiary)
                 Text(conversation.displayTitle)
                     .font(.app(.caption, weight: conversation.unread ? .semibold : .regular))
-                    // Weight alone barely shows in dark mode: read rows also step back in color.
-                    .foregroundStyle(conversation.unread || selected ? .primary : .secondary)
+                    // Weight alone barely shows in dark mode, so there read rows also step back in color.
+                    .foregroundStyle(
+                        colorScheme == .dark
+                            ? (conversation.unread || selected ? .primary : .secondary)
+                            : (conversation.title == nil ? .secondary : .primary)
+                    )
                     .lineLimit(1)
                 Spacer(minLength: 4)
             }
