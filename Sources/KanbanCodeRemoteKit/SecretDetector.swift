@@ -64,7 +64,7 @@ public enum SecretDetector {
 
     /// Secrets in `text` worth offering to save, in text order.
     public static func find(in text: String) -> [DetectedSecret] {
-        matches(in: text).filter { !isPlaceholder($0.value, kind: $0.kind) }
+        matches(in: text).filter { !isPlaceholder($0.value, kind: $0.kind) && !isHandOffToken($0.value) }
     }
 
     /// The rules for keys a vendor mints in a fixed format (`sk-...`,
@@ -118,7 +118,7 @@ public enum SecretDetector {
 
     /// Secrets in `text` found by the given rules only, placeholders left out.
     public static func find(in text: String, ruleIds: Set<String>) -> [DetectedSecret] {
-        matches(in: text, ruleIds: ruleIds).filter { !isPlaceholder($0.value, kind: $0.kind) }
+        matches(in: text, ruleIds: ruleIds).filter { !isPlaceholder($0.value, kind: $0.kind) && !isHandOffToken($0.value) }
     }
 
     /// Every credential the rules recognise, placeholders included.
@@ -207,8 +207,8 @@ public enum SecretDetector {
     /// Saves each offer through `add` (which returns an error message or
     /// nil; `replacing` is true for a stored name the user agreed to
     /// replace). The name offered is saved as a new secret, under the next
-    /// free one when it was taken meanwhile; an invalid name becomes
-    /// `SECRET`. A name the user typed is looked up with `compare`: one the
+    /// free one when it was taken meanwhile; an invalid typed name falls back
+    /// to the name offered. A name the user typed is looked up with `compare`: one the
     /// vault does not hold is added, one that already holds this value is
     /// used as it is, and one that holds another value stops the save with
     /// `replace` set until the offer carries the user's yes in `replaces`.
@@ -225,7 +225,8 @@ public enum SecretDetector {
             let typed = proposal.name.trimmingCharacters(in: .whitespaces)
             var replacing = false
             if !isValidName(typed) {
-                proposal.name = uniqueName("SECRET", existing: taken)
+                let offered = isValidName(proposal.offeredName) ? proposal.offeredName : genericName
+                proposal.name = uniqueName(offered, existing: taken)
             } else if mine.contains(typed) || typed == proposal.offeredName {
                 proposal.name = uniqueName(typed, existing: taken)
             } else {
@@ -319,6 +320,13 @@ public enum SecretDetector {
 
     // MARK: - Placeholders
 
+    /// A one-time code a product hands a person to paste into an agent, such
+    /// as a Laze connect link token (`lzl_alk_<id>.<secret>`): it works once,
+    /// for minutes, so it goes to the agent as it is, never to the vault.
+    private static let handOffTokenRegex = regex(#"^lzl_[A-Za-z0-9_]+\.[0-9a-f]{32,}[.,]*$"#)
+
+    public static func isHandOffToken(_ value: String) -> Bool { test(handOffTokenRegex, value) }
+
     private static let vendorKinds: Set<String> = [
         "aws_access_key_id", "github_token", "provider_api_key", "stripe_secret_key",
         "slack_token", "google_api_key", "vendor_api_key", "jwt",
@@ -370,7 +378,61 @@ public enum SecretDetector {
             let name = pns.substring(with: m.range(at: 1)).uppercased()
             if isValidName(name) { return name }
         }
-        return defaultName(kind: kind, value: value, text: text, valueStart: valueStart)
+        let name = defaultName(kind: kind, value: value, text: text, valueStart: valueStart)
+        if name != genericName { return name }
+        if let said = saidAsName(prefix) { return said }
+        let lookback = text.substring(with: NSRange(location: window, length: valueStart - window))
+        return serviceName(lookback) ?? name
+    }
+
+    /// The name of a secret nothing tells apart.
+    static let genericName = "SECRET"
+
+    /// What the words before a value call it: a word and then key, token,
+    /// secret or password ("the stripe api key is", "billing token:").
+    private static let saidAsRegex = regex(
+        #"\b([a-z][a-z0-9]{1,20})[ \t]+(api[ _-]?key|access[ _-]?token|auth[ _-]?token|secret[ _-]?key|key|token|secret|password)(?:[ \t]+(?:is|here|now))?[ \t]*[:=]?[ \t]*["'`]?$"#,
+        .caseInsensitive)
+
+    /// Words before key or token that do not say whose it is.
+    private static let fillerWords: Set<String> = [
+        "my", "the", "a", "an", "this", "that", "our", "your", "new", "old", "is", "use", "with", "of", "for", "and",
+        "or", "api", "secret", "access", "auth", "private", "public", "same", "other", "another", "real", "test", "its",
+        "their", "his", "her",
+    ]
+
+    private static func saidAsName(_ prefix: String) -> String? {
+        let ns = prefix as NSString
+        guard let m = saidAsRegex.firstMatch(in: prefix, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let word = ns.substring(with: m.range(at: 1))
+        guard !fillerWords.contains(word.lowercased()) else { return nil }
+        let what = ns.substring(with: m.range(at: 2)).replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "-", with: "_")
+        let name = "\(word)_\(what)".uppercased()
+        return isValidName(name) ? name : nil
+    }
+
+    private static let urlHostRegex = regex(#"https?://([a-z0-9.-]+)"#, .caseInsensitive)
+    private static let credentialWordRegex = regex(
+        #"(api[ _-]?key|access[ _-]?token|auth[ _-]?token|token|password|passwd|key|secret)\W*$"#, .caseInsensitive)
+
+    /// A secret named by the site the text links to before it and what the
+    /// text calls it: "read https://laze.so/... with the token X" is
+    /// LAZE_TOKEN. Nil when no link comes before the value.
+    static func serviceName(_ before: String) -> String? {
+        let ns = before as NSString
+        let all = NSRange(location: 0, length: ns.length)
+        guard let host = urlHostRegex.matches(in: before, range: all).last else { return nil }
+        let labels = ns.substring(with: host.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+            .split(separator: ".").map(String.init)
+        guard let first = labels.first else { return nil }
+        let site = (labels.count >= 2 ? labels[labels.count - 2] : first).replacingOccurrences(of: "-", with: "_").uppercased()
+        var what = genericName
+        if let m = credentialWordRegex.firstMatch(in: before, range: all) {
+            what = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: " ", with: "_")
+                .replacingOccurrences(of: "-", with: "_").uppercased()
+        }
+        let name = "\(site)_\(what)"
+        return isValidName(name) ? name : nil
     }
 
     private static let vendorNames: [(String, String)] = [
@@ -419,8 +481,8 @@ public enum SecretDetector {
         case "vendor_api_key":
             if value.range(of: #"^[0-9]{8,10}:AA"#, options: .regularExpression) != nil { return "TELEGRAM_BOT_TOKEN" }
             if value.hasPrefix("glc_") || value.hasPrefix("glsa_") { return "GRAFANA_TOKEN" }
-            return vendorNames.first { value.hasPrefix($0.0) }?.1 ?? "SECRET"
-        default: return "SECRET"
+            return vendorNames.first { value.hasPrefix($0.0) }?.1 ?? genericName
+        default: return genericName
         }
     }
 
@@ -467,7 +529,7 @@ public enum SecretDetector {
         for m in rule.regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)) {
             if let accept = rule.accept, !accept(m, text) { continue }
             let full = m.range
-            let value: NSRange
+            var value: NSRange
             let spanEnd: Int
             switch rule.value {
             case .clamped:
@@ -485,6 +547,7 @@ public enum SecretDetector {
                 spanEnd = full.location + full.length
             }
             if value.length == 0 { continue }
+            if sentenceRuleIds.contains(rule.id) { value = withoutSentenceEnd(value, in: text) }
             var spanStart = full.location
             if let pre = rule.precededBy {
                 // The scheme is at most 31 characters, so only that window is read.
@@ -495,6 +558,21 @@ public enum SecretDetector {
             out.append(RawMatch(ruleId: rule.id, span: NSRange(location: spanStart, length: spanEnd - spanStart), value: value))
         }
         return out
+    }
+
+    /// Rules whose value can run into the full stop or comma that ends the
+    /// sentence around it ("follow it with the token X.").
+    private static let sentenceRuleIds: Set<String> = ["sensitive_assignment", "bearer_token", "authorization_scheme_token"]
+
+    /// `value` without a run of `.` or `,` that closes its sentence: one
+    /// followed by the end of the text, a space or a quote.
+    private static func withoutSentenceEnd(_ value: NSRange, in text: NSString) -> NSRange {
+        let end = NSMaxRange(value)
+        var cut = end
+        while cut > value.location, [UInt16(0x2E), UInt16(0x2C)].contains(text.character(at: cut - 1)) { cut -= 1 }
+        guard cut != end, cut != value.location else { return value }
+        if end < text.length, !" \t\r\n\"'`)]".utf16.contains(text.character(at: end)) { return value }
+        return NSRange(location: value.location, length: cut - value.location)
     }
 
     /// A secret never contains a quote or backtick, so a match stops at the first one.

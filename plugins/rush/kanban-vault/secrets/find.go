@@ -27,11 +27,15 @@ func Find(text string) []Detected {
 	offset := 0
 	for _, s := range sliceForScan(text) {
 		for _, m := range detectSlice(s, Options{}) {
-			v := s[m.SecretStart:m.SecretEnd]
-			if v == "" || isPlaceholderSecret(v, m.RuleID) {
+			end := m.SecretEnd
+			if sentenceRuleIDs[m.RuleID] {
+				end = withoutSentenceEnd(s, m.SecretStart, end)
+			}
+			v := s[m.SecretStart:end]
+			if v == "" || isPlaceholderSecret(v, m.RuleID) || IsHandOffToken(v) {
 				continue
 			}
-			d := Detected{Value: v, Start: offset + m.SecretStart, End: offset + m.SecretEnd, Kind: m.RuleID}
+			d := Detected{Value: v, Start: offset + m.SecretStart, End: offset + end, Kind: m.RuleID}
 			d.SuggestedName = suggestName(text, d)
 			out = append(out, d)
 		}
@@ -39,6 +43,34 @@ func Find(text string) []Detected {
 	}
 	return out
 }
+
+// sentenceRuleIDs are the rules whose value can run into the full stop or
+// comma that ends the sentence around it ("follow it with the token X.").
+var sentenceRuleIDs = map[string]bool{"sensitive_assignment": true, "bearer_token": true, "authorization_scheme_token": true}
+
+// withoutSentenceEnd is end moved back over a run of . or , that closes
+// the sentence: one followed by the end of the text, a space or a quote.
+func withoutSentenceEnd(s string, start, end int) int {
+	cut := end
+	for cut > start && (s[cut-1] == '.' || s[cut-1] == ',') {
+		cut--
+	}
+	if cut == end || cut == start {
+		return end
+	}
+	if end == len(s) || strings.ContainsRune(" \t\r\n\"'`)]", rune(s[end])) {
+		return cut
+	}
+	return end
+}
+
+// handOffToken is a one-time code a product hands a person to paste into
+// an agent, such as a Laze connect link token (lzl_alk_<id>.<secret>):
+// it works once, for minutes, so it goes to the agent as it is.
+var handOffToken = regexp.MustCompile(`^lzl_[A-Za-z0-9_]+\.[0-9a-f]{32,}[.,]*$`)
+
+// IsHandOffToken is whether v is a one-time code meant for the agent.
+func IsHandOffToken(v string) bool { return handOffToken.MatchString(v) }
 
 // vendorKinds are the rules that match on a vendor's prefix, whose body a
 // placeholder can fill with too little randomness to be minted.
@@ -137,7 +169,41 @@ func suggestName(text string, d Detected) string {
 			return strings.ToUpper(m[1]) + "_API_KEY"
 		}
 	}
+	if n := serviceName(text[max(0, d.Start-nameLookback):d.Start]); n != "" {
+		return n
+	}
 	return name
+}
+
+var (
+	// urlHost is the host of a link: https://laze.so/docs gives laze.so.
+	urlHost = regexp.MustCompile(`(?i)https?://([a-z0-9.-]+)`)
+	// credentialWord is what the words right before a value call it.
+	credentialWord = regexp.MustCompile(`(?i)(api[ _-]?key|access[ _-]?token|auth[ _-]?token|token|password|passwd|key|secret)\W*$`)
+)
+
+// serviceName names a secret by the site the text links to before it and
+// what the text calls it: "read https://laze.so/... with the token X" is
+// LAZE_TOKEN. "" when no link comes before the value.
+func serviceName(before string) string {
+	hosts := urlHost.FindAllStringSubmatch(before, -1)
+	if len(hosts) == 0 {
+		return ""
+	}
+	labels := strings.Split(strings.Trim(hosts[len(hosts)-1][1], ".-"), ".")
+	site := labels[0]
+	if len(labels) >= 2 {
+		site = labels[len(labels)-2]
+	}
+	site = strings.ToUpper(strings.ReplaceAll(site, "-", "_"))
+	what := "SECRET"
+	if m := credentialWord.FindStringSubmatch(before); m != nil {
+		what = strings.ToUpper(strings.NewReplacer(" ", "_", "-", "_").Replace(m[1]))
+	}
+	if n := site + "_" + what; envName.MatchString(n) {
+		return n
+	}
+	return ""
 }
 
 // vendorNames name a vendor_api_key by its prefix, first match wins.

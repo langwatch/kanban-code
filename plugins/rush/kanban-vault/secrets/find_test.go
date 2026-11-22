@@ -180,3 +180,43 @@ func TestFindTypedPasswords(t *testing.T) {
 		}
 	}
 }
+
+func TestFindLeavesALazeConnectTokenToTheAgent(t *testing.T) {
+	token := "lzl_alk_0a1b2c3d4e5f607182.9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0"
+	prompt := `Join my Laze workspace as "Pat's Claude": read https://laze.so/docs/agents/connect.md and follow it with the token ` + token + "."
+	if found := Find(prompt); len(found) != 0 {
+		t.Fatalf("a connect token is offered to the vault: %+v", found)
+	}
+	if !IsHandOffToken(token) || IsHandOffToken("lzl_alk_1.short") {
+		t.Fatal("hand-off shape")
+	}
+}
+
+func TestFindStopsAValueAtTheFullStopThatEndsItsSentence(t *testing.T) {
+	cases := []struct{ text, value string }{
+		{"use the token Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0. Then run it", "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0"},
+		{"use the token Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0.", "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0"},
+		{"Authorization: Bearer Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1.", "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1"},
+		{"the token Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0, then the next step", "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0"},
+	}
+	for _, c := range cases {
+		found := Find(c.text)
+		if len(found) != 1 || found[0].Value != c.value || c.text[found[0].Start:found[0].End] != c.value {
+			t.Errorf("%q: got %+v", c.text, found)
+		}
+	}
+}
+
+func TestFindNamesAnUnnamedValueAfterTheSiteTheTextLinks(t *testing.T) {
+	cases := []struct{ text, name string }{
+		{"read https://acme.example.org/setup and use the token Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0 there", "EXAMPLE_TOKEN"},
+		{"sign in at https://my-shop.io with the password Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0", "MY_SHOP_PASSWORD"},
+		{"my api key: h9Kd2Lm4Nq7Pr1Ts5Vw8Xz3", "SECRET"},
+	}
+	for _, c := range cases {
+		found := Find(c.text)
+		if len(found) != 1 || found[0].SuggestedName != c.name {
+			t.Errorf("%q: got %+v", c.text, found)
+		}
+	}
+}

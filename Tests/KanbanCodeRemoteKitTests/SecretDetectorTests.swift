@@ -465,6 +465,41 @@ struct PastedSecretTests {
         }
     }
 
+    @Test("A Laze connect prompt goes to the agent with its token as it is")
+    func lazeConnectToken() {
+        let token = "lzl_alk_0a1b2c3d4e5f607182.9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0"
+        let prompt = #"Join my Laze workspace as "Pat's Claude": read https://laze.so/docs/agents/connect.md and follow it with the token "# + token + "."
+        #expect(SecretDetector.find(in: prompt).isEmpty)
+        #expect(SecretDetector.proposals(in: prompt, existingNames: []).isEmpty)
+        #expect(SecretDetector.isHandOffToken(token))
+        #expect(!SecretDetector.isHandOffToken("lzl_alk_1.short"))
+    }
+
+    @Test("A value stops at the full stop or comma that ends its sentence")
+    func sentenceEnd() {
+        let value = "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0"
+        for text in ["use the token \(value). Then run it", "use the token \(value).", "the token \(value), then the next step"] {
+            let found = SecretDetector.find(in: text)
+            #expect(found.count == 1 && found.first?.value == value, "\(text)")
+            #expect(found.first.map { String(text[$0.range]) } == value, "\(text)")
+        }
+        #expect(SecretDetector.find(in: "Authorization: Bearer Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1.").first?.value == "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1")
+    }
+
+    @Test("An unnamed value is named by the words before it or the site the text links")
+    func contextNames() {
+        let value = "Zq7Wx3Rt9Lp2Mn8Kv4Bc6Hd1Fg5Js0"
+        let cases: [(String, String)] = [
+            ("read https://acme.example.org/setup and use the token \(value) there", "EXAMPLE_TOKEN"),
+            ("sign in at https://my-shop.io with the password \(value)", "MY_SHOP_PASSWORD"),
+            ("long text, then our billing token is \(value)", "BILLING_TOKEN"),
+            ("my api key: \(value)", "SECRET"),
+        ]
+        for (text, name) in cases {
+            #expect(SecretDetector.find(in: text).first?.suggestedName == name, "\(text)")
+        }
+    }
+
     @Test("A taken name gets the next free suffix")
     func unique() {
         #expect(SecretDetector.uniqueName("OPENAI_API_KEY", existing: []) == "OPENAI_API_KEY")
@@ -513,10 +548,10 @@ struct PastedSecretTests {
         } add: { p, replacing in
             added.append(p.name + (replacing ? " (replace)" : "")); return nil
         }
-        #expect(added == ["SECRET", "OPENAI_API_KEY_2_2", "GITHUB_TOKEN"])
+        #expect(added == ["OPENAI_API_KEY", "OPENAI_API_KEY_2_2", "GITHUB_TOKEN"])
         #expect(compared.isEmpty)
         #expect(ok.error == nil && ok.remaining.isEmpty && ok.replace == nil)
-        #expect(ok.text.hasPrefix("a {{vault:SECRET}} b {{vault:OPENAI_API_KEY_2_2}} c {{vault:GITHUB_TOKEN}}\n\n("))
+        #expect(ok.text.hasPrefix("a {{vault:OPENAI_API_KEY}} b {{vault:OPENAI_API_KEY_2_2}} c {{vault:GITHUB_TOKEN}}\n\n("))
 
         var calls = 0
         let failed = await SecretDetector.save(offers, in: text, existingNames: []) { _ in .absent } add: { _, _ in
@@ -524,7 +559,7 @@ struct PastedSecretTests {
         }
         #expect(failed.error == "Could not save OPENAI_API_KEY_2: vault locked")
         #expect(failed.remaining.map(\.value) == [other, Self.github])
-        #expect(failed.text.contains("{{vault:SECRET}}") && failed.text.contains(other) && failed.text.contains(Self.github))
+        #expect(failed.text.contains("{{vault:OPENAI_API_KEY}}") && failed.text.contains(other) && failed.text.contains(Self.github))
     }
 
     @Test("A typed name the vault holds asks before its value is replaced")
