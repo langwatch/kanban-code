@@ -169,6 +169,7 @@ final class ServerMaster {
     func start() async {
         installHooks()
         store.dispatch(.localMachineLoaded(identity))
+        store.dispatch(.knownMachineNamesLoaded(KnownMachinesStore(basePath: home).read()))
         await store.loadSettingsAndCache()
 
         let peerSync = self.peerSync

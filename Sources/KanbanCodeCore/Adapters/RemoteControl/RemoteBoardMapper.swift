@@ -209,9 +209,10 @@ extension AppState {
         return out
     }
 
-    /// Names of the peer masters seen so far, by machine id.
+    /// Names of the peer masters seen so far, by machine id: what they
+    /// report now, else the last name they reported.
     public var peerMachineNames: [String: String] {
-        var out: [String: String] = [:]
+        var out = knownMachineNames
         for status in peerStatuses.values {
             if let machine = status.machine { out[machine.id] = machine.name }
         }

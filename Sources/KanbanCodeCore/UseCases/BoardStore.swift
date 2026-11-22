@@ -287,6 +287,10 @@ public final class AppState: @unchecked Sendable {
     public var localProjectSlugs: [String: String] = [:] { didSet { cardInputsVersion &+= 1 } }
     /// Live state of every configured peer, by `PeerConfig.id`.
     public var peerStatuses: [String: PeerStatus] = [:] { didSet { cardInputsVersion &+= 1 } }
+    /// The last name each peer master reported, by machine id, kept across
+    /// launches (`KnownMachinesStore`), so a card on a peer that is not
+    /// connected still shows its name.
+    public var knownMachineNames: [String: String] = [:] { didSet { cardInputsVersion &+= 1 } }
     /// Local copies of the transcripts of cards other masters own, by
     /// session id; the cards read their chat from here.
     public var peerTranscriptPaths: [String: String] = [:] { didSet { cardInputsVersion &+= 1 } }
@@ -522,7 +526,8 @@ public final class AppState: @unchecked Sendable {
                     link.projectPath = local
                 }
                 let known = machines[ownerId]
-                owner = CardOwner(id: ownerId, name: known?.name ?? ownerId, online: known?.online ?? false)
+                owner = CardOwner(id: ownerId, name: known?.name ?? knownMachineNames[ownerId] ?? ownerId,
+                                  online: known?.online ?? false)
                 // The chat of a card another master runs reads its local copy.
                 if let sid = link.sessionLink?.sessionId, let mirrored = peerTranscriptPaths[sid] {
                     link.sessionLink?.sessionPath = mirrored
@@ -855,6 +860,8 @@ public enum Action: Sendable {
     // Peer sync
     /// This machine's identity, loaded at startup.
     case localMachineLoaded(MachineIdentity)
+    /// The last names of peer masters, by machine id, loaded at startup.
+    case knownMachineNamesLoaded([String: String])
     /// A page of cards pulled from the peer with machine id `peer`.
     case peerLinksMerged(peer: String, links: [Link])
     case peerStatusChanged(PeerStatus)
@@ -1007,6 +1014,8 @@ public enum Effect: Sendable {
     case persistLinks([Link])
     case upsertLink(Link)
     case removeLink(String) // id
+    /// Rewrites the last known names of peer masters (`KnownMachinesStore`).
+    case persistKnownMachineNames([String: String])
     /// Rewrites the tombstones kept in links.json.
     case persistTombstones([Link])
     case createTmuxSession(cardId: String, name: String, path: String, isExtra: Bool = false)
@@ -3035,6 +3044,12 @@ public enum Reducer {
             state.localMachineAlwaysOn = identity.alwaysOn == true
             return []
 
+        case .knownMachineNamesLoaded(let names):
+            // A name a peer reported this run is newer than the stored one.
+            let merged = names.merging(state.knownMachineNames) { _, live in live }
+            if merged != state.knownMachineNames { state.knownMachineNames = merged }
+            return []
+
         case .peerLinksMerged(let peer, let links):
             return reducePeerLinksMerged(state: state, peer: peer, incoming: links)
 
@@ -3049,6 +3064,11 @@ public enum Reducer {
 
         case .peerStatusChanged(let status):
             if state.peerStatuses[status.peerId] != status { state.peerStatuses[status.peerId] = status }
+            if let machine = status.machine, !machine.name.isEmpty,
+               state.knownMachineNames[machine.id] != machine.name {
+                state.knownMachineNames[machine.id] = machine.name
+                return [.persistKnownMachineNames(state.knownMachineNames)]
+            }
             return []
 
         case .peerTranscriptsMirrored(let paths):

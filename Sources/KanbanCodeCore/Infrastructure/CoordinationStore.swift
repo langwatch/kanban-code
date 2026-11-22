@@ -3,12 +3,15 @@ import Foundation
 /// Persistent store for Link records in ~/.kanban-code/links.json.
 /// Atomic writes, file locking, corruption recovery.
 public actor CoordinationStore {
+    /// The Kanban Code home this store keeps its files in.
+    public let basePath: String
     private let filePath: String
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(basePath: String? = nil) {
         let base = basePath ?? (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
+        self.basePath = base
         self.filePath = (base as NSString).appendingPathComponent("links.json")
 
         let encoder = JSONEncoder()

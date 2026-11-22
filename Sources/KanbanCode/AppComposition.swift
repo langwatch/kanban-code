@@ -173,6 +173,7 @@ final class AppComposition {
         // so every card this Mac stamps carries it.
         let identity = MachineIdentityStore().loadOrCreate(defaultName: RemoteControlServer.defaultHostName)
         boardStore.dispatch(.localMachineLoaded(identity))
+        boardStore.dispatch(.knownMachineNamesLoaded(KnownMachinesStore().read()))
         let peerSync = PeerSync(identity: identity, peers: Self.readPeers()) { [weak boardStore] action in
             await MainActor.run { boardStore?.dispatch(action) }
         }

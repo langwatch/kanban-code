@@ -18,6 +18,7 @@ public actor EffectHandler {
     private let humanMessageLog: HumanMessageLog
     private let conversationStore: ConversationStore
     private let remoteMachines: (any RemoteMachineControl)?
+    private let knownMachines: KnownMachinesStore
     /// The channels home when it is another master: channel writes go there.
     private var channelsHome: (@Sendable () async -> ChannelsHomeRoute?)?
 
@@ -116,6 +117,7 @@ public actor EffectHandler {
         self.humanMessageLog = humanMessageLog ?? HumanMessageLog()
         self.conversationStore = conversationStore ?? ConversationStore()
         self.remoteMachines = remoteMachines
+        self.knownMachines = KnownMachinesStore(basePath: coordinationStore.basePath)
     }
 
     public func execute(_ effect: Effect, dispatch: @MainActor @Sendable (Action) -> Void) async {
@@ -414,6 +416,13 @@ public actor EffectHandler {
             } catch {
                 KanbanCodeLog.warn("effect", "sendChannelMessageToDisk failed: \(error)")
                 await dispatch(.setError("Failed to send: \(error.localizedDescription)"))
+            }
+
+        case .persistKnownMachineNames(let names):
+            do {
+                try knownMachines.write(names)
+            } catch {
+                KanbanCodeLog.warn("effect", "persistKnownMachineNames failed: \(error)")
             }
 
         case .loadChannelReadState:

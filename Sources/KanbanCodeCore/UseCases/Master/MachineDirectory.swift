@@ -104,13 +104,21 @@ extension AppState {
             ?? peerStatuses.values.first { $0.machine?.id == owner }?.machine?.name
     }
 
+    /// The name of the peer master with this machine id: what it reports
+    /// now, else the last name it reported, also from an earlier launch.
+    /// nil for a machine never seen.
+    public func peerMachineName(_ machineId: String) -> String? {
+        peerStatuses.values.first { $0.machine?.id == machineId }?.machine?.name
+            ?? knownMachineNames[machineId]
+    }
+
     /// The line of a card moving between masters, with how far its
     /// transcript copy got; nil when the card is not moving.
     public func handoverLine(cardId: String) -> String? {
         guard let link = links[cardId], link.migrating == true else { return nil }
         func name(_ id: String?) -> String {
             guard let id else { return "another master" }
-            return peerStatuses.values.first { $0.machine?.id == id }?.machine?.name ?? id
+            return peerMachineName(id) ?? id
         }
         var text = isOwnedLocally(link)
             ? "Moving here from \(name(link.ownerRev?.machine))"

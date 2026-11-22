@@ -389,7 +389,7 @@ extension MasterEngine {
     public func peerDisplayName(_ machineId: String) -> String { peerName(machineId) }
 
     func peerName(_ machineId: String) -> String {
-        store.state.peerStatuses.values.first { $0.machine?.id == machineId }?.machine?.name ?? machineId
+        store.state.peerMachineName(machineId) ?? machineId
     }
 
     /// Hands a card that never ran to a peer, which launches it there.
