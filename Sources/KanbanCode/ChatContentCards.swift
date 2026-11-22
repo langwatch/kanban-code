@@ -133,6 +133,9 @@ struct ToolCallCard: View, Equatable {
     let rawInputJSON: Data?
     var toolUseId: String?
     var resultText: String?
+    /// The input fields the reader kept, which for a Code Mode script holds
+    /// the calls it made.
+    var inputMap: [String: String] = [:]
     var showBackground: Bool = true
     /// When true, the card starts expanded. Resets to false when user manually toggles.
     var autoExpand: Bool = false
@@ -141,7 +144,7 @@ struct ToolCallCard: View, Equatable {
     @State private var userToggled = false
 
     nonisolated static func == (lhs: ToolCallCard, rhs: ToolCallCard) -> Bool {
-        lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON && lhs.autoExpand == rhs.autoExpand && lhs.highlight == rhs.highlight
+        lhs.name == rhs.name && lhs.displayText == rhs.displayText && lhs.rawInputJSON == rhs.rawInputJSON && lhs.inputMap == rhs.inputMap && lhs.resultText == rhs.resultText && lhs.autoExpand == rhs.autoExpand && lhs.highlight == rhs.highlight
     }
 
     /// The search scans tool text too, so a card holding the match opens itself.
@@ -186,6 +189,8 @@ struct ToolCallCard: View, Equatable {
             return ("WebFetch", short, nil, nil, false)
         case "WebSearch":
             return ("WebSearch", extractField("query") ?? "", nil, nil, false)
+        case CodeModeTranscript.replToolName:
+            return (name, displayText == name ? "" : displayText, nil, nil, false)
         default:
             return (name, "", nil, nil, false)
         }
@@ -293,6 +298,10 @@ struct ToolCallCard: View, Equatable {
                 }
             }
 
+            if name == CodeModeTranscript.replToolName {
+                replDetail
+            }
+
             if name == "Bash", let cmd = extractField("command") {
                 SelectableMarkdownText(
                     content: .plain(cmd),
@@ -321,6 +330,47 @@ struct ToolCallCard: View, Equatable {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
             }
+        }
+    }
+}
+
+extension ToolCallCard {
+    /// A Code Mode script opened: what it says it does, the calls it made,
+    /// then its code. Its result follows like any other call's.
+    @ViewBuilder
+    fileprivate var replDetail: some View {
+        if let description = extractField(CodeModeTranscript.InputKey.description), !description.isEmpty {
+            Text(description)
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        if let calls = inputMap[CodeModeTranscript.InputKey.calls], !calls.isEmpty {
+            SelectableMarkdownText(
+                content: .plain(calls),
+                appearance: .init(
+                    font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+                    foregroundColor: .labelColor
+                ),
+                highlight: highlight
+            )
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
+        }
+        if let code = extractField(CodeModeTranscript.InputKey.code), !code.isEmpty {
+            SelectableMarkdownText(
+                content: .plain(firstLines(code, limit: 40)),
+                appearance: .init(
+                    font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+                    foregroundColor: .white
+                ),
+                highlight: highlight,
+                lineLimit: 40
+            )
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }

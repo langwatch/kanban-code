@@ -14,7 +14,7 @@ public enum RemoteTranscriptMapper {
     /// note.
     public static func messages(from turns: [ConversationTurn]) -> [RemoteMessage] {
         var out: [RemoteMessage] = []
-        for turn in turns {
+        for turn in CodeModeTranscript.fold(turns) {
             let at = turn.timestamp.flatMap(parseDate)
             var index = 0
             func add(_ role: RemoteMessage.Role, _ text: String, detail: String? = nil) {

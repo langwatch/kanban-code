@@ -274,9 +274,21 @@ public enum TranscriptReader {
                 let content = obj["content"] as? String, !content.isEmpty
             else { return nil }
             return obj
+        case "attachment":
+            return Self.pollEventsText(obj) == nil ? nil : obj
         default:
             return nil
         }
+    }
+
+    /// The envelopes of a Code Mode `poll_events` attachment, the one record
+    /// some script outcomes reach the transcript through.
+    static func pollEventsText(_ obj: [String: Any]) -> String? {
+        guard let attachment = obj["attachment"] as? [String: Any],
+            attachment["type"] as? String == "poll_events",
+            let envelopes = attachment["envelopes"] as? [String], !envelopes.isEmpty
+        else { return nil }
+        return envelopes.joined(separator: "\n")
     }
 
     /// Runs `body` in an autorelease pool where Foundation has one (Darwin);
@@ -562,23 +574,30 @@ public enum TranscriptReader {
                         guard let data = line.data(using: .utf8),
                               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = obj["type"] as? String,
-                              type == "user" || type == "assistant" || type == "queue-operation" else { continue }
+                              type == "user" || type == "assistant" || type == "queue-operation"
+                                || (type == "attachment" && Self.pollEventsText(obj) != nil) else { continue }
 
                         // Skip caveat wrapper messages entirely
                         if type == "user" && JsonlParser.isCaveatMessage(obj) { continue }
 
                         // Stdout responses display as assistant-style turns
-                        let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : (type == "queue-operation" ? "user" : type)
+                        let role = (type == "user" && JsonlParser.isLocalCommandStdout(obj)) ? "assistant" : (type == "queue-operation" || type == "attachment" ? "user" : type)
 
                         let blocks: [ContentBlock]
                         let textPreview: String
 
-                        if type == "queue-operation" {
+                        if type == "attachment", let envelopes = Self.pollEventsText(obj) {
+                            blocks = [Self.codeModeEventBlock(envelopes)]
+                            textPreview = "(empty)"
+                        } else if type == "queue-operation" {
                             guard let op = obj["operation"] as? String,
                                   op == "enqueue",
                                   let content = obj["content"] as? String,
                                   !content.isEmpty else { continue }
-                            if content.contains("<task-notification>") {
+                            if CodeModeTranscript.isEventEnvelope(content) {
+                                blocks = [Self.codeModeEventBlock(content)]
+                                textPreview = "(empty)"
+                            } else if content.contains("<task-notification>") {
                                 guard let summary = Self.parseTaskNotification(content) else { continue }
                                 blocks = [ContentBlock(kind: .text, text: summary)]
                                 textPreview = summary
@@ -783,10 +802,18 @@ public enum TranscriptReader {
         let role: String
         let blocks: [ContentBlock]
         let textPreview: String
-        if type == "queue-operation" {
+        if type == "attachment" {
+            guard let envelopes = Self.pollEventsText(obj) else { return nil }
+            role = "user"
+            blocks = [Self.codeModeEventBlock(envelopes)]
+            textPreview = "(empty)"
+        } else if type == "queue-operation" {
             guard let content = obj["content"] as? String, !content.isEmpty else { return nil }
             role = "user"
-            if content.contains("<task-notification>") {
+            if CodeModeTranscript.isEventEnvelope(content) {
+                blocks = [Self.codeModeEventBlock(content)]
+                textPreview = "(empty)"
+            } else if content.contains("<task-notification>") {
                 guard let summary = Self.parseTaskNotification(content) else { return nil }
                 blocks = [ContentBlock(kind: .text, text: summary)]
                 textPreview = summary
@@ -867,6 +894,12 @@ public enum TranscriptReader {
             turn.contentBlocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n")
         }
         for turn in turns.reversed() {
+            // A queued delivery with no text (a Code Mode event) has nothing
+            // to be matched by, and a turn of tool results delivers nothing.
+            if text(turn).isEmpty {
+                kept.append(turn)
+                continue
+            }
             if turn.isQueued {
                 if let n = delivered[text(turn)], n > 0 {
                     delivered[text(turn)] = n - 1
@@ -896,6 +929,12 @@ public enum TranscriptReader {
             return "\(icon) \(summary)"
         }
         return "\(icon) Background task \(status)"
+    }
+
+    /// A Code Mode event delivery, kept as a result of the REPL tool so it
+    /// never reads as a message someone typed.
+    static func codeModeEventBlock(_ text: String) -> ContentBlock {
+        ContentBlock(kind: .toolResult(toolName: CodeModeTranscript.replToolName, toolUseId: nil), text: CodeModeTranscript.compactDelivery(text))
     }
 
     /// Load base64-encoded images from a user turn at a specific byte offset.
@@ -956,6 +995,11 @@ public enum TranscriptReader {
             if let stdout = JsonlParser.parseLocalCommandStdout(text) {
                 return [ContentBlock(kind: .text, text: stdout)]
             }
+            // Code Mode event deliveries are the harness talking, folded into
+            // the script they answer by CodeModeTranscript.fold.
+            if CodeModeTranscript.isEventEnvelope(text) {
+                return [Self.codeModeEventBlock(text)]
+            }
             // Parse task notifications (background command completions)
             if text.contains("<task-notification>") {
                 if let summary = Self.parseTaskNotification(text) {
@@ -989,7 +1033,9 @@ public enum TranscriptReader {
             case "tool_result":
                 let toolUseId = block["tool_use_id"] as? String
                 let resultText: String
-                if let content = block["content"] as? String {
+                if let content = block["content"] as? String, CodeModeTranscript.isEventEnvelope(content) {
+                    resultText = CodeModeTranscript.compactDelivery(content)
+                } else if let content = block["content"] as? String {
                     resultText = String(content.prefix(10_240))
                 } else if let contentArr = block["content"] as? [[String: Any]] {
                     resultText = contentArr.compactMap { $0["text"] as? String }.joined(separator: "\n").prefix(10_240).description

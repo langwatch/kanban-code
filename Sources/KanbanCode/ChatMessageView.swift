@@ -320,7 +320,7 @@ struct ChatMessageView: View, Equatable {
                         if !collapses || runIsOpen {
                         ForEach(group.items.indices, id: \.self) { ti in
                             if ti > 0 { Divider().padding(.leading, 8) }
-                            if case .toolUse(let name, _, let toolUseId) = group.items[ti].paired.block.kind {
+                            if case .toolUse(let name, let inputMap, let toolUseId) = group.items[ti].paired.block.kind {
                                 let isLast = hasLastToolCall && gi == groups.count - 1 && ti == group.items.count - 1
                                 ToolCallCard(
                                     name: name,
@@ -328,6 +328,7 @@ struct ChatMessageView: View, Equatable {
                                     rawInputJSON: group.items[ti].paired.block.rawInputJSON,
                                     toolUseId: toolUseId,
                                     resultText: group.items[ti].paired.resultBlock?.text,
+                                    inputMap: inputMap,
                                     showBackground: false,
                                     autoExpand: isLast,
                                     highlight: searchHighlight
@@ -359,13 +360,14 @@ struct ChatMessageView: View, Equatable {
             if !trimmed.isEmpty {
                 truncatedTextBlock(trimmed, blockIndex: paired.index, font: .systemFont(ofSize: 13))
             }
-        case .toolUse(let name, _, let toolUseId):
+        case .toolUse(let name, let inputMap, let toolUseId):
             ToolCallCard(
                 name: name,
                 displayText: paired.block.text,
                 rawInputJSON: paired.block.rawInputJSON,
                 toolUseId: toolUseId,
                 resultText: paired.resultBlock?.text,
+                inputMap: inputMap,
                 showBackground: !suppressBackground,
                 autoExpand: hasLastToolCall && isLastBlock,
                 highlight: searchHighlight

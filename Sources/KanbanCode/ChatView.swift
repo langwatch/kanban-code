@@ -814,18 +814,25 @@ private struct ChatMessageList: View {
                             .padding(.vertical, 8)
                     }
 
-                    let visibleTurns = renderedTurns
+                    let visibleTurns = CodeModeTranscript.fold(renderedTurns)
                     let groupInfo = Self.computeGroupInfo(turns: visibleTurns)
                     let toolResults = Self.computeToolResults(turns: visibleTurns)
                     let turnGroups = Self.groupConsecutiveToolTurns(turns: visibleTurns)
-                    let newestGroupId = turnGroups.last?.first?.lineNumber
+                    // Tool results left after a run draw nothing, so they do not
+                    // make the run behind them an old one.
+                    let newestGroupId = turnGroups.last {
+                        $0.count > 1 || ChatMessageView.turnHasContent($0[0])
+                    }?.first?.lineNumber
                     let rows = ChatTranscript.weaveRows(groups: turnGroups, ranges: collapsedRanges)
                     // Find the turn containing the last tool call in the conversation.
                     // This turn's last tool call will be auto-expanded.
                     let lastToolCallLN: Int? = {
                         for turn in turns.reversed() {
                             guard turn.role == "assistant" else { continue }
-                            if turn.contentBlocks.contains(where: { if case .toolUse = $0.kind { return true }; return false }) {
+                            if turn.contentBlocks.contains(where: {
+                                if case .toolUse = $0.kind { return !CodeModeTranscript.isFoldedAway($0) }
+                                return false
+                            }) {
                                 return turn.lineNumber
                             }
                         }
@@ -1305,21 +1312,36 @@ private struct ChatMessageList: View {
         return result
     }
     /// Precompute tool result pairing: maps turn lineNumber → (toolUseId → result ContentBlock).
-    private static func computeToolResults(turns: [ConversationTurn]) -> [Int: [String: ContentBlock]] {
+    ///
+    /// A result usually sits in the turn right after its call, but not always:
+    /// a Code Mode script reports back after the calls it made, or turns later
+    /// when it ran on in the background. Ids are unique, so any later turn can
+    /// hold the result.
+    static func computeToolResults(turns: [ConversationTurn]) -> [Int: [String: ContentBlock]] {
+        var results: [String: ContentBlock] = [:]
+        for turn in turns where turn.role == "user" {
+            for block in turn.contentBlocks {
+                if case .toolResult(_, let toolUseId) = block.kind, let id = toolUseId {
+                    results[id] = block
+                }
+            }
+        }
+        guard !results.isEmpty else { return [:] }
         var result: [Int: [String: ContentBlock]] = [:]
-        for (i, turn) in turns.enumerated() where turn.role == "assistant" {
-            // Look at the next turn for tool results
-            if i + 1 < turns.count && turns[i + 1].role == "user" {
-                let userTurn = turns[i + 1]
-                var map: [String: ContentBlock] = [:]
-                for block in userTurn.contentBlocks {
-                    if case .toolResult(_, let toolUseId) = block.kind, let id = toolUseId {
-                        map[id] = block
-                    }
+        for turn in turns where turn.role == "assistant" {
+            var map: [String: ContentBlock] = [:]
+            for block in turn.contentBlocks {
+                let id: String?
+                switch block.kind {
+                case .toolUse(_, _, let toolId), .askUserQuestion(_, let toolId), .agentCall(_, _, let toolId):
+                    id = toolId
+                default:
+                    id = nil
                 }
-                if !map.isEmpty {
-                    result[turn.lineNumber] = map
-                }
+                if let id, let found = results[id] { map[id] = found }
+            }
+            if !map.isEmpty {
+                result[turn.lineNumber] = map
             }
         }
         return result
