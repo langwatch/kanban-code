@@ -535,7 +535,8 @@ struct VaultSsoAwsTests {
         #expect(asked.status == .pending)
         let request = try #require(w.approvals.last)
         #expect(request.vault?.whys == [VaultBroker.ssoWhy])
-        #expect(request.needsDeviceKey)
+        // No device key: the owner confirms, and the Mac's sign-in mints.
+        #expect(!request.needsDeviceKey && request.requiresBiometry)
         #expect(request.unseal?.awsSso?.first?.role.ssoProfile == "lw-dev-sso")
         #expect(request.unseal?.aws.isEmpty == true)
         let asked_ = Asked()

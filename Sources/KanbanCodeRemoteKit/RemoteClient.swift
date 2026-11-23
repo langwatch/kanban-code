@@ -336,6 +336,14 @@ public struct RemoteClient: Sendable {
                                                                       note: note, noteFollows: noteFollows ? true : nil)))
     }
 
+    /// The AWS credentials from SSO an open vault approval asks for, minted
+    /// by this master from its own sign-in. A master that asks another to
+    /// mint for an approval the phone sent: only the Mac has the sign-in.
+    public func mintAttentionSso(id: String) async throws -> [String: AwsProcessCredentials] {
+        let response: AttentionSsoResponse = try await send(makeRequest("POST", "v1/attention/\(Self.escape(id))/sso"))
+        return response.credentials
+    }
+
     /// The note of a refusal sent with `noteFollows`; nil sends the
     /// refusal on without one.
     /// `typing` sends no note: the owner is writing one, wait longer.

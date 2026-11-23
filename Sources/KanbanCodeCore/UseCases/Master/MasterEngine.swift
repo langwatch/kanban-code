@@ -63,6 +63,12 @@ public final class MasterEngine {
     /// Hands the vault what a device unlocked for an approval, before the
     /// request resolves.
     public var vaultUnsealed: (@Sendable (String, VaultUnsealed) async -> Void)?
+    /// This machine's AWS SSO sign-in (the Mac's master): mints the SSO
+    /// credentials of an approval the answering device left out, as the
+    /// phone does. Nil where there is no sign-in (a server master).
+    public var ssoCredentials: AwsSso.Source?
+    /// Assumes a role with the SSO credentials, for a profile that names one.
+    public var ssoMint: VaultUnsealer.Mint = VaultUnsealer.liveMint
 
     /// Wakes the channels mirror after a channel write.
     let channelsPoke = AsyncSignal()

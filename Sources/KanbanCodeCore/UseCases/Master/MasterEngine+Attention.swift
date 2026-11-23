@@ -218,6 +218,9 @@ extension MasterEngine {
         if request.needsDeviceKey, !AttentionCopy.isDenial(resolution), unsealed == nil {
             throw RemoteHostError.conflict(AttentionAnswerCopy.needsDeviceKey)
         }
+        let ownedElsewhere = request.machineId.map { !store.state.localMachineId.isEmpty && $0 != store.state.localMachineId } ?? false
+        let unsealed = AttentionCopy.isDenial(resolution)
+            ? unsealed : try await withSsoCredentials(request, unsealed: unsealed, owned: !ownedElsewhere)
         let takesNote = request.kind == .vaultApproval && AttentionCopy.isDenial(resolution)
         let note = takesNote ? DenialNote.clean(note) : nil
         let noteFollows = takesNote && note == nil && noteFollows
@@ -248,6 +251,76 @@ extension MasterEngine {
             await vaultUnsealed?(id, unsealed)
         }
         store.dispatch(.attentionResolved(id: id, resolution: resolution, by: device, note: note, noteUntil: noteUntil))
+    }
+
+    /// `unsealed` with the AWS credentials from SSO the request asks for
+    /// and the answering device left out: a phone has no SSO sign-in, and
+    /// a build from before SSO profiles does not know they are asked for.
+    /// Decided from the request's own challenge, not from what the device
+    /// sent. This machine mints them from its sign-in; one without it
+    /// passes the answer on to the master that asked (`owned` false) or
+    /// refuses it.
+    func withSsoCredentials(_ request: AttentionRequest, unsealed: VaultUnsealed?, owned: Bool) async throws -> VaultUnsealed? {
+        guard request.kind == .vaultApproval else { return unsealed }
+        let missing = (request.unseal?.awsSso ?? []).filter { unsealed?.credentials[$0.profile] == nil }
+        guard !missing.isEmpty else { return unsealed }
+        let minted: [String: AwsProcessCredentials]
+        if ssoCredentials != nil {
+            minted = try await mintSso(request, missing)
+        } else if owned {
+            minted = try await peerSsoCredentials(request)
+        } else {
+            return unsealed
+        }
+        guard missing.allSatisfy({ minted[$0.profile] != nil }) else {
+            throw RemoteHostError.conflict(AttentionAnswerCopy.ssoNeedsMac)
+        }
+        var out = unsealed ?? VaultUnsealed(device: "sso")
+        out.credentials.merge(minted) { _, new in new }
+        return out
+    }
+
+    private func mintSso(_ request: AttentionRequest, _ mints: [VaultUnsealChallenge.AwsSsoMint]) async throws -> [String: AwsProcessCredentials] {
+        guard let ssoCredentials else { throw RemoteHostError.conflict(AttentionAnswerCopy.ssoNeedsMac) }
+        do {
+            return try await VaultUnsealer.ssoCredentials(mints, mint: ssoMint, sso: ssoCredentials)
+        } catch {
+            let text = String(describing: error)
+            KanbanCodeLog.warn("vault", "Minting AWS SSO credentials for \(request.id) failed: \(text)")
+            throw RemoteHostError.conflict(text)
+        }
+    }
+
+    /// Asks the online peer masters to mint, for a master without a
+    /// sign-in of its own (a server): the Mac among them has it. A peer's
+    /// own refusal (an expired sign-in) is what the device shows.
+    private func peerSsoCredentials(_ request: AttentionRequest) async throws -> [String: AwsProcessCredentials] {
+        let peers = Set(store.state.peerStatuses.values.filter(\.online).compactMap { $0.machine?.id })
+        var refusal: String?
+        for machineId in peers.sorted() {
+            guard let client = await peerClient(machineId: machineId) else { continue }
+            do {
+                return try await client.mintAttentionSso(id: request.id)
+            } catch RemoteClientError.conflict(let message) where message != AttentionAnswerCopy.ssoNeedsMac {
+                refusal = message
+            } catch {
+                KanbanCodeLog.info("vault", "Peer \(machineId) did not mint AWS SSO credentials for \(request.id): \(error)")
+            }
+        }
+        throw RemoteHostError.conflict(refusal ?? AttentionAnswerCopy.ssoNeedsMac)
+    }
+
+    /// The AWS credentials from SSO an open vault approval asks for, from
+    /// this machine's sign-in, for the master that owns it when that one
+    /// has none. Minted from this master's own copy of the request, so
+    /// the caller only names it.
+    public func mintAttentionSso(id: String) async throws -> [String: AwsProcessCredentials] {
+        guard let request = store.state.attentionRequests[id], request.isOpen, request.kind == .vaultApproval else {
+            throw RemoteHostError.notFound(AttentionAnswerCopy.gone)
+        }
+        let mints = request.unseal?.awsSso ?? []
+        guard !mints.isEmpty else { return [:] }
+        return try await mintSso(request, mints)
     }
 
     /// The note of a refusal answered with `noteFollows`: the vault sends

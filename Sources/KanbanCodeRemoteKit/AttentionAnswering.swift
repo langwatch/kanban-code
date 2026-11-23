@@ -8,9 +8,12 @@ public enum AttentionAnswerCopy {
     public static let sessionGone = "The session that asked is not running any more."
     public static let noteTooLate = "The refusal already reached the agent without a note."
     public static let needsDeviceKey = "Approving this unlocks a secret with the device's own key: answer it in Kanban Code on the Mac or the phone."
+    public static let ssoNeedsMac = "These AWS credentials come from the Mac's AWS SSO sign-in, and the machine that asked cannot reach it: approve this in Kanban Code on the Mac."
+    public static let abandoned = "This request closed: the command that asked stopped waiting."
 
     /// "This was already answered on the phone: Approve once."
     public static func alreadyAnswered(by: String?, resolution: String?) -> String {
+        if by == "abandoned" { return abandoned }
         let who: String = switch by {
         case "phone": " on the phone"
         case "mac": " on the Mac"
@@ -37,9 +40,17 @@ public enum AttentionAnswerGate {
         case confirmation
     }
 
-    public static func need(for request: AttentionRequest, option: String) -> Need {
+    /// `mintsSso`: this device mints AWS credentials from SSO itself (the
+    /// Mac). Any other device leaves them to the master, which mints them
+    /// on the Mac, so an approval that only asks for those is confirmed,
+    /// not unlocked.
+    public static func need(for request: AttentionRequest, option: String, mintsSso: Bool = false) -> Need {
         if AttentionCopy.isDenial(option) { return .nothing }
-        if let challenge = request.unseal, !challenge.isEmpty { return .deviceKey(challenge) }
+        if let challenge = request.unseal {
+            let mine = mintsSso ? challenge : challenge.sealedPart
+            if !mine.isEmpty { return .deviceKey(mine) }
+            if !challenge.isEmpty { return .confirmation }
+        }
         return request.requiresBiometry ? .confirmation : .nothing
     }
 
@@ -56,11 +67,11 @@ public enum AttentionAnswerGate {
     /// touch what the caller is isolated to.
     public static func pass(
         isolation: isolated (any Actor)? = #isolation,
-        _ request: AttentionRequest, option: String,
+        _ request: AttentionRequest, option: String, mintsSso: Bool = false,
         unlock: (VaultUnsealChallenge) async throws -> VaultUnsealed,
         confirm: () async -> Bool
     ) async throws -> Passed {
-        switch need(for: request, option: option) {
+        switch need(for: request, option: option, mintsSso: mintsSso) {
         case .nothing: return .send(nil)
         case .deviceKey(let challenge): return .send(try await unlock(challenge))
         case .confirmation: return await confirm() ? .send(nil) : .cancelled
@@ -177,6 +188,7 @@ public struct AttentionAnswerState: Sendable, Equatable {
 
     static func saysSettled(_ message: String) -> Bool {
         message.contains("already answered") || message.contains("already resolved") || message == AttentionAnswerCopy.gone
+            || message == AttentionAnswerCopy.abandoned
     }
 
     public mutating func clearNote() {

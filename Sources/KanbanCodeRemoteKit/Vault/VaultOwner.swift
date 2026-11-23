@@ -170,6 +170,17 @@ public struct VaultUnsealChallenge: Codable, Sendable, Equatable, Hashable {
 
     public var isEmpty: Bool { secrets.isEmpty && aws.isEmpty && (awsSso ?? []).isEmpty && reseal.isEmpty }
 
+    /// What only the device's own key can do: everything but the SSO
+    /// mints, which a master on the Mac does from its own sign-in.
+    public var sealedPart: VaultUnsealChallenge {
+        var out = self
+        out.awsSso = nil
+        return out
+    }
+
+    /// Approving needs the device's key, not only the owner's confirmation.
+    public var needsSealedKey: Bool { !sealedPart.isEmpty }
+
     /// What the device's audit record names for the AWS profiles it mints.
     public var awsRoles: [String] {
         aws.map { $0.role.roleArn ?? "session of \($0.key.name)" }
@@ -255,8 +266,18 @@ public enum VaultUnsealer {
                 throw AwsSts.StsError.keyGone(aws.key.name)
             }
         }
-        for aws in challenge.awsSso ?? [] {
-            out.credentials[aws.profile] = try await ssoCredentials(aws, mint: mint, sso: sso)
+        for (profile, credentials) in try await ssoCredentials(challenge.awsSso ?? [], mint: mint, sso: sso) {
+            out.credentials[profile] = credentials
+        }
+        return out
+    }
+
+    /// The credentials of every SSO mint, by AWS profile.
+    public static func ssoCredentials(_ mints: [VaultUnsealChallenge.AwsSsoMint], mint: Mint = liveMint,
+                                      sso: AwsSso.Source) async throws -> [String: AwsProcessCredentials] {
+        var out: [String: AwsProcessCredentials] = [:]
+        for aws in mints {
+            out[aws.profile] = try await ssoCredentials(aws, mint: mint, sso: sso)
         }
         return out
     }

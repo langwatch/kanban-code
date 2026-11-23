@@ -521,6 +521,10 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
         try await engine.noteAttention(id: id, note: note, typing: typing)
     }
 
+    public func mintAttentionSso(id: String) async throws -> [String: AwsProcessCredentials] {
+        try await engine.mintAttentionSso(id: id)
+    }
+
     public func reportPresence(_ presence: MacPresence) async {
         await engine.attentionCenter?.reportPresence(presence)
     }

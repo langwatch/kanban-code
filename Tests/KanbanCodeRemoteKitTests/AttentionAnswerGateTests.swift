@@ -47,6 +47,38 @@ struct AttentionAnswerGateTests {
         }
     }
 
+    private func ssoRequest(sealed: Bool) -> AttentionRequest {
+        var challenge = VaultUnsealChallenge(awsSso: [.init(profile: "aws:lw-dev", role: .sso(profile: "lw-dev-sso"),
+                                                            sessionName: "kanban-card_1")])
+        if sealed { challenge.secrets = [.init(name: "PROD", aliases: nil, sealed: "age-ciphertext")] }
+        return AttentionRequest(id: "vault_sso", cardId: "card_1", kind: .vaultApproval, title: "Card one wants AWS lw-dev access",
+                                body: "", options: ["Approve once", "Deny"], createdAt: Date(), requiresBiometry: true,
+                                unseal: challenge)
+    }
+
+    @Test func aPhoneConfirmsAnSsoOnlyApprovalAndLeavesTheMintToTheMaster() async throws {
+        let subject = ssoRequest(sealed: false)
+        #expect(!subject.needsDeviceKey)
+        #expect(AttentionAnswerGate.need(for: subject, option: "Approve once") == .confirmation)
+        let passed = try await AttentionAnswerGate.pass(subject, option: "Approve once", unlock: { _ in
+            Issue.record("the phone has no SSO sign-in to mint with")
+            throw MustNotRun()
+        }, confirm: { true })
+        #expect(passed == .send(nil))
+        // The Mac mints from its own sign-in, with its key.
+        #expect(AttentionAnswerGate.need(for: subject, option: "Approve once", mintsSso: true) == .deviceKey(subject.unseal!))
+    }
+
+    @Test func aMixedApprovalUnlocksOnlyTheSealedPartOnThePhone() {
+        let subject = ssoRequest(sealed: true)
+        #expect(subject.needsDeviceKey)
+        guard case .deviceKey(let challenge) = AttentionAnswerGate.need(for: subject, option: "Approve once") else {
+            Issue.record("a sealed secret needs the device key")
+            return
+        }
+        #expect(challenge.secrets.map(\.name) == ["PROD"] && (challenge.awsSso ?? []).isEmpty)
+    }
+
     @Test func approvingAnyOtherGuardedRequestConfirmsFirst() async throws {
         let subject = request(biometry: true, sealed: false)
         #expect(AttentionAnswerGate.need(for: subject, option: "Approve once") == .confirmation)

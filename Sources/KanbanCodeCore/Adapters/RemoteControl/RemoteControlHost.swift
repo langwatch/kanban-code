@@ -109,6 +109,10 @@ public protocol RemoteControlHost: AnyObject, Sendable {
     /// writing one, wait longer.
     func noteAttention(id: String, note: String?, typing: Bool) async throws
 
+    /// The AWS credentials from SSO an open vault approval asks for, from
+    /// this machine's sign-in, for the master that owns the approval.
+    func mintAttentionSso(id: String) async throws -> [String: AwsProcessCredentials]
+
     /// Presence the Mac reported, for the escalation of the requests here.
     func reportPresence(_ presence: MacPresence) async
 
@@ -218,6 +222,10 @@ extension RemoteControlHost {
 
     public func noteAttention(id: String, note: String?, typing: Bool) async throws {
         throw RemoteHostError.notFound("this host takes no notes on attention requests")
+    }
+
+    public func mintAttentionSso(id: String) async throws -> [String: AwsProcessCredentials] {
+        throw RemoteHostError.notFound("this host has no attention requests")
     }
 
     public func reportPresence(_ presence: MacPresence) async {}

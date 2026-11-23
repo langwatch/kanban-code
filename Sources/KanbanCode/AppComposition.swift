@@ -213,6 +213,7 @@ final class AppComposition {
         engine.cardTokenOwner = { [vault] token in await vault.cardTokens.issuedCard(of: token) }
         engine.cardHasToken = { [vault] cardId in await vault.cardTokens.hasToken(cardId: cardId) }
         engine.vaultUnsealed = { [vault] id, unsealed in await vault.broker.deliver(id: id, unsealed: unsealed) }
+        engine.ssoCredentials = MacVaultDevice.exportedSsoCredentials
         Task { await vault.start() }
 
         // Decisions agents wait on: Mac notification, then the phone.

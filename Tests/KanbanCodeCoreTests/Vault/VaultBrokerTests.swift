@@ -275,6 +275,40 @@ struct VaultBrokerTests {
         #expect(approvals.expired == [r.id!])
     }
 
+    @Test func aRequestWhoseCallerStoppedWaitingClosesAndReleasesNothing() async throws {
+        let (broker, store, approvals) = try await makeBroker(answer: nil)
+        await broker.configure(approvalTimeout: 60, abandonAfter: 1.5)
+        // `timeout 60 kv ...`: the command polls a while, then is killed.
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["ASK"]), caller: inside)
+        let id = try #require(r.id)
+        for _ in 0..<5 {
+            let polled = await broker.poll(id: id)
+            #expect(polled.status == .pending, "\(polled.message) \(approvals.closedBy)")
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(approvals.expired.isEmpty)
+        for _ in 0..<300 where approvals.lock.withLock({ approvals.expired.isEmpty }) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(approvals.closedBy[id] == "abandoned")
+        let done = await broker.poll(id: id)
+        #expect(done.status == .denied && done.values == nil)
+        #expect(await store.activeLease(cardId: "card_1", secret: "ASK") == nil)
+        #expect(AttentionAnswerCopy.alreadyAnswered(by: "abandoned", resolution: "Deny") == AttentionAnswerCopy.abandoned)
+    }
+
+    @Test func aRequestSomeoneStillWaitsOnStaysOpen() async throws {
+        let (broker, _, approvals) = try await makeBroker(answer: nil)
+        await broker.configure(approvalTimeout: 60, abandonAfter: 1.5)
+        let r = await broker.release(VaultReleaseRequest(mode: "run", names: ["ASK"]), caller: inside)
+        let id = try #require(r.id)
+        for _ in 0..<30 {
+            #expect(await broker.poll(id: id).status == .pending)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(approvals.expired.isEmpty)
+    }
+
     @Test func getNeverPrintsAskingSecrets() async throws {
         let (broker, _, approvals) = try await makeBroker(answer: "Approve once")
         #expect(await broker.release(VaultReleaseRequest(mode: "get", names: ["ASK"]), caller: inside).status == .denied)
@@ -634,7 +668,7 @@ struct VaultRestartTests {
         let again = VaultStore(directory: await store.directory, keys: await store.keys)
         let approvals = FakeApprovals(answer: answer)
         let broker = VaultBroker(store: again, jev: nil, approvals: approvals, machine: "test") { _ in "Card one" }
-        await broker.configure(approvalTimeout: 2, pollInterval: 0.02)
+        await broker.configure(approvalTimeout: 30, pollInterval: 0.02)
         await broker.restore()
         return (broker, again, approvals)
     }
@@ -665,7 +699,7 @@ struct VaultRestartTests {
         #expect(asked.status == .pending)
         let (after, _, _) = try await restarted(store, answer: AttentionRequest.vaultApprovalOptions[1])
         let r = await waitResult(after, try #require(asked.id))
-        #expect(r.status == .granted)
+        #expect(r.status == .granted, "\(r.message)")
         #expect(r.values?["ASK"] == "ask-value")
     }
 

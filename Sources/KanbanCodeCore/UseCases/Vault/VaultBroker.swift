@@ -364,6 +364,11 @@ public actor VaultBroker {
     /// How long a fetched result stays for other callers waiting on the
     /// same request.
     public var claimedResultLifetime: TimeInterval = 30
+    /// How long an open request stays without any caller polling it. A
+    /// caller polls every second or two and waits out a master restart
+    /// for up to two minutes; past this its command is gone (a `timeout`,
+    /// a killed tool call) and the request closes, releasing nothing.
+    public var abandonAfter: TimeInterval = 180
     /// AWS credentials a card got are handed to it again while they are
     /// valid for longer than this.
     public var awsReuseMargin: TimeInterval = 15 * 60
@@ -408,6 +413,10 @@ public actor VaultBroker {
         var joinedTo: String?
         /// When a caller first fetched the result.
         var claimedAt: Date?
+        /// When its caller last asked for the result: callers poll until
+        /// the answer comes, so a request no caller polls any more was
+        /// left by a command that stopped waiting.
+        var lastSeen: Date
     }
 
     /// AWS credentials handed to a card, kept in memory until they expire.
@@ -443,7 +452,7 @@ public actor VaultBroker {
 
     static let lockedWhy = "it opens only with your Touch ID or Face ID"
     static let mintWhy = "its long-lived AWS key opens only with your Touch ID or Face ID"
-    static let ssoWhy = "its credentials come from the Mac's AWS SSO sign-in, only when you approve on the Mac"
+    static let ssoWhy = "its credentials come from the Mac's AWS SSO sign-in, once you approve"
 
     private var pending: [String: Pending] = [:]
     /// Recent value checks, for `compare(_:caller:now:)`'s limit.
@@ -481,12 +490,14 @@ public actor VaultBroker {
 
     public func configure(approvalTimeout: TimeInterval? = nil, pollInterval: TimeInterval? = nil,
                           projectsOf: (@Sendable (String?) -> [String])? = nil,
-                          unclaimedResultLifetime: TimeInterval? = nil, claimedResultLifetime: TimeInterval? = nil) {
+                          unclaimedResultLifetime: TimeInterval? = nil, claimedResultLifetime: TimeInterval? = nil,
+                          abandonAfter: TimeInterval? = nil) {
         if let approvalTimeout { self.approvalTimeout = approvalTimeout }
         if let pollInterval { self.pollInterval = pollInterval }
         if let projectsOf { self.projectsOf = projectsOf }
         if let unclaimedResultLifetime { self.unclaimedResultLifetime = unclaimedResultLifetime }
         if let claimedResultLifetime { self.claimedResultLifetime = claimedResultLifetime }
+        if let abandonAfter { self.abandonAfter = abandonAfter }
     }
 
     // MARK: - Resolution
@@ -1368,11 +1379,12 @@ public actor VaultBroker {
             if let same = pending.first(where: {
                 $0.value.result == nil && ($0.key == open.key || $0.value.joinedTo == open.key) && Self.sameShape($0.value.action, action)
             }) {
+                pending[same.key]?.lastSeen = Date()
                 return VaultResponse(status: .pending, message: waiting, id: same.key, card: caller.cardId)
             }
             let joinedId = KSUID.generate(prefix: "vault")
             pending[joinedId] = Pending(action: action, caller: caller, result: nil, createdAt: now, everyUseAsks: everyUse,
-                                        request: open.value.request, joinedTo: open.key)
+                                        request: open.value.request, joinedTo: open.key, lastSeen: Date())
             await persist()
             return VaultResponse(status: .pending, message: waiting, id: joinedId, card: caller.cardId)
         }
@@ -1401,7 +1413,8 @@ public actor VaultBroker {
             vault: details,
             unseal: challenge.isEmpty ? nil : challenge
         )
-        pending[id] = Pending(action: action, caller: caller, result: nil, createdAt: now, everyUseAsks: everyUse, request: request)
+        pending[id] = Pending(action: action, caller: caller, result: nil, createdAt: now, everyUseAsks: everyUse, request: request,
+                              lastSeen: Date())
         await persist()
         for (s, why) in zip(secrets, whys) {
             await store.append(VaultAuditEntry(at: now, machine: machine, cardId: caller.cardId, sessionId: caller.sessionId,
@@ -1557,6 +1570,11 @@ public actor VaultBroker {
     private func waitForHuman(id: String) async {
         guard let approvals, let started = pending[id]?.createdAt else { return }
         while Date().timeIntervalSince(started) < approvalTimeout {
+            if isAbandoned(id) {
+                await approvals.close(id: id, resolution: "Deny", by: Self.abandonedBy)
+                await settle(id: id, approval: .deny, by: Self.abandonedBy)
+                return
+            }
             if var answer = await approvals.answer(of: id) {
                 let approval = VaultPolicy.approval(from: answer.resolution)
                 // A refusal whose device still shows the note field waits
@@ -1572,6 +1590,16 @@ public actor VaultBroker {
         }
         await approvals.close(id: id, resolution: "Deny", by: "timeout")
         await settle(id: id, approval: .deny, by: "timeout")
+    }
+
+    static let abandonedBy = "abandoned"
+
+    /// No caller of the request, or of one joined to it, polled it within
+    /// `abandonAfter`.
+    private func isAbandoned(_ id: String) -> Bool {
+        guard let p = pending[id], p.result == nil else { return false }
+        let lastSeen = pending.values.filter { $0.joinedTo == id && $0.result == nil }.map(\.lastSeen).reduce(p.lastSeen, max)
+        return Date().timeIntervalSince(lastSeen) > abandonAfter
     }
 
     private func settle(id: String, approval: VaultPolicy.Approval, by: String, note: String? = nil) async {
@@ -1640,9 +1668,12 @@ public actor VaultBroker {
                          note: String? = nil) async -> VaultResponse {
         switch (approval, p.action) {
         case (.deny, _):
-            let timedOut = by == "timeout"
+            let abandoned = by == Self.abandonedBy
+            let timedOut = by == "timeout" || abandoned
             let note = timedOut ? nil : note
-            let message = timedOut
+            let message = abandoned
+                ? "Nothing waited for this request any more, so it was closed without releasing anything. Ask again if it is still needed."
+                : timedOut
                 ? "No answer in \(VaultPolicy.span(approvalTimeout)), so it was denied. Ask again with a reason: kv request NAME --reason \"...\""
                 : note.map { "Rogerio denied it: \($0)" } ?? "Rogerio denied it."
             var command: String?
@@ -1800,8 +1831,9 @@ public actor VaultBroker {
                     $0.value.joinedTo == nil && Self.joinKey($0.value.action, caller: $0.value.caller) == key
                 })?.key
             }
+            // Its caller had the restart to wait out: it counts from now.
             pending[s.id] = Pending(action: s.action, caller: s.caller, result: nil, createdAt: s.createdAt,
-                                    everyUseAsks: s.everyUseAsks, request: s.request, joinedTo: joinedTo)
+                                    everyUseAsks: s.everyUseAsks, request: s.request, joinedTo: joinedTo, lastSeen: Date())
             restored += 1
             guard joinedTo == nil else { continue }
             await approvals.raise(s.request)
@@ -1836,6 +1868,7 @@ public actor VaultBroker {
             return VaultResponse(status: .denied, message: "no pending vault request \(id) (it expired or was already answered)", id: id)
         }
         guard let result = p.result else {
+            pending[id]?.lastSeen = Date()
             return VaultResponse(status: .pending, message: "still waiting for Rogerio's approval", id: id, card: p.caller.cardId)
         }
         claim(id, now: Date())

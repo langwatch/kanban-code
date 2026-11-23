@@ -33,7 +33,7 @@ public enum AwsSso {
             case .noCli:
                 return "The aws CLI is not installed on the Mac"
             case .onlyOnMac:
-                return "AWS credentials from SSO are minted on the Mac: approve this in Kanban Code on the Mac"
+                return "AWS credentials from SSO come from the Mac's sign-in, which this machine cannot reach: approve this in Kanban Code on the Mac"
             case .cannotNarrow(let profile):
                 return "\(profile) is read-only but has no role to narrow the SSO credentials with, so nothing is handed out"
             case .failed(let text):

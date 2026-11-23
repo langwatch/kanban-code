@@ -150,10 +150,17 @@ Feature: Vault projects, environments and card identity
     And kv waits as long, and says so when it starts waiting
     And after 12 hours it is denied by timeout
 
-  Scenario: A caller that gave up leaves its request open
+  Scenario: A caller that gave up closes its request
     Given a job whose own timeout ended its kv call
-    Then the request stays open for the rest of the 12 hours
-    And the same call made again waits on the same request
+    When no caller has polled the request for 3 minutes
+    Then the request closes as abandoned and releases nothing
+    And it leaves Needs you on the Mac and the phone
+    And the same call made again within those minutes waits on the same request
+
+  Scenario: A master restart does not abandon a request
+    Given an open request saved in pending.age
+    When its master restarts
+    Then the 3 minutes count from the restart, while its caller waits the restart out
 
   # Owner-only secrets
 
@@ -242,9 +249,22 @@ Feature: Vault projects, environments and card identity
     Then the approval shows "AWS SSO sign-in on the Mac expired and the browser login did not finish: run aws sso login --sso-session <session> on the Mac, then approve again"
     And the request stays open, so approving again after the sign-in releases it
 
-  Scenario: The phone cannot mint from SSO
-    When a request for an SSO-sourced profile is approved on the phone
-    Then the phone says to approve it on the Mac
+  Scenario: The phone approves SSO credentials the Mac mints
+    Given a request for an SSO-sourced profile and nothing sealed
+    When it is approved on the phone
+    Then the phone asks for Face ID and sends the approval without minting
+    And the Mac's master mints the credentials from its SSO sign-in, without the browser login
+    And a phone build from before SSO profiles is approved the same way
+
+  Scenario: A server master asks the Mac to mint
+    Given a request for an SSO-sourced profile raised on the box
+    When it is approved on the phone
+    Then the box asks its peer masters to mint (POST /v1/attention/{id}/sso), and the Mac mints from its own copy of the request
+    And a box whose peers cannot mint refuses with "approve this in Kanban Code on the Mac"
+
+  Scenario: A request with sealed secrets and SSO credentials
+    When it is approved on the phone
+    Then the phone unlocks the sealed secrets with its key and the master mints the SSO credentials
 
   Scenario: A deleted long-lived key says so
     Given an AWS profile whose long-lived key STS no longer knows

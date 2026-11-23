@@ -82,8 +82,9 @@ public struct AttentionRequest: Codable, Sendable, Equatable, Hashable, Identifi
         self.noteUntil = noteUntil
     }
 
-    /// Approving needs this device's vault key (Touch ID or Face ID).
-    public var needsDeviceKey: Bool { !(unseal?.isEmpty ?? true) }
+    /// Approving needs this device's vault key (Touch ID or Face ID). AWS
+    /// credentials from SSO alone do not: the Mac's master mints them.
+    public var needsDeviceKey: Bool { unseal?.needsSealedKey ?? false }
 
     public var isOpen: Bool { resolvedAt == nil }
 }
@@ -170,6 +171,17 @@ public enum DenialNote {
 }
 
 /// Body of `GET /v1/attention`.
+/// Response of `POST /v1/attention/{id}/sso`: the AWS credentials the
+/// master minted from its SSO sign-in for an open vault approval, by AWS
+/// profile.
+public struct AttentionSsoResponse: Codable, Sendable, Equatable {
+    public var credentials: [String: AwsProcessCredentials]
+
+    public init(credentials: [String: AwsProcessCredentials]) {
+        self.credentials = credentials
+    }
+}
+
 public struct AttentionListResponse: Codable, Sendable, Equatable {
     public var requests: [AttentionRequest]
 

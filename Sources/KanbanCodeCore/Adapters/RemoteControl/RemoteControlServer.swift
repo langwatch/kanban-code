@@ -714,6 +714,10 @@ public final class RemoteControlServer: Sendable {
                                             unsealed: resolve.unsealed, note: resolve.note,
                                             noteFollows: resolve.noteFollows ?? false)
             return .noContent
+        case ("POST", 3) where rest[2] == "sso":
+            // Credentials go back to the caller: only a master or the owner's device.
+            guard device.scope.actsForOwner else { return .error(403, "the \(device.scope.rawValue) scope cannot mint AWS credentials") }
+            return .json(AttentionSsoResponse(credentials: try await host.mintAttentionSso(id: rest[1])))
         case ("POST", 3) where rest[2] == "note":
             guard device.scope.actsForOwner else { return .error(403, "the \(device.scope.rawValue) scope cannot resolve attention requests") }
             guard let noted = try? JSONDecoder.remote.decode(AttentionNoteRequest.self, from: body) else {

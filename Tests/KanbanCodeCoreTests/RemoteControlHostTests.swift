@@ -84,7 +84,8 @@ struct RemoteControlHostTests {
         func cleanup() { try? FileManager.default.removeItem(atPath: dir) }
     }
 
-    private func makeHost(rush: RushCliAdapter = RushCliAdapter(executable: "/nonexistent/rush")) -> (MasterRemoteControlHost, BoardStore, SentPrompts) {
+    private func makeHost(rush: RushCliAdapter = RushCliAdapter(executable: "/nonexistent/rush"),
+                          configure: (MasterEngine) -> Void = { _ in }) -> (MasterRemoteControlHost, BoardStore, SentPrompts) {
         let tmux = SentPrompts()
         let dir = NSTemporaryDirectory() + "kanban-remote-host-\(UUID().uuidString)"
         let store = BoardStore(
@@ -104,6 +105,7 @@ struct RemoteControlHostTests {
             tmux: RoutingTmuxAdapter(rush: rush),
             registry: CodingAssistantRegistry()
         )
+        configure(engine)
         let host = MasterRemoteControlHost(engine: engine, rush: rush, runTmux: { commands.record($0, $1) }) { session in tmux.escape(session) }
         return (host, store, tmux)
     }
@@ -147,6 +149,108 @@ struct RemoteControlHostTests {
             unseal: VaultUnsealChallenge(secrets: [.init(name: "STRIPE", sealed: "AAAA")]))))
         try await host.resolveAttention(id: "vault_sealed2", resolution: "Deny", by: "phone")
         #expect(store.state.attentionRequests["vault_sealed2"]?.resolution == "Deny")
+    }
+
+    private final class Delivered: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _items: [String: VaultUnsealed] = [:]
+        private var _profiles: [String] = []
+        var items: [String: VaultUnsealed] { lock.withLock { _items } }
+        var profiles: [String] { lock.withLock { _profiles } }
+        func add(_ id: String, _ unsealed: VaultUnsealed) { lock.withLock { _items[id] = unsealed } }
+        func asked(_ profile: String) { lock.withLock { _profiles.append(profile) } }
+    }
+
+    private func ssoApproval(_ id: String, sealed: Bool = false) -> AttentionRequest {
+        var challenge = VaultUnsealChallenge(awsSso: [.init(profile: "aws:lw-dev", role: .sso(profile: "lw-dev-sso"),
+                                                            sessionName: "kanban-card_1")])
+        if sealed { challenge.secrets = [.init(name: "STRIPE", sealed: "AAAA")] }
+        return AttentionRequest(id: id, cardId: nil, kind: .vaultApproval, title: "A card wants AWS lw-dev access", body: "",
+                                options: AttentionRequest.vaultApprovalOptions, requiresBiometry: true, unseal: challenge)
+    }
+
+    private nonisolated static let ssoCredentials = AwsProcessCredentials(AccessKeyId: "ASIASSO", SecretAccessKey: "x", SessionToken: "t",
+                                                               Expiration: "2099-01-01T00:00:00Z")
+
+    @Test("a phone approval of AWS SSO credentials is minted by the Mac's master, even from a phone that sends nothing")
+    func ssoApprovalFromThePhone() async throws {
+        let delivered = Delivered()
+        let (host, store, _) = makeHost { engine in
+            engine.vaultUnsealed = { id, unsealed in delivered.add(id, unsealed) }
+            engine.ssoCredentials = { profile in delivered.asked(profile); return Self.ssoCredentials }
+        }
+        store.dispatch(.attentionRaised(ssoApproval("vault_sso")))
+        // A phone build from before SSO profiles: Face ID, then no payload.
+        try await host.resolveAttention(id: "vault_sso", resolution: "Approve once", by: "phone")
+        #expect(store.state.attentionRequests["vault_sso"]?.resolution == "Approve once")
+        #expect(delivered.items["vault_sso"]?.credentials["aws:lw-dev"]?.AccessKeyId == "ASIASSO")
+        #expect(delivered.profiles == ["lw-dev-sso"])
+
+        // Mixed: the phone unlocks the sealed part, the master mints the rest.
+        store.dispatch(.attentionRaised(ssoApproval("vault_mixed", sealed: true)))
+        do {
+            try await host.resolveAttention(id: "vault_mixed", resolution: "Approve once", by: "phone")
+            Issue.record("the sealed part still needs the device key")
+        } catch let error as RemoteHostError {
+            #expect(error.message == AttentionAnswerCopy.needsDeviceKey)
+        }
+        try await host.resolveAttention(id: "vault_mixed", resolution: "Approve once", by: "phone",
+                                        unsealed: VaultUnsealed(values: ["STRIPE": "sk"], device: "abcd"))
+        let mixed = try #require(delivered.items["vault_mixed"])
+        #expect(mixed.values == ["STRIPE": "sk"] && mixed.device == "abcd")
+        #expect(mixed.credentials["aws:lw-dev"]?.AccessKeyId == "ASIASSO")
+
+        // What the Mac minted itself is not minted again.
+        store.dispatch(.attentionRaised(ssoApproval("vault_mac")))
+        try await host.resolveAttention(id: "vault_mac", resolution: "Approve once", by: "mac",
+                                        unsealed: VaultUnsealed(credentials: ["aws:lw-dev": Self.ssoCredentials], device: "mac"))
+        #expect(delivered.profiles == ["lw-dev-sso", "lw-dev-sso"])
+    }
+
+    @Test("a master without an AWS SSO sign-in refuses a phone approval of SSO credentials, and a refusal still goes through")
+    func ssoApprovalWithoutASignIn() async throws {
+        let (host, store, _) = makeHost()
+        store.dispatch(.attentionRaised(ssoApproval("vault_sso")))
+        do {
+            try await host.resolveAttention(id: "vault_sso", resolution: "Approve once", by: "phone")
+            Issue.record("a master without the sign-in cannot mint")
+        } catch let error as RemoteHostError {
+            #expect(error.message == AttentionAnswerCopy.ssoNeedsMac)
+        }
+        #expect(store.state.attentionRequests["vault_sso"]?.isOpen == true)
+        try await host.resolveAttention(id: "vault_sso", resolution: "Deny", by: "phone")
+        #expect(store.state.attentionRequests["vault_sso"]?.resolution == "Deny")
+    }
+
+    @Test("the Mac mints the SSO credentials of a request it shows for the server master that owns it")
+    func ssoMintForAPeer() async throws {
+        let (host, store, _) = makeHost { engine in
+            engine.ssoCredentials = { _ in Self.ssoCredentials }
+        }
+        var mirrored = ssoApproval("vault_box")
+        mirrored.machineId = "machine_box"
+        store.dispatch(.attentionRaised(mirrored))
+        let minted = try await host.mintAttentionSso(id: "vault_box")
+        #expect(minted["aws:lw-dev"]?.AccessKeyId == "ASIASSO")
+        // Nothing for a request that is not open here.
+        try await host.resolveAttention(id: "vault_box", resolution: "Deny", by: "phone")
+        await #expect(throws: RemoteHostError.self) { try await host.mintAttentionSso(id: "vault_box") }
+        await #expect(throws: RemoteHostError.self) { try await host.mintAttentionSso(id: "vault_never") }
+    }
+
+    @Test("a failed SSO mint keeps the request open with what went wrong")
+    func ssoMintFails() async throws {
+        let (host, store, _) = makeHost { engine in
+            engine.ssoCredentials = { profile in throw AwsSso.SsoError.expired(profile: profile, session: "langwatch-sso") }
+        }
+        store.dispatch(.attentionRaised(ssoApproval("vault_sso")))
+        do {
+            try await host.resolveAttention(id: "vault_sso", resolution: "Approve once", by: "phone")
+            Issue.record("an expired sign-in mints nothing")
+        } catch let error as RemoteHostError {
+            #expect(error.message.contains("aws sso login --sso-session langwatch-sso"))
+        }
+        #expect(store.state.attentionRequests["vault_sso"]?.isOpen == true)
     }
 
     @Test("answering a request twice with the same answer is quiet, and no refusal names the request id")

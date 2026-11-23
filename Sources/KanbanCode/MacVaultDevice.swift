@@ -43,7 +43,7 @@ enum MacVaultDevice {
     static func answer(_ request: AttentionRequest, option: String, noteFollows: Bool = false) async -> Answer {
         let unsealed: VaultUnsealed?
         do {
-            let passed = try await AttentionAnswerGate.pass(request, option: option, unlock: { challenge in
+            let passed = try await AttentionAnswerGate.pass(request, option: option, mintsSso: true, unlock: { challenge in
                 guard key.exists else { throw NoKey() }
                 return try await key.answer(challenge, reason: "\(option): \(request.title)", sso: ssoCredentials)
             }, confirm: {
@@ -82,6 +82,14 @@ enum MacVaultDevice {
             try await SsoSignIn.shared.signIn(aws: aws, profile: expiredProfile, session: session, environment: environment)
             return try await exportSsoCredentials(aws: aws, profile: profile, environment: environment)
         }
+    }
+
+    /// The same credentials without the browser login: for an approval
+    /// answered on the phone, nobody is at the Mac to finish a login.
+    static let exportedSsoCredentials: AwsSso.Source = { profile in
+        guard let aws = ShellCommand.findExecutable("aws") else { throw AwsSso.SsoError.noCli }
+        let environment = ShellCommand.loginEnvironment.filter { !AwsSso.ignoredEnvironment.contains($0.key) }
+        return try await exportSsoCredentials(aws: aws, profile: profile, environment: environment)
     }
 
     private static func exportSsoCredentials(aws: String, profile: String,
