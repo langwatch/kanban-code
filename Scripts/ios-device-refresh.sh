@@ -45,6 +45,20 @@ EOF
 
 # The development team Xcode signed in with; KC_IOS_TEAM overrides.
 TEAM=${KC_IOS_TEAM:-$(defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null | sed -n 's/.*teamID = \([A-Z0-9]*\);/\1/p' | head -1)}
+# Signed out of Xcode, a profile for the app still on disk names the team
+# and signs the build until it ends.
+if [ -z "$TEAM" ]; then
+  for profile in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision; do
+    [ -f "$profile" ] || continue
+    security cms -D -i "$profile" >"$TMP/profile.plist" 2>/dev/null || continue
+    app_id=$(plutil -extract Entitlements.application-identifier raw "$TMP/profile.plist" 2>/dev/null)
+    ends=$(plutil -extract ExpirationDate raw "$TMP/profile.plist" 2>/dev/null)
+    if [ "${app_id#*.}" = "$BUNDLE_ID" ] && [[ "$ends" > "$(date -u +%FT%TZ)" ]]; then
+      TEAM=${app_id%%.*}
+      break
+    fi
+  done
+fi
 if [ -z "$TEAM" ]; then log "no development team in Xcode; sign in under Xcode > Settings > Accounts"; exit 1; fi
 
 SOURCES=$(git -C "$REPO" log -1 --format=%H -- Apps/iOS Sources/KanbanCodeRemoteKit LocalPackages/SwiftTerm Package.swift Package.resolved)
