@@ -633,6 +633,24 @@ struct MasterHandoverTests {
         await #expect(throws: RemoteClientError.self) { _ = try await macClient.card(id: "card_p") }
     }
 
+    @Test("PRs unlinked through the API leave the card and stay dismissed")
+    func unlinkPRsThroughTheAPI() async throws {
+        let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("unlink-prs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let box = try TestMaster(name: "box", root: root)
+        try await box.serve()
+        defer { box.server.stop() }
+        var link = Link(id: "card_u", name: "Demo", projectPath: "/tmp/acme", column: .waiting)
+        link.prLinks = [PRLink(number: 1), PRLink(number: 2), PRLink(number: 3)]
+        box.store.dispatch(.createManualTask(link))
+        let client = RemoteClient(baseURL: URL(string: box.url)!, token: try box.devices.add(name: "phone", scope: .full).token)
+
+        let updated = try await client.updateCard(cardId: "card_u", RemoteCardUpdate(unlinkPRs: [2, 3]))
+
+        #expect(updated.prs.map(\.number) == [1])
+        #expect(box.store.state.links["card_u"]?.manualOverrides.dismissedPRs == [2, 3])
+    }
+
     @Test("a card that ran over ssh on the peer's machine continues there in the same folder, with its transcript")
     func sshCardMovesToTheMasterOnItsMachine() async throws {
         let root = (NSTemporaryDirectory() as NSString).appendingPathComponent("ssh-handover-\(UUID().uuidString)")

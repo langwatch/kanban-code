@@ -36,12 +36,17 @@ public struct RemoteCardUpdate: Codable, Sendable, Equatable {
     /// Pins or unpins the card (servers listing `RemoteAPI.Feature.cardActions`).
     /// Pinning an archived card brings it back, as on the Mac.
     public var pinned: Bool?
+    /// PR numbers to take off the card, as the Mac's Unlink does: a PR
+    /// unlinked this way is not linked again by its branch.
+    public var unlinkPRs: [Int]?
 
-    public init(name: String? = nil, column: RemoteColumn? = nil, archived: Bool? = nil, pinned: Bool? = nil) {
+    public init(name: String? = nil, column: RemoteColumn? = nil, archived: Bool? = nil, pinned: Bool? = nil,
+                unlinkPRs: [Int]? = nil) {
         self.name = name
         self.column = column
         self.archived = archived
         self.pinned = pinned
+        self.unlinkPRs = unlinkPRs
     }
 }
 

@@ -716,6 +716,9 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
             if let pinned = update.pinned {
                 store.dispatch(.setCardPinned(cardId: cardId, isPinned: pinned))
             }
+            for number in update.unlinkPRs ?? [] {
+                store.dispatch(.unlinkFromCard(cardId: cardId, linkType: .pr(number: number)))
+            }
             return try remoteCard(cardId)
         }
     }

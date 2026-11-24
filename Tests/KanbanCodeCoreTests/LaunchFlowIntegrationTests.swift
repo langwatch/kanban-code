@@ -294,6 +294,95 @@ struct LaunchFlowIntegrationTests {
         #expect(card?.worktreeLink?.path == "/test/project/.claude/worktrees/feat-new")
     }
 
+    private func manyWorktrees(_ repo: String, _ names: [String]) -> [Worktree] {
+        [Worktree(path: repo, branch: "refs/heads/main", isBare: false)]
+            + names.map { Worktree(path: "\(repo)/.claude/worktrees/\($0)", branch: "refs/heads/\($0)", isBare: false) }
+    }
+
+    private func pullRequests(_ names: [String]) -> [String: PullRequest] {
+        Dictionary(uniqueKeysWithValues: names.enumerated().map { i, name in
+            (name, PullRequest(number: 9000 + i, title: name, state: "open", url: "https://example.com/pr/\(9000 + i)", headRefName: name))
+        })
+    }
+
+    @Test("A resuming card in a repo with many worktrees takes none of them or their PRs")
+    func resumingCardTakesNoUnrelatedWorktrees() {
+        let repo = "/root/Projects/langwatch"
+        let names = (1...25).map { "feat-\($0)" }
+        let resuming = makeLink(
+            id: "card_demo",
+            column: .inProgress,
+            projectPath: repo,
+            tmuxLink: TmuxLink(sessionName: "claude-e8289164"),
+            sessionLink: SessionLink(sessionId: "e8289164-0000", sessionPath: "/root/.claude/projects/-root-Projects-langwatch/e8289164-0000.jsonl"),
+            isLaunching: true
+        )
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [],
+            tmuxSessions: [],
+            didScanTmux: true,
+            worktrees: [repo: manyWorktrees(repo, names)],
+            pullRequests: pullRequests(names)
+        )
+
+        let result = CardReconciler.reconcile(existing: [resuming], snapshot: snapshot)
+
+        #expect(result.count == 1)
+        #expect(result[0].worktreeLink == nil)
+        #expect(result[0].prLinks.isEmpty)
+    }
+
+    @Test("A card launching a named worktree among many takes only that one")
+    func launchingCardTakesOnlyItsNamedWorktree() {
+        let repo = "/root/Projects/langwatch"
+        let names = (1...25).map { "feat-\($0)" } + ["my-task"]
+        let launching = makeLink(
+            id: "card_new",
+            column: .inProgress,
+            projectPath: repo,
+            tmuxLink: TmuxLink(sessionName: "langwatch-my-task"),
+            isLaunching: true
+        )
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [],
+            tmuxSessions: [],
+            didScanTmux: true,
+            worktrees: [repo: manyWorktrees(repo, names)],
+            pullRequests: pullRequests(names)
+        )
+
+        let result = CardReconciler.reconcile(existing: [launching], snapshot: snapshot)
+
+        #expect(result.count == 1)
+        #expect(result[0].worktreeLink?.path == "\(repo)/.claude/worktrees/my-task")
+        #expect(result[0].prLinks.map(\.title) == ["my-task"])
+    }
+
+    @Test("A card launching an unnamed worktree among many takes none of them")
+    func launchingUnnamedCardTakesNoneOfMany() {
+        let repo = "/root/Projects/langwatch"
+        let names = (1...25).map { "feat-\($0)" }
+        let launching = makeLink(
+            id: "card_new",
+            column: .inProgress,
+            projectPath: repo,
+            tmuxLink: TmuxLink(sessionName: "langwatch-card_new"),
+            isLaunching: true
+        )
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            sessions: [],
+            tmuxSessions: [],
+            didScanTmux: true,
+            worktrees: [repo: manyWorktrees(repo, names)],
+            pullRequests: pullRequests(names)
+        )
+
+        let result = CardReconciler.reconcile(existing: [launching], snapshot: snapshot)
+
+        #expect(result[0].worktreeLink == nil)
+        #expect(result[0].prLinks.isEmpty)
+    }
+
     @Test("A worktree with no launching card in its repo gets no card")
     func worktreeWithoutLaunchGetsNoCard() {
         let idleCard = makeLink(
