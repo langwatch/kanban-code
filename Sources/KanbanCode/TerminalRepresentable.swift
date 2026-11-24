@@ -269,7 +269,8 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         let text = clipboard.string(forType: .string)
         if text == nil, let session = enclosingSessionName(),
            case .upload(let route) = TerminalPastePlan.plan(
-               hasText: false, hasImage: Self.hasImage(clipboard), route: AppServices.terminalImageRoute(forSession: session)),
+               hasText: false, hasImage: Self.hasImage(clipboard),
+               route: AppServices.terminalImageRoute(forSession: session), isRush: RushSessionName.isRush(session)),
            let data = Self.pngData(from: clipboard),
            pasteImage(data, session: session, route: route) {
             return
@@ -290,23 +291,39 @@ final class BatchedTerminalView: LocalProcessTerminalView {
         send(data: pasteEnd[0...])
     }
 
-    /// An image pasted into the terminal of a session that runs somewhere
-    /// else. The assistant there reads the clipboard of its own machine,
-    /// which has nothing, so the bytes go to that machine and the paste
-    /// types the path of the file there, as a dropped file does. False when
-    /// nothing can carry the bytes.
+    /// An image pasted into a terminal whose assistant can't read this
+    /// Mac's clipboard: it runs somewhere else, or under rush. The bytes are
+    /// stored as a file where it runs and the paste types the path of that
+    /// file, as a dropped file does. False when nothing can carry the bytes.
     private func pasteImage(_ data: Data, session: String, route: TerminalImageRoute) -> Bool {
+        let isRush = RushSessionName.isRush(session)
+        let throughTerminal = TerminalPastePlan.typesPathInTerminal(route: route, isRush: isRush)
+        let deliver: @MainActor (String) async throws -> Void = { [weak self] path in
+            if throughTerminal {
+                // Typed through the terminal's own stream, the way keystrokes go.
+                self?.sendBracketedPaste(text: path + " ")
+            } else {
+                // Pasted through the tmux server of the machine, which runs
+                // after the upload on the same bridge, so the assistant
+                // finds the file when it checks the pasted path.
+                try await AppServices.tmux.pasteText(to: session, text: path + " ")
+            }
+        }
         switch route {
         case .local:
-            return false
+            do {
+                let home = (NSHomeDirectory() as NSString).appendingPathComponent(".kanban-code")
+                let path = try PastedImages.store(data, kanbanHome: home)
+                sendBracketedPaste(text: path + " ")
+            } catch {
+                Self.reportPasteFailure(session: session, place: "this Mac", error: error)
+            }
+            return true
         case .peer(let machineId, let cardId):
             let engine = AppComposition.shared.engine
-            Task { [weak self] in
+            Task { @MainActor in
                 do {
-                    let remotePath = try await engine.uploadPastedImage(cardId: cardId, data: data)
-                    // Typed through the terminal's own stream to the owner,
-                    // the way keystrokes go.
-                    self?.sendBracketedPaste(text: remotePath + " ")
+                    try await deliver(try await engine.uploadPastedImage(cardId: cardId, data: data))
                 } catch {
                     Self.reportPasteFailure(session: session, place: engine.peerDisplayName(machineId), error: error)
                 }
@@ -314,13 +331,9 @@ final class BatchedTerminalView: LocalProcessTerminalView {
             return true
         case .machine(let machine):
             guard let supervisor = AppServices.boxdSupervisor else { return false }
-            Task {
+            Task { @MainActor in
                 do {
-                    let remotePath = try await supervisor.uploadPastedImage(machineName: machine, data: data)
-                    // Pasted through the tmux server of the machine, which runs
-                    // after the upload on the same bridge, so the assistant
-                    // finds the file when it checks the pasted path.
-                    try await AppServices.tmux.pasteText(to: session, text: remotePath + " ")
+                    try await deliver(try await supervisor.uploadPastedImage(machineName: machine, data: data))
                 } catch {
                     Self.reportPasteFailure(session: session, place: machine, error: error)
                 }

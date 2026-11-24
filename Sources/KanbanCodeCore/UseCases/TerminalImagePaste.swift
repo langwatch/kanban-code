@@ -24,19 +24,31 @@ public enum TerminalImageRoute: Equatable, Sendable {
 /// What a paste into a card's terminal does.
 public enum TerminalPastePlan: Equatable, Sendable {
     /// A bracketed paste of the clipboard's text (empty when it has none:
-    /// the assistant then looks for an image on the clipboard of its own
+    /// Claude Code then looks for an image on the clipboard of its own
     /// machine).
     case text
-    /// The image goes to the machine of `route` as a file, and the paste
-    /// types the path of that file.
+    /// The image is stored as a file on the machine of `route` (this Mac
+    /// for `.local`), and the paste types the path of that file.
     case upload(TerminalImageRoute)
 
-    /// Text on the clipboard wins over an image. An image alone is
-    /// uploaded when the assistant runs somewhere else, since the clipboard
-    /// it would read is not this Mac's.
-    public static func plan(hasText: Bool, hasImage: Bool, route: TerminalImageRoute) -> TerminalPastePlan {
-        guard !hasText, hasImage, route != .local else { return .text }
+    /// Text on the clipboard wins over an image. An image alone is stored
+    /// as a file when the assistant can't read it off this Mac's clipboard:
+    /// it runs somewhere else, or it runs under rush, which takes a pasted
+    /// image path as the image but reads nothing off an empty paste.
+    public static func plan(hasText: Bool, hasImage: Bool, route: TerminalImageRoute, isRush: Bool) -> TerminalPastePlan {
+        guard !hasText, hasImage else { return .text }
+        if route == .local, !isRush { return .text }
         return .upload(route)
+    }
+
+    /// Whether the path of an uploaded image is typed through the card's
+    /// terminal stream. A rush view reads its keys there, wherever it runs;
+    /// a tmux session on a machine takes it through that machine's tmux.
+    public static func typesPathInTerminal(route: TerminalImageRoute, isRush: Bool) -> Bool {
+        switch route {
+        case .local, .peer: return true
+        case .machine: return isRush
+        }
     }
 }
 

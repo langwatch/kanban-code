@@ -19,12 +19,33 @@ struct TerminalImagePasteTests {
     @Test("an image alone is uploaded when the assistant runs elsewhere; text wins; a local card pastes as before")
     func plan() {
         let peer = TerminalImageRoute.peer(machineId: "machine_box", cardId: "card_1")
-        #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: peer) == .upload(peer))
-        #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: .machine("gpu-1")) == .upload(.machine("gpu-1")))
-        #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: .local) == .text)
-        #expect(TerminalPastePlan.plan(hasText: true, hasImage: true, route: peer) == .text)
-        #expect(TerminalPastePlan.plan(hasText: true, hasImage: false, route: peer) == .text)
-        #expect(TerminalPastePlan.plan(hasText: false, hasImage: false, route: peer) == .text)
+        for isRush in [false, true] {
+            #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: peer, isRush: isRush) == .upload(peer))
+            #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: .machine("gpu-1"), isRush: isRush)
+                == .upload(.machine("gpu-1")))
+            #expect(TerminalPastePlan.plan(hasText: true, hasImage: true, route: peer, isRush: isRush) == .text)
+            #expect(TerminalPastePlan.plan(hasText: true, hasImage: false, route: peer, isRush: isRush) == .text)
+            #expect(TerminalPastePlan.plan(hasText: false, hasImage: false, route: peer, isRush: isRush) == .text)
+            #expect(TerminalPastePlan.plan(hasText: true, hasImage: true, route: .local, isRush: isRush) == .text)
+        }
+        // Claude Code in a local tmux session reads the Mac's clipboard on an empty paste.
+        #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: .local, isRush: false) == .text)
+    }
+
+    @Test("an image pasted into a local rush card is stored here and its path typed, since rush reads no clipboard on a paste")
+    func localRush() {
+        #expect(TerminalPastePlan.plan(hasText: false, hasImage: true, route: .local, isRush: true) == .upload(.local))
+        #expect(TerminalPastePlan.typesPathInTerminal(route: .local, isRush: true))
+    }
+
+    @Test("the path goes through the terminal for rush and peer cards, through the machine's tmux otherwise")
+    func pathDelivery() {
+        let peer = TerminalImageRoute.peer(machineId: "machine_box", cardId: "card_1")
+        #expect(TerminalPastePlan.typesPathInTerminal(route: peer, isRush: false))
+        #expect(TerminalPastePlan.typesPathInTerminal(route: peer, isRush: true))
+        #expect(TerminalPastePlan.typesPathInTerminal(route: .machine("gpu-1"), isRush: true))
+        // tmux.pasteText on a rush session would send the path as a message of its own.
+        #expect(!TerminalPastePlan.typesPathInTerminal(route: .machine("gpu-1"), isRush: false))
     }
 
     @Test("a stored image keeps its bytes, takes its extension from them, and old ones go")
