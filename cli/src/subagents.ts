@@ -225,13 +225,19 @@ export function needsModelSwitchConfirmation(pane: string): boolean {
   return /Switch model\?/i.test(pane) && /\b1\./.test(pane);
 }
 
+/// Process names of a running master: the Mac app, and the Linux server as
+/// pgrep -x sees it (the kernel keeps only the first 15 characters).
+export const MASTER_PROCESS_NAMES = ["KanbanCode", "kanban-code-server".slice(0, 15)];
+
 export function kanbanCodeIsRunning(): boolean {
-  try {
-    execFileSync("pgrep", ["-x", "KanbanCode"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  return MASTER_PROCESS_NAMES.some((name) => {
+    try {
+      execFileSync("pgrep", ["-x", name], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
