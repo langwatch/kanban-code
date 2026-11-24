@@ -214,6 +214,13 @@ extension MasterEngine {
                 if let card = try? await client.card(id: cardId) {
                     store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
                 }
+            } catch let error as RemoteClientError where isStart && error.isTimeout {
+                // A slow owner still runs the start it took: its card says
+                // how the start ends, not this request's deadline.
+                KanbanCodeLog.info("peers", "card \(cardId): \(owner) is slow to answer the start, following its card")
+                if let failure = await followStart(cardId: cardId, client: client) {
+                    report("Could not \(what) on \(owner): \(failure)")
+                }
             } catch {
                 // The owner's queue as it is now, so the bar does not keep
                 // offering a prompt the owner no longer holds.
@@ -231,6 +238,26 @@ extension MasterEngine {
                 store.dispatch(.setError(message))
             }
         }
+    }
+
+    /// Reads the owner's card until its start ends, mirroring each read.
+    /// Returns why the start failed, or nil when it runs or the owner says
+    /// nothing within `timeout`.
+    func followStart(cardId: String, client: RemoteClient, timeout: TimeInterval = 180) async -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let card = try? await client.card(id: cardId) {
+                store.dispatch(.peerCardRead(cardId: cardId, state: PeerTranscriptMirror.state(of: card)))
+                switch card.sessionStatus?.kind {
+                case .failed: return card.sessionStatus?.text ?? "the start failed"
+                case .starting, .moving: break
+                default: if card.isLive { return nil }
+                }
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+        KanbanCodeLog.warn("peers", "card \(cardId): owner gave no outcome of the start in \(Int(timeout))s")
+        return nil
     }
 
     /// Stops the running turn of a card, here or on its owner.

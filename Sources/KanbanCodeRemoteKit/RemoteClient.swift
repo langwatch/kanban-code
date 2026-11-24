@@ -97,6 +97,13 @@ public enum RemoteClientError: Error, Sendable, Equatable, LocalizedError {
         }
     }
 
+    /// The text of a request that got no answer in its time.
+    public static let timedOutText = "The request timed out."
+
+    /// The request got no answer in its time: the server may still be doing
+    /// what it was asked.
+    public var isTimeout: Bool { self == .transport(Self.timedOutText) }
+
     /// Retrying will not help: the token is refused.
     public var isAuthFailure: Bool {
         switch self {
@@ -479,6 +486,8 @@ public struct RemoteClient: Sendable {
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw RemoteClientError.transport(RemoteClientError.timedOutText)
         } catch {
             throw RemoteClientError.transport(error.localizedDescription)
         }

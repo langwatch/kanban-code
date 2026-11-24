@@ -710,25 +710,17 @@ public final class MasterEngine {
         }
 
         // If the session file lives under a different project key (e.g. a cleaned-up worktree),
-        // move it to the current projectPath so `claude --resume` can find it.
+        // it moves to the current projectPath so `claude --resume` can find it.
         // Only applicable to Claude Code sessions (Gemini uses its own path scheme).
-        if assistant == .claude,
-           let sessionLink = card.link.sessionLink,
-           let sessionPath = sessionLink.sessionPath {
+        // The move runs in the resume task, off the main actor: a transcript
+        // of hundreds of MB must not stall the board and its API.
+        let sessionFileToMove: String? = {
+            guard assistant == .claude, let sessionPath = card.link.sessionLink?.sessionPath else { return nil }
             let expectedDir = platform.claudeProjectsDirectory + "/" + SessionFileMover.encodeProjectPath(projectPath)
             let expectedPath = expectedDir + "/" + sessionId + ".jsonl"
-            if sessionPath != expectedPath,
-               FileManager.default.fileExists(atPath: sessionPath) {
-                KanbanCodeLog.info("resume", "Moving session file from worktree project key to \(expectedDir)")
-                if let newPath = try? SessionFileMover.moveSession(
-                    sessionId: sessionId, fromPath: sessionPath, toProjectPath: projectPath
-                ) {
-                    var updatedLink = card.link
-                    updatedLink.sessionLink = SessionLink(sessionId: sessionId, sessionPath: newPath)
-                    store.dispatch(.createManualTask(updatedLink))
-                }
-            }
-        }
+            guard sessionPath != expectedPath, FileManager.default.fileExists(atPath: sessionPath) else { return nil }
+            return sessionPath
+        }()
 
         // The terminal of the resumed session mounts as soon as the card
         // resumes, so a card that leaves its machine routes its names
@@ -758,6 +750,24 @@ public final class MasterEngine {
                 resumingCards.remove(cardId)
             }
             do {
+                if let sessionPath = sessionFileToMove {
+                    let expectedDir = platform.claudeProjectsDirectory + "/" + SessionFileMover.encodeProjectPath(projectPath)
+                    KanbanCodeLog.info("resume", "Moving session file from worktree project key to \(expectedDir)")
+                    let started = Date()
+                    let moved = await Task.detached(priority: .userInitiated) {
+                        Result { try SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: projectPath) }
+                    }.value
+                    switch moved {
+                    case .success(let newPath):
+                        KanbanCodeLog.info("resume", "Moved session file to \(newPath) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s")
+                        if var updated = store.state.links[cardId] {
+                            updated.sessionLink = SessionLink(sessionId: sessionId, sessionPath: newPath)
+                            store.dispatch(.createManualTask(updated))
+                        }
+                    case .failure(let error):
+                        KanbanCodeLog.warn("resume", "Could not move session file \(sessionPath): \(error)")
+                    }
+                }
                 let settings = try? await settingsStore.read()
 
                 let shellOverride: String?
@@ -905,7 +915,9 @@ public final class MasterEngine {
                         if assistant == .claude,
                            let sessionPath = store.state.links[cardId]?.sessionLink?.sessionPath,
                            FileManager.default.fileExists(atPath: sessionPath),
-                           let moved = try? SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: root) {
+                           let moved = await Task.detached(priority: .userInitiated, operation: {
+                               try? SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: root)
+                           }).value {
                             var updated = store.state.links[cardId] ?? card.link
                             updated.sessionLink = SessionLink(sessionId: sessionId, sessionPath: moved)
                             store.dispatch(.createManualTask(updated))
