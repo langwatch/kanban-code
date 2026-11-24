@@ -510,10 +510,13 @@ public enum CardReconciler {
 
             // Clear dead worktree links (path no longer exists on disk).
             // A remote card's worktree lives on its machine, so a missing
-            // local path says nothing about it.
+            // local path says nothing about it. A card with a conversation
+            // keeps the worktree its session runs in: the next send or
+            // resume adds it again at the same path from its branch.
             if let wtPath = link.worktreeLink?.path,
                !wtPath.isEmpty,
                !(link.isRemote && link.remote != nil),
+               !(link.sessionLink != nil && !(link.worktreeLink?.branch ?? "").isEmpty),
                !link.manualOverrides.isBranchDiscoveryBlocked,
                didScanWorktrees, // only clear if we actually scanned worktrees
                !liveWorktreePaths.contains(wtPath) {

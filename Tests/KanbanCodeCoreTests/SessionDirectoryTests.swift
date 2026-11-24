@@ -11,10 +11,13 @@ struct SessionDirectoryTests {
         let name = "clear-meadow-a7ec"
         var worktree: String { "\(root)/.claude/worktrees/\(name)" }
 
-        init() throws {
+        init(withOrigin: Bool = false) throws {
             root = NSTemporaryDirectory() + "kanban-sessiondir-\(UUID().uuidString)"
             try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
             try sh("git init -q -b main && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git worktree add -q -b \(name) .claude/worktrees/\(name)")
+            if withOrigin {
+                try sh("git init -q --bare -b main .origin.git && git remote add origin \"$PWD/.origin.git\" && git push -q origin main && git fetch -q origin && git remote set-head origin main")
+            }
         }
 
         func deleteWorktree() throws {
@@ -93,18 +96,58 @@ struct SessionDirectoryTests {
         #expect(outcome == .restored(branch: "feat/run-concurrency"))
     }
 
-    @Test("with the branch gone too, the project root is used")
-    func fallsBackToRoot() async throws {
-        let repo = try Repo()
+    @Test("with the branch gone locally and on origin, it is made again from origin's default branch at the same path")
+    func recreatesBranchFromOriginMain() async throws {
+        let repo = try Repo(withOrigin: true)
         defer { repo.cleanup() }
         try repo.deleteWorktree()
         try repo.deleteBranch()
+        try repo.sh("git -c user.email=t@t -c user.name=t commit -q --allow-empty -m newer && git push -q origin main && git reset -q --hard HEAD~1")
         let outcome = await SessionDirectory.ensureLocal(dir: repo.worktree)
-        guard case .projectRoot(let root) = outcome else {
-            Issue.record("expected the project root, got \(outcome)")
+        #expect(outcome == .created(branch: repo.name, base: "origin/main"))
+        let head = try repo.sh("git -C .claude/worktrees/\(repo.name) log -1 --format=%s HEAD").trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(head == "newer")
+        let upstream = try? repo.sh("git -C .claude/worktrees/\(repo.name) rev-parse --abbrev-ref @{u}")
+        #expect(upstream == nil, "a branch made from main must not track main")
+    }
+
+    @Test("a pruned worktree whose branch has a slash comes back on that branch, not the folder's name")
+    func restoresSlashedBranchAfterPrune() async throws {
+        let repo = try Repo()
+        defer { repo.cleanup() }
+        let dir = "\(repo.root)/.worktrees/feat-home-makeover"
+        try repo.sh("git worktree add -q -b feat/home-makeover .worktrees/feat-home-makeover && rm -rf .worktrees/feat-home-makeover && git worktree prune")
+        let outcome = await SessionDirectory.ensureLocal(dir: dir)
+        #expect(outcome == .restored(branch: "feat/home-makeover"))
+        #expect(try repo.sh("git -C .worktrees/feat-home-makeover rev-parse --abbrev-ref HEAD").trimmingCharacters(in: .whitespacesAndNewlines) == "feat/home-makeover")
+    }
+
+    @Test("a branch only on origin is checked out again tracking origin")
+    func restoresFromOriginBranch() async throws {
+        let repo = try Repo(withOrigin: true)
+        defer { repo.cleanup() }
+        try repo.sh("git push -q origin \(repo.name)")
+        try repo.deleteWorktree()
+        try repo.deleteBranch()
+        try repo.sh("git update-ref -d refs/remotes/origin/\(repo.name)")
+        let outcome = await SessionDirectory.ensureLocal(dir: repo.worktree, branch: repo.name)
+        #expect(outcome == .restored(branch: repo.name))
+        #expect(try repo.sh("git -C .claude/worktrees/\(repo.name) rev-parse --abbrev-ref @{u}").trimmingCharacters(in: .whitespacesAndNewlines) == "origin/\(repo.name)")
+    }
+
+    @Test("a branch checked out in another worktree is reported, never swapped for another folder")
+    func reportsGitRefusal() async throws {
+        let repo = try Repo()
+        defer { repo.cleanup() }
+        try repo.deleteWorktree()
+        try repo.sh("git worktree add -q .worktrees/other \(repo.name)")
+        let outcome = await SessionDirectory.ensureLocal(dir: repo.worktree)
+        guard case .failed(let reason) = outcome else {
+            Issue.record("expected a failure, got \(outcome)")
             return
         }
-        #expect((root as NSString).resolvingSymlinksInPath == (repo.root as NSString).resolvingSymlinksInPath)
+        #expect(!reason.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: repo.worktree))
     }
 
     @Test("a send to a host whose worktree was deleted restores it and goes out")
@@ -119,27 +162,37 @@ struct SessionDirectoryTests {
         #expect(FileManager.default.fileExists(atPath: repo.worktree))
     }
 
-    @Test("a send whose worktree and branch are gone names the missing directory")
-    func sendNamesMissingDirectory() async throws {
-        let repo = try Repo()
+    @Test("a send whose worktree and branch are gone makes the branch again and goes out")
+    func sendRecreatesWorktree() async throws {
+        let repo = try Repo(withOrigin: true)
         defer { repo.cleanup() }
         try repo.deleteWorktree()
         try repo.deleteBranch()
         let rush = try FakeRush(cwd: repo.worktree)
         defer { rush.cleanup() }
+        try await rush.adapter().send(id: "22d7452e", text: "hello")
+        #expect(rush.calls().contains("SENT"))
+        #expect(FileManager.default.fileExists(atPath: repo.worktree))
+    }
+
+    @Test("a send whose directory belongs to no repository names the missing directory")
+    func sendNamesMissingDirectory() async throws {
+        let dir = NSTemporaryDirectory() + "kanban-sessiondir-norepo-\(UUID().uuidString)/.worktrees/gone"
+        let rush = try FakeRush(cwd: dir)
+        defer { rush.cleanup() }
         do {
             try await rush.adapter().send(id: "22d7452e", text: "hello")
             Issue.record("send should fail")
         } catch let error as RushCommandFailed {
-            #expect(error.message.contains(repo.worktree))
+            #expect(error.message.contains(dir))
             #expect(error.message.contains("no longer exists"))
             #expect(!error.message.contains("fork/exec"))
         }
     }
 
-    @Test("a start in a deleted worktree restores it; with no branch it starts in the project root")
-    func startRestoresOrFallsBack() async throws {
-        let repo = try Repo()
+    @Test("a start in a deleted worktree puts it back at the same path, also when its branch is gone")
+    func startRestoresWorktree() async throws {
+        let repo = try Repo(withOrigin: true)
         defer { repo.cleanup() }
         try repo.deleteWorktree()
         let rush = try FakeRush(cwd: repo.worktree)
@@ -151,7 +204,8 @@ struct SessionDirectoryTests {
         try repo.deleteWorktree()
         try repo.deleteBranch()
         _ = try await rush.adapter().start(RushStartRequest(cwd: repo.worktree, sessionId: "22d7452e-1111", resume: true))
-        #expect(rush.calls().contains("--cwd \(repo.root) "))
+        #expect(!rush.calls().contains("--cwd \(repo.root) "))
+        #expect(FileManager.default.fileExists(atPath: repo.worktree))
     }
 
     @Test("rush's fork/exec ENOENT is told apart from other failures")

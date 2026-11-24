@@ -633,6 +633,23 @@ struct CardReconcilerTests {
         #expect(result[0].worktreeLink == nil) // Cleared
     }
 
+    @Test("A card with a conversation keeps its deleted worktree, to add it again on the next send or resume")
+    func deadWorktreeKeptForConversation() {
+        let existing = [
+            Link(
+                column: .waiting,
+                sessionLink: SessionLink(sessionId: "s1", sessionPath: "/tmp/s1.jsonl"),
+                worktreeLink: WorktreeLink(path: "/project/.worktrees/feat-home", branch: "feat/home")
+            )
+        ]
+        let snapshot = CardReconciler.DiscoverySnapshot(
+            worktrees: ["/project": [Worktree(path: "/project", branch: "main", isBare: true)]]
+        )
+
+        let result = CardReconciler.reconcile(existing: existing, snapshot: snapshot)
+        #expect(result[0].worktreeLink == WorktreeLink(path: "/project/.worktrees/feat-home", branch: "feat/home"))
+    }
+
     @Test("Manual tmux override is preserved even when tmux is dead")
     func manualTmuxOverridePreserved() {
         var link = Link(

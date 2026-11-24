@@ -111,6 +111,13 @@ public final class MasterEngine {
         self.mutagen = mutagen
         self.registry = registry
         self.platform = platform
+        // A session only knows its cwd; the card that runs there knows the
+        // branch a deleted worktree comes back on.
+        SessionDirectory.branchHint = { [weak store] dir in
+            await MainActor.run {
+                store?.state.links.values.first { $0.worktreeLink?.path == dir }?.worktreeLink?.branch
+            }
+        }
     }
 
     // MARK: - Launch
@@ -903,26 +910,21 @@ public final class MasterEngine {
                         }
                     }
                 }
-                // A worktree deleted under the card comes back from its
-                // branch; with the branch gone too, the session continues in
-                // the project root, its transcript moved along.
+                // A worktree deleted under the card is added again at the same
+                // path, from its branch or, with the branch gone, as that
+                // branch made from origin's default branch. The transcript
+                // stays under the same project key.
                 if !isRemote, boxdPreparation == nil, let worktree = card.link.worktreeLink,
                    worktree.path == resumePath, !FileManager.default.fileExists(atPath: resumePath) {
+                    progress.start()
+                    progress.report("Adding worktree \((resumePath as NSString).lastPathComponent) again")
                     let outcome = await SessionDirectory.ensureLocal(
                         dir: resumePath, branch: worktree.branch, repoRoot: card.link.projectPath)
-                    if case .projectRoot(let root) = outcome {
-                        progress.report("Worktree \((resumePath as NSString).lastPathComponent) and its branch are gone; continuing in \(root)")
-                        if assistant == .claude,
-                           let sessionPath = store.state.links[cardId]?.sessionLink?.sessionPath,
-                           FileManager.default.fileExists(atPath: sessionPath),
-                           let moved = await Task.detached(priority: .userInitiated, operation: {
-                               try? SessionFileMover.moveSession(sessionId: sessionId, fromPath: sessionPath, toProjectPath: root)
-                           }).value {
-                            var updated = store.state.links[cardId] ?? card.link
-                            updated.sessionLink = SessionLink(sessionId: sessionId, sessionPath: moved)
-                            store.dispatch(.createManualTask(updated))
-                        }
-                        resumePath = root
+                    guard SessionDirectory.isUsable(outcome) else {
+                        throw SessionDirectoryUnavailable(message: SessionDirectory.missingMessage(resumePath, outcome: outcome))
+                    }
+                    if case .created(let branch, let base) = outcome {
+                        progress.report("Branch \(branch) was gone; made it again from \(base)")
                     }
                 }
                 let commandTemplate = settings?.commandTemplate(for: assistant, remote: isRemote)

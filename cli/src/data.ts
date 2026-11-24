@@ -28,7 +28,7 @@ import {
   KanbanColumn,
 } from "./types.js";
 import { linksPath, settingsPath, contextDir, claudeProjectsDir } from "./paths.js";
-import { ensureSessionDir, missingSessionDirMessage } from "./git.js";
+import { ensureSessionDir, isUsableSessionDir, missingSessionDirMessage } from "./git.js";
 
 // ── Reading state files ──────────────────────────────────────────────
 
@@ -318,7 +318,7 @@ function guardRushHostDir(rushId: string): void {
   }
   if (!cwd) return;
   const outcome = ensureSessionDir(cwd);
-  if (outcome.kind === "present" || outcome.kind === "restored") return;
+  if (isUsableSessionDir(outcome)) return;
   throw new Error(missingSessionDirMessage(cwd, outcome));
 }
 

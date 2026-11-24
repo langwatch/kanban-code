@@ -148,18 +148,14 @@ export function rushStartArgs(o: RushStartOptions): string[] {
 }
 
 /// Start (or bring back) a host and return it as rush reports it. A worktree
-/// deleted under it is added again from its branch first; with the branch
-/// gone too, the host starts in the project root.
+/// deleted under it is added again at the same path first.
 export function startRushHost(o: RushStartOptions): RushHostInfo {
   const dir = ensureSessionDir(o.cwd);
-  const start = dir.kind === "projectRoot" ? { ...o, cwd: dir.path } : o;
-  if (dir.kind === "projectRoot") {
-    process.stderr.write(`kanban: worktree ${o.cwd} and its branch are gone; starting in ${dir.path}\n`);
-  }
+  if (dir.kind === "failed") throw new Error(missingSessionDirMessage(o.cwd, dir));
   try {
-    return parseJsonOut<RushHostInfo>(() => runRush(rushStartArgs(start)));
+    return parseJsonOut<RushHostInfo>(() => runRush(rushStartArgs(o)));
   } catch (e: any) {
-    if (isMissingCwdError(String(e?.message ?? e))) throw new Error(missingSessionDirMessage(start.cwd, dir));
+    if (isMissingCwdError(String(e?.message ?? e))) throw new Error(missingSessionDirMessage(o.cwd, dir));
     throw e;
   }
 }

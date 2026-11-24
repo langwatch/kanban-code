@@ -78,8 +78,14 @@ export function removeWorktree(repoDir: string, worktreePath: string): void {
 export type SessionDirOutcome =
   | { kind: "present"; path: string }
   | { kind: "restored"; path: string; branch: string }
-  | { kind: "projectRoot"; path: string }
+  | { kind: "created"; path: string; branch: string; base: string }
+  | { kind: "failed"; path: string; reason: string }
   | { kind: "missing"; path: string };
+
+/// Whether the directory is there after `ensureSessionDir`.
+export function isUsableSessionDir(outcome: SessionDirOutcome): boolean {
+  return outcome.kind === "present" || outcome.kind === "restored" || outcome.kind === "created";
+}
 
 /// The project root a worktree path belongs to: the part before
 /// `/.claude/worktrees/` or `/.worktrees/`.
@@ -110,27 +116,66 @@ function recordedBranch(root: string, dir: string): string | undefined {
   return undefined;
 }
 
-/// Leaves a session's working directory in place before a rush host starts
-/// in it: a worktree deleted under a card is added again from its branch (the
-/// one git still records, else `branch`, else the directory's name); with
-/// that branch gone too, the project root is returned instead.
+/// A local or origin branch whose name, with `/` as `-`, is the worktree
+/// folder's name (or `worktree-<name>`): `.worktrees/feat-home` is `feat/home`.
+function branchNamedLike(root: string, name: string): string | undefined {
+  let out = "";
+  try {
+    out = git(["-C", root, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes/origin"]);
+  } catch {
+    return undefined;
+  }
+  for (const ref of out.split("\n")) {
+    const branch = ref.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\/origin\//, "");
+    if (!branch || branch === "HEAD") continue;
+    const flat = branch.replaceAll("/", "-");
+    if (flat === name || flat === `worktree-${name}`) return branch;
+  }
+  return undefined;
+}
+
+function gitError(args: string[]): string | undefined {
+  try {
+    execFileSync("git", args, { stdio: ["ignore", "ignore", "pipe"], encoding: "utf-8" });
+    return undefined;
+  } catch (e: any) {
+    return String(e?.stderr || e?.message || e).replace(/\s+/g, " ").trim() || "git failed";
+  }
+}
+
+/// Puts a session's deleted worktree back at the same path before a rush
+/// host starts in it. The branch is `branch`, else the one git still
+/// records, else one named like the folder, else the folder's name. After a
+/// prune it is added from the local branch, else from `origin/<branch>`
+/// (fetched first), else made from the latest origin default branch.
 export function ensureSessionDir(dir: string, branch?: string, repoRoot?: string): SessionDirOutcome {
   if (!dir || existsSync(dir)) return { kind: "present", path: dir };
   const root = repoRoot ?? projectRootOf(dir);
   if (!root || !existsSync(root) || !isGitRepo(root)) return { kind: "missing", path: dir };
-  const name = branch || recordedBranch(root, dir) || dir.slice(dir.lastIndexOf("/") + 1);
+  const folder = dir.slice(dir.lastIndexOf("/") + 1);
+  const name = branch || recordedBranch(root, dir) || branchNamedLike(root, folder) || folder;
   gitQuiet(["-C", root, "worktree", "prune"]);
   mkdirSync(dirname(dir), { recursive: true });
-  if (branchExists(root, name) && gitQuiet(["-C", root, "worktree", "add", dir, name])) {
-    return { kind: "restored", path: dir, branch: name };
+  if (branchExists(root, name)) {
+    const error = gitError(["-C", root, "worktree", "add", dir, name]);
+    return error ? { kind: "failed", path: dir, reason: error } : { kind: "restored", path: dir, branch: name };
   }
-  if (
-    gitQuiet(["-C", root, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`]) &&
-    gitQuiet(["-C", root, "worktree", "add", "--track", "-b", name, dir, `origin/${name}`])
-  ) {
-    return { kind: "restored", path: dir, branch: name };
+  gitQuiet(["-C", root, "fetch", "-q", "origin", `+refs/heads/${name}:refs/remotes/origin/${name}`]);
+  if (gitQuiet(["-C", root, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${name}`])) {
+    const error = gitError(["-C", root, "worktree", "add", "--track", "-b", name, dir, `origin/${name}`]);
+    return error ? { kind: "failed", path: dir, reason: error } : { kind: "restored", path: dir, branch: name };
   }
-  return { kind: "projectRoot", path: root };
+  gitQuiet(["-C", root, "fetch", "-q", "origin"]);
+  let originHead = "";
+  try {
+    originHead = git(["-C", root, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"]);
+  } catch {}
+  const base =
+    [originHead, "origin/main", "origin/master", "main", "master", "HEAD"].find(
+      (c) => c && gitQuiet(["-C", root, "rev-parse", "--verify", "--quiet", `${c}^{commit}`])
+    ) ?? "HEAD";
+  const error = gitError(["-C", root, "worktree", "add", "--no-track", "-b", name, dir, base]);
+  return error ? { kind: "failed", path: dir, reason: error } : { kind: "created", path: dir, branch: name, base };
 }
 
 /// Whether a rush failure is rush unable to start a process in a directory
@@ -141,8 +186,8 @@ export function isMissingCwdError(message: string): boolean {
 
 /// The error a session whose directory is gone ends with.
 export function missingSessionDirMessage(dir: string, outcome: SessionDirOutcome): string {
-  if (outcome.kind === "projectRoot") {
-    return `the session's working directory ${dir} no longer exists and its branch is gone too; resume the card to continue in the project root ${outcome.path}`;
+  if (outcome.kind === "failed") {
+    return `the session's working directory ${dir} no longer exists and git could not add the worktree again: ${outcome.reason}`;
   }
   return `the session's working directory ${dir} no longer exists`;
 }

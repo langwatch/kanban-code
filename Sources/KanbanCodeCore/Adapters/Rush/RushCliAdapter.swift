@@ -265,9 +265,11 @@ public final class RushCliAdapter: @unchecked Sendable {
     @discardableResult
     public func start(_ request: RushStartRequest, human: Bool = false) async throws -> RushSessionInfo {
         var request = request
-        if case .projectRoot(let root) = await ensureDirectory(request.cwd) {
-            // The conversation goes on in the project root rather than not at all.
-            request.cwd = root
+        // A worktree deleted under the card is added again at the same path;
+        // the session never moves to another folder on its own.
+        let directory = await ensureDirectory(request.cwd)
+        if case .failed = directory {
+            throw RushCommandFailed(arguments: ["start"], message: SessionDirectory.missingMessage(request.cwd, outcome: directory))
         }
         request.imagePaths = try await machinePaths(of: request.imagePaths)
         let prompt = request.prompt.flatMap { $0.isEmpty ? nil : $0 }
@@ -298,11 +300,11 @@ public final class RushCliAdapter: @unchecked Sendable {
         for path in try await machinePaths(of: imagePaths) { args += ["--image", path] }
         var result = try await exec(args, stdin: text, timeout: 60)
         // A stopped host starts again in its cwd; a worktree deleted under it
-        // is added again from its branch, then the message goes once more.
+        // is added again at the same path, then the message goes once more.
         if !result.succeeded, SessionDirectory.isMissingCwdError(Self.errorMessage(result)),
            let cwd = (try? await info(id: id))?.cwd, !cwd.isEmpty {
             let outcome = await ensureDirectory(cwd)
-            guard case .restored = outcome else {
+            guard SessionDirectory.isUsable(outcome), outcome != .present else {
                 throw RushCommandFailed(arguments: args, message: SessionDirectory.missingMessage(cwd, outcome: outcome))
             }
             result = try await exec(args, stdin: text, timeout: 60)
@@ -317,7 +319,9 @@ public final class RushCliAdapter: @unchecked Sendable {
     public func ensureDirectory(_ dir: String, branch: String? = nil) async -> SessionDirectory.Outcome {
         guard !dir.isEmpty else { return .present }
         guard let remote else { return await SessionDirectory.ensureLocal(dir: dir, branch: branch) }
-        let script = SessionDirectory.ensureScript(dir: dir, branch: branch)
+        var known = branch
+        if known == nil { known = await SessionDirectory.branchHint?(dir) }
+        let script = SessionDirectory.ensureScript(dir: dir, branch: known)
         // A machine that did not answer is left to rush, which says why.
         guard let result = try? await remote.exec(["/bin/sh", "-c", script], stdin: nil, cwd: nil, timeout: 120),
               result.succeeded else {

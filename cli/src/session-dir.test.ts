@@ -55,10 +55,26 @@ describe("ensureSessionDir", () => {
     assert.deepEqual(outcome, { kind: "restored", path: worktree, branch: "feat/run-concurrency" });
   });
 
-  test("falls back to the project root when the branch is gone too", () => {
+  test("makes a branch gone locally and on origin again from origin's default branch, at the same path", () => {
+    sh(`git init -q --bare -b main .origin.git && git remote add origin "$PWD/.origin.git" && git push -q origin main && git fetch -q origin && git remote set-head origin main`);
     deleteWorktree();
     sh(`git branch -q -D ${NAME}`);
-    assert.deepEqual(ensureSessionDir(worktree), { kind: "projectRoot", path: root });
+    assert.deepEqual(ensureSessionDir(worktree), { kind: "created", path: worktree, branch: NAME, base: "origin/main" });
+    assert.equal(sh(`git -C .claude/worktrees/${NAME} rev-parse --abbrev-ref HEAD`).trim(), NAME);
+  });
+
+  test("a pruned worktree whose branch has a slash comes back on that branch", () => {
+    const dir = join(root, ".worktrees/feat-home-makeover");
+    sh(`git worktree add -q -b feat/home-makeover .worktrees/feat-home-makeover && rm -rf .worktrees/feat-home-makeover && git worktree prune`);
+    assert.deepEqual(ensureSessionDir(dir), { kind: "restored", path: dir, branch: "feat/home-makeover" });
+  });
+
+  test("reports git refusing to add the worktree, and never picks another folder", () => {
+    deleteWorktree();
+    sh(`git worktree add -q .worktrees/other ${NAME}`);
+    const outcome = ensureSessionDir(worktree);
+    assert.equal(outcome.kind, "failed");
+    assert.ok(!existsSync(worktree));
   });
 
   test("tells rush's missing-cwd failure apart", () => {
@@ -93,7 +109,7 @@ describe("a send to a rush host whose worktree is gone", () => {
 
   test("names the missing directory when it cannot come back", () => {
     deleteWorktree();
-    sh(`git branch -q -D ${NAME}`);
+    sh(`git worktree add -q .worktrees/other ${NAME}`);
     fakeRush(worktree);
     setTmuxCommandRunner(() => "");
     const result = pasteTmuxPrompt("rush-22d7452e", "hello");
