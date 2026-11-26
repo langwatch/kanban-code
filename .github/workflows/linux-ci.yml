@@ -38,12 +38,14 @@ jobs:
       - name: Build
         run: swift build --build-tests
 
-      # The suite takes about a minute. A run still going after ten has hung:
+      # Serial: on a four-core runner, tests in parallel starve the
+      # cooperative pool long enough to trip the vault's approval timeouts.
+      # The suite takes about two minutes. A run still going after ten has hung:
       # list the processes and print every thread of the test process, then
       # fail. The full output is uploaded as the test-log artifact.
       - name: Test
         run: |
-          swift test --skip-build > test.log 2>&1 &
+          swift test --skip-build --no-parallel > test.log 2>&1 &
           pid=$!
           for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 5; done
           if kill -0 $pid 2>/dev/null; then
