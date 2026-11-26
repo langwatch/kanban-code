@@ -29,7 +29,11 @@ final class RawTestWebSocket: @unchecked Sendable {
     private let fd: Int32
     private let mailbox = Mutex(Mailbox())
     private let sendLock = NSLock()
-    private(set) var response: HTTPURLResponse?
+    private let responseLock = NSLock()
+    private var _response: HTTPURLResponse?
+    var response: HTTPURLResponse? { responseLock.withLock { _response } }
+    /// Set once the handshake is over, upgraded or refused; sends wait for it.
+    private let opened = Mutex<(done: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
 
     init(port: Int, path: String, token: String?) {
         fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
@@ -45,6 +49,7 @@ final class RawTestWebSocket: @unchecked Sendable {
         guard connected == 0 else {
             close(fd)
             finish()
+            open()
             return
         }
         let key = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
@@ -53,29 +58,56 @@ final class RawTestWebSocket: @unchecked Sendable {
         if let token { head += "Authorization: Bearer \(token)\r\n" }
         head += "\r\n"
         writeAll(Data(head.utf8))
+        // The handshake is read on the reader thread, never in init: init
+        // runs on a cooperative thread, and blocking there for the server's
+        // answer starves the pool the server itself needs on a small machine.
+        let reader = Thread { [self] in
+            guard let rest = handshake(port: port, path: path) else {
+                close(fd)
+                finish()
+                open()
+                return
+            }
+            open()
+            readLoop(initial: rest)
+        }
+        reader.start()
+    }
 
+    private func open() {
+        let waiters = opened.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.done = true
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitOpen() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let done = opened.withLock { state -> Bool in
+                if !state.done { state.waiters.append(cont) }
+                return state.done
+            }
+            if done { cont.resume() }
+        }
+    }
+
+    /// Reads the upgrade response; the bytes after it, or nil when refused.
+    private func handshake(port: Int, path: String) -> Data? {
         var buffer = Data()
         let separator = Data("\r\n\r\n".utf8)
         while buffer.range(of: separator) == nil {
-            guard let chunk = readChunk() else {
-                close(fd)
-                finish()
-                return
-            }
+            guard let chunk = readChunk() else { return nil }
             buffer.append(chunk)
         }
         let end = buffer.range(of: separator)!
         let statusLine = String(decoding: buffer[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n").first ?? ""
         let status = Int(statusLine.split(separator: " ").dropFirst().first ?? "") ?? 0
-        response = HTTPURLResponse(url: URL(string: "ws://127.0.0.1:\(port)\(path)")!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
-        guard status == 101 else {
-            close(fd)
-            finish()
-            return
+        responseLock.withLock {
+            _response = HTTPURLResponse(url: URL(string: "ws://127.0.0.1:\(port)\(path)")!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
         }
-        let rest = Data(buffer[end.upperBound...])
-        let reader = Thread { [self] in readLoop(initial: rest) }
-        reader.start()
+        return status == 101 ? Data(buffer[end.upperBound...]) : nil
     }
 
     // MARK: Receiving
@@ -185,6 +217,7 @@ final class RawTestWebSocket: @unchecked Sendable {
     // MARK: Sending
 
     func send(_ message: Message) async throws {
+        await waitOpen()
         guard !mailbox.withLock({ $0.closed }) else { throw Closed() }
         switch message {
         case .string(let s): sendFrame(opcode: 0x1, payload: Data(s.utf8))
