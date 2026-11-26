@@ -157,13 +157,13 @@ IOS_AGENT_PLIST = $(HOME)/Library/LaunchAgents/$(IOS_AGENT).plist
 ios-device: ios-project
 	Scripts/ios-device-refresh.sh --force
 
-# Every 10 minutes, reinstall on a connected iPhone when the app is missing,
-# its profile ends within a week, or the iOS sources changed.
 # Archive on GitHub's Xcode 27 runner, sign on this Mac, upload to TestFlight.
 # REF=<git ref> (default origin/main), PROFILE=<.mobileprovision> to sign with a given profile.
 ios-testflight:
 	Scripts/ios-release/release-testflight.sh $(or $(REF),origin/main) $(if $(PROFILE),--profile $(PROFILE))
 
+# Every 10 minutes, reinstall on a connected iPhone when the app is missing,
+# its profile is about to end, or the iOS sources changed.
 ios-autoinstall:
 	@mkdir -p $(HOME)/Library/LaunchAgents
 	@printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \

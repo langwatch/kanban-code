@@ -31,7 +31,10 @@ targets:
         product: SwiftTerm
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.kanbancode.mobile
+        # A free personal team cannot use the paid team's App ID:
+        # Scripts/ios-device-refresh.sh builds those with KC_BUNDLE_ID_SUFFIX=.dev.
+        KC_BUNDLE_ID_SUFFIX: ""
+        PRODUCT_BUNDLE_IDENTIFIER: io.kanbancode.mobile$(KC_BUNDLE_ID_SUFFIX)
         PRODUCT_NAME: KanbanCodeMobile
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

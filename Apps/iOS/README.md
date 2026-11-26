@@ -105,7 +105,16 @@ The app asks for notification permission on first launch, registers for APNs and
 
 From the command line, with Xcode signed in to your Apple account: `make ios-device` builds and installs on every connected, paired iPhone.
 
-`make ios-autoinstall` adds a LaunchAgent that runs `Scripts/ios-device-refresh.sh` every 10 minutes. When a paired iPhone is reachable (USB, or awake on the same Wi-Fi), it reinstalls the app if it is missing, if its provisioning profile ends within 7 days, or if the iOS sources changed since the last install. The log is `~/.kanban-code/logs/ios-device-refresh.log`. `make ios-autoinstall-remove` takes it out.
+`make ios-autoinstall` adds a LaunchAgent that runs `Scripts/ios-device-refresh.sh` every 10 minutes. When a paired physical iPhone is reachable (USB, or awake on the same Wi-Fi; simulators and the Mac are skipped), it reinstalls the app if it is missing, if its provisioning profile is about to end, or if the iOS sources changed since the last install (the last commit touching them). The log is `~/.kanban-code/logs/ios-device-refresh.log`. `make ios-autoinstall-remove` takes it out.
+
+The script signs with a paid team Xcode is signed in to, else with a free personal team (any Apple ID added under Xcode > Settings > Apple Accounts):
+
+- A free team cannot use the App ID `io.kanbancode.mobile`, so it installs `io.kanbancode.mobile.dev` (`KC_BUNDLE_ID_SUFFIX` in `project.yml`), a separate app on the phone with its own pairing.
+- Its profile lasts 7 days, so the app is reinstalled when less than 2 days are left (`FREE_RENEW_DAYS`); a paid team's profile, when less than 7 days are left (`RENEW_DAYS`).
+- The Debug build has no entitlements, so no push through APNs; the masters' Pushover alerts still arrive.
+- The first install needs Settings > General > VPN & Device Management > trust the developer on the phone.
+
+`KC_IOS_TEAM` and `KC_IOS_BUNDLE_ID_SUFFIX` pick the team and the suffix by hand, in the environment or in `~/.kanban-code/ios-device/config` (sourced by the script, so the LaunchAgent sees them).
 
 ## Connect to the Mac
 
