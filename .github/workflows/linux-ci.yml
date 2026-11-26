@@ -30,10 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # tmux + git let the real-tmux / real-git tests run for real; gdb and
-      # procps print the threads of a hung run.
-      - name: Install tmux
-        run: apt-get update && apt-get install -y tmux git gdb procps
+      # tmux + git let the real-tmux / real-git tests run for real, python3
+      # runs the stand-in CLIs some tests write; gdb and procps print the
+      # threads of a hung run.
+      - name: Install tools
+        run: apt-get update && apt-get install -y tmux git python3 gdb procps
 
       - name: Build
         run: swift build --build-tests
