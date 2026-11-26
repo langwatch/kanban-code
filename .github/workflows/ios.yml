@@ -71,32 +71,23 @@ jobs:
           UDID=$(xcrun simctl create "iPhone Duo CI" "$TYPE" "$RUNTIME")
           echo "DUO_UDID=$UDID" >> $GITHUB_ENV
           xcrun simctl boot $UDID
-          xcrun simctl help 2>&1 | head -60
-          xcrun simctl help 2>&1 | grep -i -E "fold|pose|hinge|posture" || true
-          xcrun simctl io help 2>&1 | sed -n '40,200p' || true
-          xcrun simctl ui help 2>&1 || true
-          sleep 20
-          xcrun simctl io $UDID enumerate 2>&1 | head -120 || true
-          xcrun simctl ui $UDID 2>&1 | head -40 || true
-          XT=$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Developer/Library/Frameworks/XCTest.framework
-          grep -rin -E "fold|posture|hinge|display|screen" $XT/Headers/XCUIDevice.h $XT/Headers/XCUIScreen.h 2>/dev/null | head -60 || true
-          grep -ril -E "fold|posture|hinge" $XT 2>/dev/null | head -20 || true
-          xcrun swift --version
 
       - name: Fold on request
-        # DuoLayoutTests writes `fold` or `unfold` into KC_FOLD_DIR and waits
-        # for `folded` or `unfolded`. FOLD_CMD/UNFOLD_CMD stay empty until the
-        # simulator offers a fold command, and then the test skips folding.
+        # simctl and XCTest cannot fold the Duo; hinge (pinned) posts the
+        # HID event of Xcode's Device Hub hinge slider and waits until the
+        # simulator reports the angle. DuoLayoutTests writes `fold` or
+        # `unfold` into KC_FOLD_DIR and waits for `folded` or `unfolded`.
         run: |
-          FOLD_CMD=""; UNFOLD_CMD=""
-          if [ -n "$FOLD_CMD" ]; then
-            F=$RUNNER_TEMP/fold; mkdir -p $F
-            echo "TEST_RUNNER_KC_FOLD_DIR=$F" >> $GITHUB_ENV
-            nohup bash -c "while true; do
-              [ -f $F/fold ] && rm $F/fold && $FOLD_CMD && touch $F/folded
-              [ -f $F/unfold ] && rm $F/unfold && $UNFOLD_CMD && touch $F/unfolded
-              sleep 1; done" > $RUNNER_TEMP/fold.log 2>&1 &
-          fi
+          git clone -q https://github.com/artemnovichkov/hinge.git $RUNNER_TEMP/hinge
+          git -C $RUNNER_TEMP/hinge checkout -q 06cb720276281da7f1aadd3874acb0d0ae5eb2b5
+          H="$RUNNER_TEMP/hinge/skills/hinge/scripts/hinge -d $DUO_UDID"
+          $H posture || true
+          F=$RUNNER_TEMP/fold; mkdir -p $F
+          echo "TEST_RUNNER_KC_FOLD_DIR=$F" >> $GITHUB_ENV
+          nohup bash -c "while true; do
+            if [ -f $F/fold ]; then rm $F/fold; $H close && sleep 3 && $H posture && touch $F/folded; fi
+            if [ -f $F/unfold ]; then rm $F/unfold; $H open && sleep 3 && $H posture && touch $F/unfolded; fi
+            sleep 1; done" > $RUNNER_TEMP/fold.log 2>&1 &
 
       - name: Duo UI test
         run: |
@@ -113,6 +104,7 @@ jobs:
           path: |
             ${{ runner.temp }}/shots
             ${{ runner.temp }}/demo/demo.log
+            ${{ runner.temp }}/fold.log
           if-no-files-found: ignore
 
   archive:
