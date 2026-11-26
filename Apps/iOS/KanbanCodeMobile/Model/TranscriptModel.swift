@@ -42,10 +42,18 @@ final class TranscriptModel {
             let delivered = page.messages.filter { $0.role == .user || $0.role == .system }
             messages += pending.filter { p in !delivered.contains { Self.delivers($0, pending: p) } }
             error = nil
+        } catch where Self.isCancellation(error) {
+            // The view that asked went away (a fold rebuilds the layout);
+            // the one that replaces it loads again.
+            return
         } catch {
             if messages.isEmpty { self.error = error.localizedDescription }
         }
         loadedOnce = true
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
     func loadOlder() async {
@@ -57,6 +65,8 @@ final class TranscriptModel {
             let known = Set(messages.map(\.id))
             messages = page.messages.filter { !known.contains($0.id) } + messages
             olderCursor = page.olderCursor
+        } catch where Self.isCancellation(error) {
+            return
         } catch {
             self.error = error.localizedDescription
         }

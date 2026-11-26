@@ -126,8 +126,10 @@ final class DuoLayoutTests: KanbanUITestCase {
         let width = app.windows.firstMatch.frame.width
         XCTAssertLessThanOrEqual(app.buttons["card-\(sidebarCard)"].frame.maxX, width * 0.36,
                                  "the sidebar takes more than a third", file: file, line: line)
-        XCTAssertGreaterThanOrEqual(composer.frame.width, width * 0.55,
-                                    "the card has less than the rest", file: file, line: line)
+        XCTAssertLessThanOrEqual(composer.frame.minX, width * 0.4,
+                                 "the card does not start after the sidebar", file: file, line: line)
+        XCTAssertFalse(app.staticTexts["Cannot load the conversation"].exists,
+                       "the card lost its conversation", file: file, line: line)
     }
 
     private func ask(host dir: String, _ request: String, answer: String) throws {

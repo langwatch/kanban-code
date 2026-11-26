@@ -73,6 +73,9 @@ final class ConversationModel {
             loadedOnce = true
             // Open on screen: what the agent wrote is read.
             if detail.conversation.unread { await markRead() }
+        } catch where TranscriptModel.isCancellation(error) {
+            // The view that asked went away; the one that replaces it loads again.
+            return
         } catch {
             if messages.isEmpty { self.error = error.localizedDescription }
             loadedOnce = true

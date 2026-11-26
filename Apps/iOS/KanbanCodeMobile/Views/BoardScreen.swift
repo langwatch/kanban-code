@@ -72,6 +72,10 @@ struct BoardScreen: View {
                 } message: {
                     Text(conversationError ?? "")
                 }
+                // The system's sidebar width, held in every posture: a
+                // half-open iPhone Duo would otherwise widen the sidebar to
+                // the fold, and the display is one screen, not two halves.
+                .navigationSplitViewColumnWidth(320)
         } detail: {
             NavigationStack(path: detailPath) {
                 detailRoot
