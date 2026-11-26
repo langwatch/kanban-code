@@ -122,7 +122,6 @@ struct PromptComposer<Extra: View>: View {
         .overlay(alignment: .top) {
             if !slashMatches.isEmpty {
                 SlashCommandList(matches: slashMatches, onSelect: pickSlashCommand)
-                    .keepsKeyboard()
                     .frame(height: 0, alignment: .bottom)
                     .offset(y: -8)
             }

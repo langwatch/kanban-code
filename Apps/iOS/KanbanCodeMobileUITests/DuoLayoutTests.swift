@@ -94,7 +94,7 @@ final class DuoLayoutTests: KanbanUITestCase {
     }
 
     /// Unfolded and folded, typing gives the chat the whole height, and a
-    /// tap on an empty spot, the bar's empty column or a scroll of the
+    /// tap on the chat or a scroll of the
     /// board or the chat puts the keyboard away.
     func test4TypingGivesTheChatTheWholeScreen() throws {
         try requireRegularWidth()
@@ -107,8 +107,8 @@ final class DuoLayoutTests: KanbanUITestCase {
         sleep(2)
         shot("duo-09-typing-unfolded")
         assertComposingLayout(keyboardUp: true)
-        // The empty strip under the buttons in the bars' column on the right.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.45)).tap()
+        assertComposerKeepsTheKeyboard()
+        tapConversation()
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
@@ -133,7 +133,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         sleep(2)
         shot("duo-10-typing-folded")
         assertComposingLayout(keyboardUp: true)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.45)).tap()
+        tapConversation()
         assertComposingLayout(keyboardUp: false)
         try ask(host: foldDir, "unfold", answer: "unfolded")
     }

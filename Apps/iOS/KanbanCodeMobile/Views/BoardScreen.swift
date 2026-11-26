@@ -94,9 +94,6 @@ struct BoardScreen: View {
         .sidebarOverCard(isNarrow)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { splitSize = $0 }
         .onChange(of: path.first) { _, _ in overlaySidebarShown = false }
-        // A tap outside the composer, on the board, the chat or the empty
-        // margins of the bars, puts the keyboard away.
-        .background { KeyboardDismissOnTap() }
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { fleet.reconnectDown() }

@@ -175,6 +175,13 @@ struct ChatPane: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // A tap on the chat's empty space, below a short conversation,
+        // puts the keyboard away too.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { composerFocused = false }
+        }
         // Typing, the card's bar is hidden and the chat runs to the top
         // edge with no blur over it.
         .scrollEdgeEffectHidden(composerFocused, for: .top)
@@ -208,7 +215,6 @@ struct ChatPane: View {
             bottomBar
                 .padding(.bottom, keyboardShortfall)
                 .background(Color(.systemBackground), ignoresSafeAreaEdges: .bottom)
-                .keepsKeyboard()
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("composerBar")
         }

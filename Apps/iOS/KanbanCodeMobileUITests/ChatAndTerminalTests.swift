@@ -138,6 +138,7 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         composer.tap()
         assertComposingLayout(keyboardUp: true)
         shot("43-typing-whole-screen")
+        assertComposerKeepsTheKeyboard()
 
         tapConversation()
         assertComposingLayout(keyboardUp: false)

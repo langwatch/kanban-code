@@ -118,6 +118,26 @@ class KanbanUITestCase: XCTestCase {
         }
     }
 
+    /// With the keyboard up, taps in the composer's text keep it up, and
+    /// one tap on send sends: the text leaves the field and shows in the
+    /// chat, and the keyboard stays.
+    func assertComposerKeepsTheKeyboard(file: StaticString = #filePath, line: UInt = #line) {
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "no keyboard", file: file, line: line)
+        composer.tap()
+        composer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        sleep(1)
+        XCTAssertTrue(keyboard.exists, "a tap in the composer put the keyboard away", file: file, line: line)
+        let text = "Sent with one tap \(Int(Date().timeIntervalSince1970) % 100000)"
+        composer.typeText(text)
+        app.buttons["send"].tap()
+        XCTAssertTrue(waitFor(10) { (self.composer.value as? String).map { $0.isEmpty || $0 == "Message" } ?? true },
+                      "one tap on send did not send", file: file, line: line)
+        XCTAssertTrue(message(containing: text).waitForExistence(timeout: 10), "the sent text is not in the chat",
+                      file: file, line: line)
+        XCTAssertTrue(keyboard.exists, "send put the keyboard away", file: file, line: line)
+    }
+
     /// Drags the chat down, as when reading back.
     func scrollChat() {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.25))
