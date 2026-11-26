@@ -392,10 +392,19 @@ struct ChatPane: View {
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
-        // Down on the home indicator's margin like Messages; above the
-        // keyboard a small gap keeps the box off its edge.
-        .padding(.bottom, composerFocused ? 8 : 0)
+        // Above the keyboard a small gap keeps the box off its edge. With
+        // the keyboard down the box goes into the home indicator's margin,
+        // like Messages, and stops just above the indicator.
+        .padding(.bottom, composerFocused ? 8 : -Self.homeIndicatorOverlap)
         .animation(Self.keyboardAnimation, value: composerFocused)
+    }
+
+    /// How far the composer reaches into the bottom safe area: all of it
+    /// but the 16 pt the home indicator needs.
+    private static var homeIndicatorOverlap: CGFloat {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return max(0, (window?.safeAreaInsets.bottom ?? 0) - 16)
     }
 
     /// Close to the keyboard's own slide in and out.

@@ -112,9 +112,12 @@ class KanbanUITestCase: XCTestCase {
             XCTAssertTrue(header.waitForExistence(timeout: 5), "the card header did not come back", file: file, line: line)
             sleep(1)
             XCTAssertTrue(app.staticTexts["cardColumnTitle"].exists, "the title did not come back", file: file, line: line)
-            // The home indicator's margin is at most 34 pt on any iPhone.
-            let gap = app.windows.firstMatch.frame.maxY - composerBar.frame.maxY
-            XCTAssertTrue((0...35).contains(gap), "the composer is \(gap) pt off the bottom: \(composerBar.frame)",
+            // The box (send plus its 10 pt padding) stops 16 pt above the
+            // bottom edge, just over the home indicator, or on the edge's
+            // safe margin where there is no indicator.
+            let send = app.buttons["send"].exists ? app.buttons["send"] : app.buttons["stop"]
+            let gap = app.windows.firstMatch.frame.maxY - (send.frame.maxY + 10)
+            XCTAssertTrue((0...20).contains(gap), "the composer is \(gap) pt off the bottom: \(send.frame)",
                           file: file, line: line)
         }
     }
