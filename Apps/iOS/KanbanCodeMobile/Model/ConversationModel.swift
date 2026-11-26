@@ -10,6 +10,18 @@ struct ConversationRoute: Hashable, Identifiable {
     var focusesComposer = false
 }
 
+/// The read holds of every conversation on this device, shared by the
+/// sidebar rows and the open conversation screen (separate models).
+enum ConversationReadHoldStore {
+    static var holds = ConversationReadHolds()
+
+    /// The human selected the conversation: the open view marks it read
+    /// again, also when it was already the one shown.
+    static func opened(board: BoardModel, cardId: String, id: String) {
+        holds.opened(.init(server: board.server.id.uuidString, cardId: cardId, conversation: id))
+    }
+}
+
 /// One conversation of a card (docs/conversations.md): its messages as the
 /// master that owns the card keeps them, plus the ones sent from here that
 /// it does not list yet.
@@ -74,8 +86,11 @@ final class ConversationModel {
             pendingImages = pendingImages.filter { id, _ in pending.contains { $0.id == id } }
             error = nil
             loadedOnce = true
-            // Open on screen: what the agent wrote is read.
-            if detail.conversation.unread { await markRead() }
+            // Open on screen: what the agent wrote is read, unless the
+            // human marked it unread while it stayed open.
+            if ConversationReadHoldStore.holds.shouldMarkRead(holdKey, unread: detail.conversation.unread) {
+                await markRead()
+            }
         } catch where TranscriptModel.isCancellation(error) {
             // The view that asked went away; the one that replaces it loads again.
             return
@@ -105,16 +120,40 @@ final class ConversationModel {
         apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(title: title)))
     }
 
-    /// Marks it unread on the master until it is opened again.
+    /// Marks it unread on the master until it is opened again or sent in;
+    /// an open view of it leaves it unread meanwhile.
     func markUnread() async throws {
         guard let client else { return }
-        apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(read: false)))
+        ConversationReadHoldStore.holds.markedUnread(holdKey)
+        do {
+            apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(read: false)))
+        } catch {
+            ConversationReadHoldStore.holds.released(holdKey)
+            throw error
+        }
     }
 
     /// As `markRead`, reporting a failure.
     func setRead() async throws {
         guard let client else { return }
+        ConversationReadHoldStore.holds.released(holdKey)
         apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(read: true)))
+    }
+
+    /// Where the human marks it unread from (its row, its own menu) and the
+    /// open view of it share this key.
+    var holdKey: ConversationReadHolds.Key {
+        .init(server: board.server.id.uuidString, cardId: cardId, conversation: id)
+    }
+
+    /// Shown anew: the open view marks it read again.
+    func opened() {
+        ConversationReadHoldStore.holds.opened(holdKey)
+    }
+
+    /// The human sent in it: the open view marks it read again.
+    func interacted() {
+        ConversationReadHoldStore.holds.interacted(holdKey)
     }
 
     func archive() async throws {

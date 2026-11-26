@@ -108,6 +108,8 @@ struct ConversationScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .sensoryFeedback(.success, trigger: sentCount)
+        // Shown anew: a mark unread from before no longer holds.
+        .onAppear { model.opened() }
         .refreshable { await model.refresh() }
         // Board events carry the summary: a reply, a title, a read on
         // another device.
@@ -176,6 +178,10 @@ struct ConversationScreen: View {
             Menu {
                 Button("Rename", systemImage: "pencil", action: startRename)
                 .accessibilityIdentifier("conversationRename")
+                Button(model.conversation?.unread == true ? "Mark as Read" : "Mark as Unread",
+                       systemImage: model.conversation?.unread == true ? "envelope.open" : "envelope.badge",
+                       action: toggleRead)
+                    .accessibilityIdentifier("conversationToggleRead")
                 Button("Archive", systemImage: "archivebox", role: .destructive) { archive() }
                     .accessibilityIdentifier("conversationArchive")
             } label: {
@@ -199,6 +205,7 @@ struct ConversationScreen: View {
                 PromptComposer(card: card, board: board, draft: draft, conversation: model.id, sendError: $sendError,
                                focused: $composerFocused, maxLines: 6, onInterrupt: interrupt, onSent: { text, images, id in
                                    sentCount += 1
+                                   model.interacted()
                                    model.appendPending(text, images: images, id: id)
                                    Task { await model.refresh() }
                                }) {
@@ -230,6 +237,18 @@ struct ConversationScreen: View {
                 UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
             } catch {
                 actionError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Unread stays while it is open, until it is opened again or sent in.
+    private func toggleRead() {
+        let markUnread = model.conversation?.unread != true
+        Task {
+            do {
+                if markUnread { try await model.markUnread() } else { try await model.setRead() }
+            } catch {
+                actionError = "Could not mark the conversation \(markUnread ? "unread" : "read"): \(error.localizedDescription)"
             }
         }
     }

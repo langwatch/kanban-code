@@ -331,6 +331,7 @@ struct BoardScreen: View {
                                 // straight from the board, so back lands there.
                                 ForEach(entry.card.conversations) { conversation in
                                     Button {
+                                        ConversationReadHoldStore.opened(board: entry.master, cardId: entry.card.id, id: conversation.id)
                                         path = [.conversation(ConversationRoute(cardId: entry.card.id, id: conversation.id))]
                                     } label: {
                                         ConversationRow(conversation: conversation)
@@ -419,6 +420,9 @@ struct BoardScreen: View {
         Section {
             ForEach(hits) { hit in
                 Button {
+                    if let owner = fleet.entry(cardId: hit.entry.cardId)?.master {
+                        ConversationReadHoldStore.opened(board: owner, cardId: hit.entry.cardId, id: hit.entry.conversation.id)
+                    }
                     path = [.conversation(ConversationRoute(cardId: hit.entry.cardId, id: hit.entry.conversation.id))]
                 } label: {
                     ConversationSearchRow(hit: hit)
