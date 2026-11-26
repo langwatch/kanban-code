@@ -19,6 +19,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         openCard("card_wait")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         assertSideBySide(sidebarCard: "card_rush")
+        assertSidebarIsAThird(sidebarCard: "card_rush")
         shot("duo-02-unfolded-card")
 
         // Another card from the sidebar replaces the detail, the board stays.
@@ -69,24 +70,23 @@ final class DuoLayoutTests: KanbanUITestCase {
         clearDraft()
     }
 
-    /// Half open (90 degrees, held like a book) the fold is in the middle of
-    /// the inner display: the board ends at it and the card starts after it,
-    /// so no row, text or composer sits on the crease.
-    func test3HalfOpenKeepsContentOffTheFold() throws {
+    /// Half open (90 degrees, held like a book) the inner display is still
+    /// one screen: the sidebar keeps its width from the left edge and the
+    /// card fills the rest, across the fold.
+    func test3HalfOpenIsStillOneScreen() throws {
         try requireRegularWidth()
         guard let foldDir = ProcessInfo.processInfo.environment["KC_FOLD_DIR"] else {
             throw XCTSkip("no TEST_RUNNER_KC_FOLD_DIR: this device cannot be folded from the test")
         }
         openCard("card_wait")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        clearDraft()
         try ask(host: foldDir, "half", answer: "halved")
         sleep(2)
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        dismissKeyboard()
         assertSideBySide(sidebarCard: "card_rush")
-        let middle = app.windows.firstMatch.frame.midX
-        let row = app.buttons["card-card_rush"]
-        XCTAssertLessThanOrEqual(row.frame.maxX, middle, "a board row crosses the fold")
-        XCTAssertGreaterThanOrEqual(composer.frame.minX, middle, "the composer crosses the fold")
+        assertSidebarIsAThird(sidebarCard: "card_rush")
         shot("duo-07-half-open-card")
         try ask(host: foldDir, "unfold", answer: "unfolded")
     }
@@ -120,6 +120,16 @@ final class DuoLayoutTests: KanbanUITestCase {
                                     "the card is not beside the sidebar", file: file, line: line)
     }
 
+    /// The board has the system sidebar width, a third of the display or
+    /// less, and the card gets the rest: one screen, not two halves.
+    private func assertSidebarIsAThird(sidebarCard: String, file: StaticString = #filePath, line: UInt = #line) {
+        let width = app.windows.firstMatch.frame.width
+        XCTAssertLessThanOrEqual(app.buttons["card-\(sidebarCard)"].frame.maxX, width * 0.36,
+                                 "the sidebar takes more than a third", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(composer.frame.width, width * 0.55,
+                                    "the card has less than the rest", file: file, line: line)
+    }
+
     private func ask(host dir: String, _ request: String, answer: String) throws {
         let base = URL(fileURLWithPath: dir)
         let reply = base.appendingPathComponent(answer)
@@ -128,6 +138,10 @@ final class DuoLayoutTests: KanbanUITestCase {
         try Data().write(to: base.appendingPathComponent(request))
         XCTAssertTrue(waitFor(90) { FileManager.default.fileExists(atPath: reply.path) },
                       "the host did not answer \(request) with \(answer)")
+    }
+
+    private func dismissKeyboard() {
+        if app.keyboards.firstMatch.exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.15)).tap() }
     }
 
     private func clearDraft() {
