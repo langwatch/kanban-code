@@ -1,4 +1,5 @@
 import Foundation
+import KanbanCodeRemoteKit
 
 // MARK: - Typed Link Sub-Structs
 
@@ -205,6 +206,9 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
     public var manualOverrides: ManualOverrides
     public var manuallyArchived: Bool
     public var source: LinkSource
+    /// Who created the card, recorded when it was created. nil on cards
+    /// from before it was recorded: `effectiveOrigin` infers it.
+    public var origin: CardOrigin?
     public var promptBody: String?
     public var promptImagePaths: [String]?
 
@@ -323,6 +327,16 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
     public var deletedAt: Date?
 
     public var isTombstone: Bool { deletedAt != nil }
+
+    /// Who created the card: the recorded origin, else an agent for a card
+    /// under a parent card (a subagent), else the human.
+    public var effectiveOrigin: CardOrigin {
+        if let origin { return origin }
+        return parentCardId != nil ? .agent : .human
+    }
+
+    /// An agent created the card, so the board can hide it on request.
+    public var isAgentCreated: Bool { effectiveOrigin == .agent }
 
     /// Evidence that the card is more than a discovered transcript: someone
     /// created, launched, named, pinned or placed it, or it carries work
@@ -463,6 +477,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         manualOverrides: ManualOverrides = ManualOverrides(),
         manuallyArchived: Bool = false,
         source: LinkSource = .discovered,
+        origin: CardOrigin? = nil,
         promptBody: String? = nil,
         promptImagePaths: [String]? = nil,
         parentCardId: String? = nil,
@@ -504,6 +519,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         self.manualOverrides = manualOverrides
         self.manuallyArchived = manuallyArchived
         self.source = source
+        self.origin = origin
         self.promptBody = promptBody
         self.promptImagePaths = promptImagePaths
         self.parentCardId = parentCardId
@@ -540,7 +556,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         // Card-level
         case id, name, projectPath, column, createdAt, updatedAt, lastActivity, lastOpenedAt
-        case manualOverrides, manuallyArchived, source, promptBody, promptImagePaths, parentCardId, modelOverride
+        case manualOverrides, manuallyArchived, source, origin, promptBody, promptImagePaths, parentCardId, modelOverride
         case selfCompactContextThresholdTokens
         case isRemote, remote, isLaunching, launchedAt, sortOrder, pinnedAt, pinnedSortOrder
         case discoveredBranches, discoveredRepos, assistant, apiServiceId, headless
@@ -567,6 +583,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         manualOverrides = try c.decodeIfPresent(ManualOverrides.self, forKey: .manualOverrides) ?? ManualOverrides()
         manuallyArchived = try c.decodeIfPresent(Bool.self, forKey: .manuallyArchived) ?? false
         source = try c.decodeIfPresent(LinkSource.self, forKey: .source) ?? .discovered
+        origin = try? c.decodeIfPresent(CardOrigin.self, forKey: .origin)
         promptBody = try c.decodeIfPresent(String.self, forKey: .promptBody)
         promptImagePaths = try c.decodeIfPresent([String].self, forKey: .promptImagePaths)
         parentCardId = try c.decodeIfPresent(String.self, forKey: .parentCardId)
@@ -675,6 +692,7 @@ public struct Link: Identifiable, Codable, Sendable, Equatable {
         try c.encode(manualOverrides, forKey: .manualOverrides)
         try c.encode(manuallyArchived, forKey: .manuallyArchived)
         try c.encode(source, forKey: .source)
+        try c.encodeIfPresent(origin, forKey: .origin)
         try c.encodeIfPresent(promptBody, forKey: .promptBody)
         try c.encodeIfPresent(promptImagePaths, forKey: .promptImagePaths)
         try c.encodeIfPresent(parentCardId, forKey: .parentCardId)

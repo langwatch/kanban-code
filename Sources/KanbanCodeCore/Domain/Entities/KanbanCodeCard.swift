@@ -37,6 +37,8 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
     /// The plan usage limit its assistant stopped on, as last scanned. Check
     /// `activeUsageLimit` before showing it: it lifts on its own.
     public let usageLimit: RemoteUsageLimit?
+    /// The Laze agent that listens in its session, as its owner knows it.
+    public let lazeAgent: RemoteLazeAgent?
 
     public init(
         link: Link,
@@ -47,7 +49,8 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
         liveModel: String? = nil,
         owner: CardOwner? = nil,
         usageLimit: RemoteUsageLimit? = nil,
-        sessionStatus: CardSessionStatus? = nil
+        sessionStatus: CardSessionStatus? = nil,
+        lazeAgent: RemoteLazeAgent? = nil
     ) {
         self.id = link.id
         self.link = link
@@ -58,6 +61,7 @@ public struct KanbanCodeCard: Identifiable, Sendable, Equatable {
         self.liveModel = liveModel
         self.owner = owner
         self.usageLimit = usageLimit
+        self.lazeAgent = lazeAgent
         self.sessionStatus = sessionStatus
             ?? CardSessionStatus.of(link: link, moving: nil, report: nil, machineState: nil)
     }

@@ -182,6 +182,17 @@ struct RemoteControlServerTests {
         #expect(f.host.state.withLock { $0.tasks.last?.human } == nil)
         _ = try await f.request("POST", "/v1/tasks", token: f.fullToken, body: typed)
         #expect(f.host.state.withLock { $0.tasks.last?.human } == true)
+
+        // An agent-scope device's task is an agent's, whatever it claims;
+        // a full-scope device's task keeps the origin it names.
+        let claimsHuman = try JSONEncoder.remote.encode(RemoteTaskRequest(project: "acme", prompt: "fix it", origin: .human))
+        _ = try await f.request("POST", "/v1/tasks", token: f.agentToken, body: claimsHuman)
+        #expect(f.host.state.withLock { $0.tasks.last?.origin } == .agent)
+        _ = try await f.request("POST", "/v1/tasks", token: f.fullToken, body: typed)
+        #expect(f.host.state.withLock { $0.tasks.last?.origin } == nil)
+        let fromSession = try JSONEncoder.remote.encode(RemoteTaskRequest(project: "acme", prompt: "fix it", origin: .agent))
+        _ = try await f.request("POST", "/v1/tasks", token: f.fullToken, body: fromSession)
+        #expect(f.host.state.withLock { $0.tasks.last?.origin } == .agent)
     }
 
     @Test("prompt, interrupt and resume reach the host")

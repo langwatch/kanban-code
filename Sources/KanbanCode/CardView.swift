@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import KanbanCodeCore
+import KanbanCodeRemoteKit
 
 struct CardView: View {
     let card: KanbanCodeCard
@@ -41,12 +42,19 @@ struct CardView: View {
                     .foregroundStyle(.primary)
             }
 
-            // Project + branch + link icons
+            // Laze agent + project + branch
             HStack(spacing: 4) {
+                if let agent = card.lazeAgent {
+                    LazeAgentLabel(agent: agent, faceSize: CGFloat(14).scaled)
+                        .font(.app(.caption))
+                        .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                }
                 if let projectName = card.projectName {
                     Label(projectName, systemImage: "folder")
                         .font(.app(.caption))
                         .foregroundStyle(.secondary)
+                        .layoutPriority(2)
                 }
                 if let branch = card.link.worktreeLink?.branch {
                     Label(branch, systemImage: "arrow.triangle.branch")

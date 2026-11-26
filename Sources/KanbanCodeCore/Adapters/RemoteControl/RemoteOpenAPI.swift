@@ -225,7 +225,9 @@ enum RemoteOpenAPI {
           "updatedAt": {"type": "string", "format": "date-time"},
           "machineId": {"type": ["string", "null"], "description": "the master that owns the card; send its prompts, transcript and terminal calls there"},
           "machineName": {"type": ["string", "null"]},
-          "usageLimit": {"type": "object", "description": "the card's assistant stopped on its plan's usage limit; present only while it holds", "required": ["window"], "properties": {"window": {"type": "string", "description": "five_hour, seven_day, ... as rush names it"}, "resetsAt": {"type": "string", "format": "date-time"}}}
+          "usageLimit": {"type": "object", "description": "the card's assistant stopped on its plan's usage limit; present only while it holds", "required": ["window"], "properties": {"window": {"type": "string", "description": "five_hour, seven_day, ... as rush names it"}, "resetsAt": {"type": "string", "format": "date-time"}}},
+          "origin": {"type": "string", "enum": ["human", "agent"], "default": "human", "description": "who created the card: agent for subagents, tasks from agent-scope devices and tasks a CLI asked for from inside an assistant session; left out for human; read anything else as agent"},
+          "lazeAgent": {"type": "object", "description": "the Laze agent that listens in the card's session, from the owner's Laze CLI profiles", "required": ["id", "name", "faceSeed"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "faceSeed": {"type": "string", "description": "seed of Laze's generated face"}, "imageUrl": {"type": "string", "description": "an uploaded picture, a signed link that may expire"}, "emoji": {"type": "string", "description": "a face that is one emoji"}}}
         }
       },
       "MachineList": {"type": "object", "properties": {"machines": {"type": "array", "items": {"type": "object", "required": ["name", "kind"], "properties": {"id": {"type": "string", "description": "machine id of a master"}, "name": {"type": "string", "description": "what TaskRequest.machine accepts"}, "kind": {"type": "string", "enum": ["this", "master", "ssh"]}, "online": {"type": "boolean"}, "alwaysOn": {"type": "boolean"}}}}}},
@@ -242,6 +244,7 @@ enum RemoteOpenAPI {
           "project": {"type": "string", "description": "a project path, or a project name as the board lists it"},
           "prompt": {"type": "string"},
           "human": {"type": "boolean", "description": "true only when the human typed the prompt himself in the app; ignored for scope agent"},
+          "origin": {"type": "string", "enum": ["human", "agent"], "description": "who asks for the card; always agent for scope agent; omitted reads as human"},
           "name": {"type": "string"},
           "worktree": {"type": "string", "description": "worktree name, empty for a random one; omit to run in the project checkout"},
           "assistant": {"type": "string", "description": "claude, codex or gemini"},

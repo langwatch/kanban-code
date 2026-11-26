@@ -298,6 +298,11 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     public var conversations: [RemoteConversation]
     /// Its assistant stopped on a usage limit that still holds.
     public var usageLimit: RemoteUsageLimit?
+    /// Who created the card: the human, or an agent (a subagent, a task an
+    /// agent started over the API or the CLI). The JSON leaves out `human`.
+    public var origin: CardOrigin
+    /// The Laze agent that listens in the card's session, when there is one.
+    public var lazeAgent: RemoteLazeAgent?
 
     public init(
         id: String, title: String, column: RemoteColumn, projectPath: String? = nil, projectName: String? = nil,
@@ -308,7 +313,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         pinnedSortOrder: Int? = nil, pinnedAt: Date? = nil,
         lastActivity: Date? = nil, updatedAt: Date, machineId: String? = nil, machineName: String? = nil,
         sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = [],
-        usageLimit: RemoteUsageLimit? = nil
+        usageLimit: RemoteUsageLimit? = nil, origin: CardOrigin = .human, lazeAgent: RemoteLazeAgent? = nil
     ) {
         self.id = id
         self.title = title
@@ -338,6 +343,8 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.sessionStatus = sessionStatus
         self.conversations = conversations
         self.usageLimit = usageLimit
+        self.origin = origin
+        self.lazeAgent = lazeAgent
     }
 }
 
@@ -445,6 +452,7 @@ extension RemoteCard {
         case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived, pinned
         case pinnedSortOrder, pinnedAt
         case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations, usageLimit
+        case origin, lazeAgent
     }
 
     public init(from decoder: Decoder) throws {
@@ -478,7 +486,10 @@ extension RemoteCard {
             // A kind this client does not know yet reads as no status.
             sessionStatus: (try? c.decodeIfPresent(RemoteSessionStatus.self, forKey: .sessionStatus)) ?? nil,
             conversations: (try? c.decodeIfPresent([RemoteConversation].self, forKey: .conversations)) ?? [],
-            usageLimit: (try? c.decodeIfPresent(RemoteUsageLimit.self, forKey: .usageLimit)) ?? nil
+            usageLimit: (try? c.decodeIfPresent(RemoteUsageLimit.self, forKey: .usageLimit)) ?? nil,
+            // An origin this client does not know yet reads as the human's.
+            origin: (try? c.decodeIfPresent(CardOrigin.self, forKey: .origin)) ?? .human,
+            lazeAgent: (try? c.decodeIfPresent(RemoteLazeAgent.self, forKey: .lazeAgent)) ?? nil
         )
     }
 
@@ -512,6 +523,8 @@ extension RemoteCard {
         try c.encodeIfPresent(sessionStatus, forKey: .sessionStatus)
         if !conversations.isEmpty { try c.encode(conversations, forKey: .conversations) }
         try c.encodeIfPresent(usageLimit, forKey: .usageLimit)
+        if origin != .human { try c.encode(origin, forKey: .origin) }
+        try c.encodeIfPresent(lazeAgent, forKey: .lazeAgent)
     }
 }
 
@@ -661,10 +674,14 @@ public struct RemoteTaskRequest: Codable, Sendable, Equatable {
     /// true when the human typed the prompt himself in the app. Ignored
     /// from an agent-scope device.
     public var human: Bool?
+    /// Who asks for the card. `agent` from a CLI that runs inside an agent
+    /// session; an agent-scope device always counts as `agent`. nil reads
+    /// as the human.
+    public var origin: CardOrigin?
 
     public init(project: String, prompt: String, name: String? = nil, worktree: String? = nil,
                 assistant: String? = nil, model: String? = nil, launch: Bool? = nil, images: [RemoteImage]? = nil,
-                machine: String? = nil, human: Bool? = nil) {
+                machine: String? = nil, human: Bool? = nil, origin: CardOrigin? = nil) {
         self.project = project
         self.prompt = prompt
         self.name = name
@@ -675,6 +692,7 @@ public struct RemoteTaskRequest: Codable, Sendable, Equatable {
         self.images = images
         self.machine = machine
         self.human = human
+        self.origin = origin
     }
 }
 

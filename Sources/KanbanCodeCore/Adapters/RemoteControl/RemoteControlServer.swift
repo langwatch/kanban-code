@@ -519,7 +519,10 @@ public final class RemoteControlServer: Sendable {
                 }
                 _ = try RemotePromptImages.decode(body.images)
                 // An agent's task is never the human's, whatever it claims.
-                if device.scope == .agent { body.human = nil }
+                if device.scope == .agent {
+                    body.human = nil
+                    body.origin = .agent
+                }
                 return .response(.json(try await host.createTask(body), status: 201))
 
             case ("POST", "cards/*/prompt"):

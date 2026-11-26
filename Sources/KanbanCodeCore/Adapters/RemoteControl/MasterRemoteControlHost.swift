@@ -206,7 +206,8 @@ public final class MasterRemoteControlHost: RemoteControlHost, @unchecked Sendab
                 launch: request.launch ?? true,
                 imagePaths: imagePaths,
                 machine: request.machine?.trimmingCharacters(in: .whitespacesAndNewlines),
-                human: request.human == true
+                human: request.human == true,
+                origin: request.origin ?? .human
             ))
         }
         for _ in 0..<30 {

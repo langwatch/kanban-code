@@ -47,15 +47,19 @@ public struct PeerCardState: Sendable, Equatable {
     public var conversations: [RemoteConversation]
     /// Its assistant stopped on a usage limit, as the owner reports it.
     public var usageLimit: RemoteUsageLimit?
+    /// The Laze agent of its session, as the owner knows it.
+    public var lazeAgent: RemoteLazeAgent?
 
     public init(isLive: Bool, isBusy: Bool, queue: [QueuedPrompt] = [], status: RemoteSessionStatus? = nil,
-                conversations: [RemoteConversation] = [], usageLimit: RemoteUsageLimit? = nil) {
+                conversations: [RemoteConversation] = [], usageLimit: RemoteUsageLimit? = nil,
+                lazeAgent: RemoteLazeAgent? = nil) {
         self.isLive = isLive
         self.isBusy = isBusy
         self.queue = queue
         self.status = status
         self.conversations = conversations
         self.usageLimit = usageLimit
+        self.lazeAgent = lazeAgent
     }
 }
 
@@ -114,6 +118,11 @@ public final class AppState: @unchecked Sendable {
     /// Claude's statusline rather than derived from the card, so an in-session
     /// `/model` switch shows up.
     public var sessionModels: [String: String] = [:] { didSet { cardInputsVersion &+= 1 } }
+    /// sessionId → the Laze agent that listens in that session on this
+    /// master (`LazeAgentDirectory`).
+    public var lazeAgents: [String: RemoteLazeAgent] = [:] { didSet { cardInputsVersion &+= 1 } }
+    /// The board hides the cards agents created (`Link.isAgentCreated`).
+    public var hidesAgentCards = false { didSet { cardInputsVersion &+= 1 } }
     public var tmuxSessions: Set<String> = [] { didSet { cardInputsVersion &+= 1 } }  // live tmux names
     /// Messages queued in each live rush host, by session name; hosts with
     /// an empty queue are left out.
@@ -569,7 +578,10 @@ public final class AppState: @unchecked Sendable {
                     moving: handoverLine(cardId: link.id),
                     report: cardStarts[link.id],
                     peer: owner != nil ? peerCards[link.id]?.status : nil,
-                    machineState: link.remote.flatMap { remoteMachineStates[$0.machineName] })
+                    machineState: link.remote.flatMap { remoteMachineStates[$0.machineName] }),
+                lazeAgent: owner != nil
+                    ? peerCards[link.id]?.lazeAgent
+                    : link.sessionLink.flatMap { lazeAgents[$0.sessionId] }
             )
         }
         let cardsChanged = newCards != cards
@@ -584,13 +596,15 @@ public final class AppState: @unchecked Sendable {
         let liveIds = Set(cards.lazy.filter { self.isLive($0) }.map(\.id))
         let liveChanged = liveIds != builtLiveCardIds
         builtLiveCardIds = liveIds
-        let memoKey = [selectedProjectPath ?? ""] + excludedPaths
+        let memoKey = [selectedProjectPath ?? "", hidesAgentCards ? "hide-agent-cards" : ""] + excludedPaths
         guard cardsChanged || liveChanged || memoKey != projectFilterMemoKey else { return }
         if memoKey != projectFilterMemoKey {
             projectFilterMemo = [:]
             projectFilterMemoKey = memoKey
         }
+        let hidesAgentCards = hidesAgentCards
         let newFiltered = cards.filter { card in
+            if hidesAgentCards, card.link.isAgentCreated { return false }
             guard let path = card.link.projectPath ?? card.session?.projectPath else {
                 return cardMatchesProjectFilter(card)
             }
@@ -760,6 +774,10 @@ public enum Action: Sendable {
     case setSelfCompactContextThreshold(cardId: String, thresholdTokens: Int?)
     case relinkSession(cardId: String, sessionLink: SessionLink)
     case sessionModelsScanned([String: String])
+    /// What `LazeAgentDirectory` found: session id → Laze agent.
+    case lazeAgentsLoaded([String: RemoteLazeAgent])
+    /// Hides or shows the cards agents created.
+    case setHidesAgentCards(Bool)
     case setCardModel(cardId: String, model: String?)
     case archiveCard(cardId: String)
     /// Brings an archived card back to the board.
@@ -1434,6 +1452,16 @@ public enum Reducer {
             link.updatedAt = .now
             state.links[cardId] = link
             return [.upsertLink(link)]
+
+        case .lazeAgentsLoaded(let agents):
+            guard state.lazeAgents != agents else { return [] }
+            state.lazeAgents = agents
+            return []
+
+        case .setHidesAgentCards(let hides):
+            guard state.hidesAgentCards != hides else { return [] }
+            state.hidesAgentCards = hides
+            return []
 
         case .sessionModelsScanned(let models):
             // Polled every few seconds, so rebuild only on a real change rather

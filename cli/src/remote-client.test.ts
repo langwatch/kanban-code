@@ -463,6 +463,17 @@ describe("kanban remote task / send / interrupt / resume", () => {
     assert.equal(JSON.parse(r.out).column, "backlog");
   });
 
+  test("task from inside an agent session asks as an agent; --origin overrides", async () => {
+    let r = await run(["task", "--project", "langwatch", "do", "it"], { env: { CLAUDECODE: "1" } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal((state.tasks[0] as { origin?: string }).origin, "agent");
+    r = await run(["task", "--project", "langwatch", "--origin", "human", "do", "it"], { env: { KANBAN_CARD_ID: "card_1" } });
+    assert.equal(r.code, 0, r.err);
+    assert.equal((state.tasks[1] as { origin?: string }).origin, undefined);
+    r = await run(["task", "--project", "langwatch", "--origin", "robot", "do", "it"]);
+    assert.notEqual(r.code, 0);
+  });
+
   test("--machine sends the card to another master and says so", async () => {
     let r = await run(["task", "--project", "langwatch", "--machine", "STUDIO", "fix it"]);
     assert.equal(r.code, 0, r.err);

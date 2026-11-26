@@ -15,6 +15,7 @@ extension MasterEngine {
             projectPath: request.projectPath,
             column: request.launch ? .inProgress : .backlog,
             source: .manual,
+            origin: request.origin,
             promptBody: trimmed,
             promptImagePaths: request.imagePaths.isEmpty ? nil : request.imagePaths,
             modelOverride: request.model,

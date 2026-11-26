@@ -1615,6 +1615,21 @@ struct CardDetailView: View {
                 .fixedSize()
             }
 
+            if let agent = card.lazeAgent {
+                HStack(spacing: 8) {
+                    LazeAgentLabel(agent: agent, faceSize: CGFloat(16).scaled)
+                    if let projectName = card.projectName {
+                        Label(projectName, systemImage: "folder")
+                    }
+                    if let branch = card.link.worktreeLink?.branch {
+                        Label(branch, systemImage: "arrow.triangle.branch")
+                    }
+                }
+                .font(.app(.caption))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+
             if card.link.cardLabel != .session {
                 HStack(spacing: 6) {
                     CardLabelBadge(label: card.link.cardLabel)

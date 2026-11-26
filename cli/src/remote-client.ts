@@ -235,6 +235,16 @@ export interface RemoteTaskRequest {
   images?: RemoteImage[];
   /** A machine name from GET /v1/machines; omitted, the project default. */
   machine?: string;
+  /** "agent" when an agent asks for the card; omitted, the human. */
+  origin?: "human" | "agent";
+}
+
+/**
+ * Who asks for a task from this CLI: an agent when it runs inside an
+ * assistant session (a card's session, Claude Code, Codex), else the human.
+ */
+export function taskOriginOf(env: NodeJS.ProcessEnv = process.env): "human" | "agent" {
+  return env.KANBAN_CARD_ID || env.CLAUDECODE || env.CODEX_THREAD_ID ? "agent" : "human";
 }
 
 export interface RemotePromptRequest {
@@ -973,12 +983,17 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
     )
     .option("--no-launch", "only create the card in the backlog, on the master this CLI is logged into")
     .option("--image <path>", "attach an image (PNG, JPEG, GIF or WebP; repeat for more)", collectImage, [] as string[])
+    .option(
+      "--origin <origin>",
+      "who asks for the card, human or agent (default: agent inside an assistant session, else human)"
+    )
     .option("--json", "output as JSON")
     .action(
       run(
         async (
           parts: string[],
           opts: {
+            origin?: string;
             project: string;
             machine?: string;
             worktree?: string | boolean;
@@ -992,6 +1007,11 @@ export function registerRemoteCommands(program: Command, io: RemoteIO = defaultR
         ) => {
           const prompt = await readText(parts, "prompt");
           const body: RemoteTaskRequest = { project: opts.project, prompt };
+          if (opts.origin !== undefined && opts.origin !== "human" && opts.origin !== "agent") {
+            throw new RemoteCliError("--origin must be human or agent");
+          }
+          const origin = (opts.origin as "human" | "agent" | undefined) ?? taskOriginOf(io.env);
+          if (origin === "agent") body.origin = "agent";
           if (opts.image.length) body.images = readImages(opts.image);
           if (opts.name) body.name = opts.name;
           if (opts.worktree !== undefined) body.worktree = opts.worktree === true ? "" : String(opts.worktree);

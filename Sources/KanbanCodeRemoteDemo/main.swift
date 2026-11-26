@@ -141,6 +141,13 @@ final class DemoHost: RemoteControlHost {
     /// Prefix of the ids of this master's cards.
     let idPrefix: String
 
+    /// The Laze agents of the demo's sessions, by card.
+    static let lazeAgents: [String: RemoteLazeAgent] = [
+        "card_rush": RemoteLazeAgent(id: "agent_demo_billing", name: "Billing Helper"),
+        "card_long": RemoteLazeAgent(id: "agent_demo_release", name: "Release Notes", faceSeed: "notes7"),
+        "box_backfill": RemoteLazeAgent(id: "agent_demo_data", name: "Data Ops"),
+    ]
+
     init(rushId: String?, tmuxSocket: String? = nil, machine: RemoteMachine? = nil, cards flavor: String = "default",
          foreign: RemoteMachine? = nil) {
         self.tmuxSocket = tmuxSocket
@@ -162,7 +169,10 @@ final class DemoHost: RemoteControlHost {
                 prs: prs, queuedPromptCount: queued,
                 queuedPrompts: (0..<queued).map { RemoteQueuedPrompt(id: "prompt_seed\($0)", text: "Also run the e2e suite once it passes") },
                 lastActivity: now.addingTimeInterval(-minutesAgo * 60), updatedAt: now,
-                machineId: machine?.id, machineName: machine?.name
+                machineId: machine?.id, machineName: machine?.name,
+                // A Laze agent listens in some sessions; agents created some cards.
+                origin: ["card_long", "card_catchup", "box_deploy"].contains(id) ? .agent : .human,
+                lazeAgent: Self.lazeAgents[id]
             )
         }
         func archived(_ card: RemoteCard) -> RemoteCard {

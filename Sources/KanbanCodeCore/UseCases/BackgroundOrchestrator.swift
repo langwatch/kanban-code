@@ -20,6 +20,7 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
     private let registry: CodingAssistantRegistry?
 
     private var backgroundTask: Task<Void, Never>?
+    private var lazeTask: Task<Void, Never>?
     private var didInitialLoad = false
     private var dispatch: (@MainActor @Sendable (Action) -> Void)?
 
@@ -61,6 +62,29 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
                 await self?.backgroundTick()
                 try? await Task.sleep(for: .seconds(5))
             }
+        }
+        lazeTask = Task { [weak self] in
+            await self?.followLazeAgents()
+        }
+    }
+
+    /// Which Laze agent listens in which session: asked of Laze every ten
+    /// minutes, and within a minute of the Laze CLI binding an agent (its
+    /// config changes).
+    private func followLazeAgents() async {
+        let path = LazeAgentDirectory.configPath()
+        var lastModified: Date?
+        var lastLoad = Date.distantPast
+        while !Task.isCancelled {
+            let modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+            if modified != lastModified || Date().timeIntervalSince(lastLoad) >= 600 {
+                lastModified = modified
+                lastLoad = Date()
+                if let agents = await LazeAgentDirectory.load(path: path), let dispatch {
+                    await MainActor.run { dispatch(.lazeAgentsLoaded(agents)) }
+                }
+            }
+            try? await Task.sleep(for: .seconds(60))
         }
     }
 
@@ -205,6 +229,8 @@ public final class BackgroundOrchestrator: @unchecked Sendable {
     public func stop() {
         backgroundTask?.cancel()
         backgroundTask = nil
+        lazeTask?.cancel()
+        lazeTask = nil
         isRunning = false
     }
 

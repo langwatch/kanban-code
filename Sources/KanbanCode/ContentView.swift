@@ -102,6 +102,9 @@ struct ContentView: View {
     @State var showCreateChannel = false
     @State var renameChannelName: String? = nil
     @AppStorage("appearanceMode") var appearanceMode: AppearanceMode = .auto
+    /// The board leaves out the cards agents created (subagents, tasks
+    /// from agents and Laze). Per Mac.
+    @AppStorage("hidesAgentCards") var hidesAgentCards = false
     @AppStorage("boardViewMode") var boardViewModeRaw = BoardViewMode.kanban.rawValue
     @State var showProcessManager = false
     @AppStorage("killTmuxOnQuit") var killTmuxOnQuit = true
@@ -417,6 +420,17 @@ struct ContentView: View {
 
     /// Sidebar content for expanded mode — always list view.
     /// Toolbar items only included when sidebar is visible to avoid duplication in window toolbar.
+    /// Shows or hides the cards agents created.
+    private var hideAgentCardsButton: some View {
+        Button { hidesAgentCards.toggle() } label: {
+            Image(systemName: hidesAgentCards ? "person.crop.circle.fill" : "person.crop.circle")
+        }
+        .help(hidesAgentCards
+              ? "Only the cards you created show. Click to show the cards agents created too"
+              : "Hide the cards agents created")
+        .accessibilityIdentifier("hideAgentCards")
+    }
+
     private var sidebarContent: some View {
         sidebarListView
             .toolbar {
@@ -434,6 +448,8 @@ struct ContentView: View {
                             Image(systemName: "number")
                         }
                         .help("New chat channel")
+
+                        hideAgentCardsButton
 
                         Button { Task { await store.reconcile() } } label: {
                             Image(systemName: "arrow.clockwise")
@@ -1638,6 +1654,8 @@ struct ContentView: View {
                         }
                         .help("New chat channel")
 
+                        hideAgentCardsButton
+
                         Button { Task { await store.reconcile() } } label: {
                             Image(systemName: "arrow.clockwise")
                         }
@@ -1779,6 +1797,9 @@ struct ContentView: View {
             .background { shortcutButtons }
         } // detail
         .toolbar(removing: .sidebarToggle)
+        .onChange(of: hidesAgentCards, initial: true) { _, hides in
+            store.dispatch(.setHidesAgentCards(hides))
+        }
         .overlay {
             // Unanimated on purpose. The palette is a keyboard tool reached
             // dozens of times an hour, and a fade and scale on the way in is
@@ -2946,6 +2967,7 @@ struct ContentView: View {
             projectPath: projectPath,
             column: startImmediately ? .inProgress : .backlog,
             source: .manual,
+            origin: .human,
             promptBody: trimmed,
             promptImagePaths: imagePaths
         )
@@ -2976,6 +2998,7 @@ struct ContentView: View {
             projectPath: projectPath,
             column: .inProgress,
             source: .manual,
+            origin: .human,
             promptBody: trimmed,
             promptImagePaths: imagePaths,
             assistant: assistant

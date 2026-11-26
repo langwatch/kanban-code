@@ -28,6 +28,8 @@ struct BoardScreen: View {
     @State private var conversationError: String?
     /// Project name the board is narrowed to, "" for every project.
     @AppStorage("projectFilter.fleet") private var projectFilter = ""
+    /// The board leaves out the cards agents created. Per phone.
+    @AppStorage("hidesAgentCards") private var hidesAgentCards = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The sidebar was hidden with its button, kept across launches.
     @SceneStorage("sidebarHidden") private var sidebarHidden = false
@@ -506,11 +508,15 @@ struct BoardScreen: View {
                     }
                 }
                 Section {
+                    Toggle("Hide cards agents created", systemImage: "person.crop.circle", isOn: $hidesAgentCards)
+                        .accessibilityIdentifier("hideAgentCards")
+                }
+                Section {
                     Button("Archived cards", systemImage: "archivebox") { showArchived = true }
                         .accessibilityIdentifier("showArchived")
                 }
             } label: {
-                Label("Board", systemImage: projectFilter.isEmpty
+                Label("Board", systemImage: projectFilter.isEmpty && !hidesAgentCards
                       ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
             }
             .disabled(fleet.onlineMasters.isEmpty && projects.isEmpty)
@@ -596,9 +602,12 @@ struct BoardScreen: View {
         // The same rule as the masters' search: every word, any field.
         let query = CardSearchQuery(search)
         let filterName = filteredProjectName
+        // A search looks through every card, the ones agents created too.
+        let hidesAgentCards = hidesAgentCards && !isSearching
         let visible = entries.filter { entry in
             let card = entry.card
             guard !card.archived else { return false }
+            if hidesAgentCards, card.origin == .agent { return false }
             if !projectFilter.isEmpty, card.projectPath != projectFilter, card.projectName == nil || card.projectName != filterName {
                 return false
             }

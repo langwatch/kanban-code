@@ -69,13 +69,17 @@ struct CardRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Project, machine and branch. The project stays whole; the machine
-    /// and then the branch truncate.
+    /// Laze agent, project, machine and branch. The project stays whole;
+    /// the agent, the machine and then the branch truncate.
     @ViewBuilder private var meta: some View {
         let project = card.projectName.flatMap { $0.isEmpty ? nil : $0 }
         let branch = card.branch.flatMap { $0.isEmpty ? nil : $0 }
-        if project != nil || branch != nil || machine != nil {
+        if project != nil || branch != nil || machine != nil || card.lazeAgent != nil {
             HStack(spacing: 8) {
+                if let agent = card.lazeAgent {
+                    LazeAgentLabel(agent: agent, faceSize: 15)
+                        .layoutPriority(1.5)
+                }
                 if let project {
                     Label(project, systemImage: "folder")
                         .layoutPriority(2)

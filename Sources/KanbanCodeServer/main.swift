@@ -19,6 +19,7 @@ struct ServerOptions {
     var loopbackOnly = false
     var hostName: String?
     var pairName: String?
+    var listsLazeAgents = false
     var reconciles = true
     var scope: RemoteScope = .full
 
@@ -37,6 +38,7 @@ struct ServerOptions {
         while i < args.count {
             switch args[i] {
             case "pair": o.pairName = value()
+            case "laze-agents": o.listsLazeAgents = true
             case "--home": o.home = value()
             case "--port": o.port = Int(value())
             case "--devices": o.devicesPath = value()
@@ -58,6 +60,7 @@ struct ServerOptions {
         say("""
         usage: kanban-code-server [--home <dir>] [--port <n>] [--devices <path>] [--host-name <name>] [--loopback-only] [--no-reconcile]
                kanban-code-server pair <name> [--scope full|agent|peer|terminal] [--home <dir>] [--devices <path>]
+               kanban-code-server laze-agents
 
           --home       kanban home (default ~/.kanban-code): links.json, settings.json, remote/devices.json
           --port       listen port (default: settings remoteControl.port, else \(RemoteAPI.defaultPort))
@@ -66,6 +69,7 @@ struct ServerOptions {
                        sessions this master launched or adopted have cards)
           pair         adds a device and prints its token and kanbancode:// pair link; a running
                        server picks the device up without a restart
+          laze-agents  prints which Laze agent listens in which session, as the cards show them
         """)
         exit(error == nil ? 0 : 2)
     }
@@ -91,6 +95,16 @@ signal(SIGPIPE, SIG_IGN)
 InheritedSessionEnvironment.scrub()
 
 let options = ServerOptions.parse(Array(CommandLine.arguments.dropFirst()))
+
+if options.listsLazeAgents {
+    guard let agents = await LazeAgentDirectory.load() else {
+        fail("no Laze CLI config at \(LazeAgentDirectory.configPath())")
+    }
+    for (session, agent) in agents.sorted(by: { $0.value.name < $1.value.name }) {
+        say("\(session)  \(agent.name)  \(agent.id)\(agent.imageUrl == nil ? "" : "  picture")\(agent.emoji.map { "  \($0)" } ?? "")")
+    }
+    exit(0)
+}
 let devices = RemoteDeviceStore(path: options.devicesFile)
 let settings = try? await SettingsStore(basePath: options.home).read()
 let port = options.port ?? settings?.remoteControl.port ?? RemoteAPI.defaultPort

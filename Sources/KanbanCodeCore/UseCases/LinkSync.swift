@@ -86,6 +86,7 @@ public enum LinkSync {
     public static func copyOwned(from src: Link, to dst: inout Link) {
         dst.projectPath = src.projectPath
         dst.source = src.source
+        dst.origin = src.origin
         dst.createdAt = src.createdAt
         dst.lastActivity = src.lastActivity
         dst.sessionLink = src.sessionLink
@@ -111,6 +112,7 @@ public enum LinkSync {
     public static func ownedEqual(_ a: Link, _ b: Link) -> Bool {
         a.projectPath == b.projectPath
             && a.source == b.source
+            && a.origin == b.origin
             && a.createdAt == b.createdAt
             && a.lastActivity == b.lastActivity
             && a.sessionLink == b.sessionLink
@@ -133,7 +135,7 @@ public enum LinkSync {
     /// exactly one of them, so a new field cannot silently skip sync.
     static var sharedFieldNames: Set<String> { Set(sharedFields.map(\.name)) }
     static let ownedFieldNames: Set<String> = [
-        "projectPath", "source", "createdAt", "lastActivity", "sessionLink", "tmuxLink", "worktreeLink",
+        "projectPath", "source", "origin", "createdAt", "lastActivity", "sessionLink", "tmuxLink", "worktreeLink",
         "queuedPrompts", "discoveredBranches", "discoveredRepos", "isRemote", "remote", "apiServiceId",
         "isLaunching", "launchedAt", "headless", "ownerMachine", "migrating",
     ]

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import KanbanCodeCore
+import KanbanCodeRemoteKit
 import struct KanbanCodeCore.Link
 
 struct ListBoardView: View {
@@ -879,6 +880,13 @@ private struct ListCardRowView: View {
 
                 // Row 2: metadata badges
                 HStack(spacing: 6) {
+                    if let agent = card.lazeAgent {
+                        LazeAgentLabel(agent: agent, faceSize: CGFloat(13).scaled)
+                            .font(.app(.caption2))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
                     CardBadgesRow(card: card)
 
                     if let projectName = card.projectName {

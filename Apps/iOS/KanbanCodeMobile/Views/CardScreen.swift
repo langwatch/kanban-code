@@ -201,6 +201,11 @@ struct CardScreen: View {
                     .lineLimit(2)
             }
             HStack(spacing: 10) {
+                if let agent = card.lazeAgent {
+                    LazeAgentLabel(agent: agent, faceSize: 16)
+                        .layoutPriority(1.5)
+                        .accessibilityIdentifier("cardLazeAgent")
+                }
                 if let project = card.projectName {
                     Label(project, systemImage: "folder")
                         .layoutPriority(2)

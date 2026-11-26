@@ -29,10 +29,13 @@ public struct RemoteLaunchRequest: Sendable, Equatable {
     public var machine: String?
     /// The human typed the prompt himself.
     public var human: Bool
+    /// Who asked for the card.
+    public var origin: CardOrigin
 
     public init(projectPath: String, prompt: String, title: String? = nil, worktree: String? = nil,
                 assistant: CodingAssistant = .claude, model: String? = nil, launch: Bool = true,
-                imagePaths: [String] = [], machine: String? = nil, human: Bool = false) {
+                imagePaths: [String] = [], machine: String? = nil, human: Bool = false,
+                origin: CardOrigin = .human) {
         self.projectPath = projectPath
         self.prompt = prompt
         self.title = title
@@ -43,6 +46,7 @@ public struct RemoteLaunchRequest: Sendable, Equatable {
         self.imagePaths = imagePaths
         self.machine = machine
         self.human = human
+        self.origin = origin
     }
 }
 
