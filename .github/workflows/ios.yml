@@ -73,9 +73,14 @@ jobs:
           xcrun simctl boot $UDID
           xcrun simctl help 2>&1 | head -60
           xcrun simctl help 2>&1 | grep -i -E "fold|pose|hinge|posture" || true
-          xcrun simctl io help 2>&1 | head -40 || true
+          xcrun simctl io help 2>&1 | sed -n '40,200p' || true
+          xcrun simctl ui help 2>&1 || true
+          sleep 20
+          xcrun simctl io $UDID enumerate 2>&1 | head -120 || true
+          xcrun simctl ui $UDID 2>&1 | head -40 || true
           XT=$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Developer/Library/Frameworks/XCTest.framework
-          grep -rih -E "fold|posture|hinge" $XT/Headers 2>/dev/null | head -40 || true
+          grep -rin -E "fold|posture|hinge|display|screen" $XT/Headers/XCUIDevice.h $XT/Headers/XCUIScreen.h 2>/dev/null | head -60 || true
+          grep -ril -E "fold|posture|hinge" $XT 2>/dev/null | head -20 || true
           xcrun swift --version
 
       - name: Fold on request
