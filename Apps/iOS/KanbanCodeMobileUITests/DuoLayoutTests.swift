@@ -66,6 +66,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         sleep(2)
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         assertSideBySide(sidebarCard: "card_rush")
+        assertSidebarIsAThird(sidebarCard: "card_rush")
         shot("duo-06-unfolded-again")
         clearDraft()
     }
@@ -142,13 +143,18 @@ final class DuoLayoutTests: KanbanUITestCase {
                       "the host did not answer \(request) with \(answer)")
     }
 
+    /// A tap on the card's title bar takes the composer's focus away.
     private func dismissKeyboard() {
-        if app.keyboards.firstMatch.exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.15)).tap() }
+        if app.keyboards.firstMatch.exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.07)).tap() }
     }
 
     private func clearDraft() {
-        guard let value = composer.value as? String, !value.isEmpty else { return }
-        composer.tap()
-        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        guard let value = composer.value as? String, !value.isEmpty, value != "Message" else { return }
+        // Tap at the end of the text so the deletes reach all of it.
+        composer.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.25)).tap()
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count + 2))
+        dismissKeyboard()
+        XCTAssertTrue(waitFor(5) { (self.composer.value as? String).map { $0.isEmpty || $0 == "Message" } ?? true },
+                      "the draft is still there")
     }
 }

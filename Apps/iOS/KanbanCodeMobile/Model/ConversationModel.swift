@@ -64,7 +64,10 @@ final class ConversationModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let detail = try await client.conversation(cardId: cardId, id: id)
+            // Unstructured, so a view that goes away mid-load does not
+            // cancel it (see TranscriptModel.refresh).
+            let (cardId, id) = (cardId, id)
+            let detail = try await Task { try await client.conversation(cardId: cardId, id: id) }.value
             conversation = detail.conversation
             messages = detail.messages
             pending.removeAll { sent in Self.lists(detail.messages, sent: sent) }

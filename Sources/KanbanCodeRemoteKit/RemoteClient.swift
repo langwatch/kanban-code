@@ -497,6 +497,11 @@ public struct RemoteClient: Sendable {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
             throw RemoteClientError.transport(RemoteClientError.timedOutText)
+        } catch let error as URLError where error.code == .cancelled {
+            // The caller's task went away: not a failure of the machine.
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw RemoteClientError.transport(error.localizedDescription)
         }

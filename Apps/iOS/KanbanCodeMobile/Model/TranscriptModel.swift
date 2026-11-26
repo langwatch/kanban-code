@@ -34,7 +34,11 @@ final class TranscriptModel {
         isLoading = true
         defer { isLoading = false }
         do {
-            let page = try await client.transcript(cardId: cardId, limit: Self.pageSize)
+            // Unstructured, so a view that goes away mid-load (a fold
+            // rebuilds the layout) does not cancel it: a view that skipped
+            // its own refresh because this one was running gets the page.
+            let cardId = cardId
+            let page = try await Task { try await client.transcript(cardId: cardId, limit: Self.pageSize) }.value
             let pending = messages.filter { $0.id.hasPrefix("pending-") }
             merge(latest: page)
             // A sent prompt shows until the transcript has it, as a
