@@ -46,7 +46,19 @@ class KanbanUITestCase: XCTestCase {
     }
 
     func goBack() {
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let inBar = app.navigationBars.buttons.element(boundBy: 0)
+        if inBar.exists {
+            inBar.tap()
+            return
+        }
+        // Bars shown as a vertical column at the side (a folded iPhone Duo).
+        let back = app.buttons.matching(NSPredicate(format: "identifier == 'BackButton' OR label == 'Back'")).firstMatch
+        if back.exists {
+            back.tap()
+        } else {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        }
     }
 
     /// The chat's message field (a text view once it grows past one line).
@@ -122,7 +134,10 @@ class KanbanUITestCase: XCTestCase {
     }
 
     func shot(_ name: String) {
-        let screenshot = XCUIScreen.main.screenshot()
+        // A foldable has a screen per display and only one shows the app;
+        // the one that is off is a black image, the smallest PNG.
+        let screenshot = XCUIScreen.screens.map { $0.screenshot() }
+            .max { $0.pngRepresentation.count < $1.pngRepresentation.count } ?? XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
         attachment.lifetime = .keepAlways

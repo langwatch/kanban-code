@@ -47,6 +47,11 @@ final class DuoLayoutTests: KanbanUITestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         XCTAssertEqual(composer.value as? String, "Draft across the fold")
         XCTAssertFalse(app.buttons["card-card_rush"].isHittable)
+        if let dir = env["KC_SHOT_DIR"] {
+            try? app.debugDescription.write(toFile: dir + "/duo-04-folded-card.txt", atomically: true, encoding: .utf8)
+        }
+        // The keyboard comes back with the composer's focus; put it away.
+        if app.keyboards.firstMatch.exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35)).tap() }
         shot("duo-04-folded-card")
 
         goBack()
