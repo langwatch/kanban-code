@@ -46,9 +46,10 @@ jobs:
           pid=$!
           for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 5; done
           if kill -0 $pid 2>/dev/null; then
-            for p in $(pgrep -f 'PackageTests.xctest'); do
+            ps -eo pid,ppid,etime,stat,args
+            for p in $(ps -eo pid=,args= | awk '/xctest|swiftpm-testing-helper/ && !/awk/ {print $1}'); do
               echo "=== threads of $p"
-              gdb -p $p -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#' | head -3000
+              gdb -p $p -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#|ptrace|denied' | head -3000
             done
             kill $pid
             exit 1
