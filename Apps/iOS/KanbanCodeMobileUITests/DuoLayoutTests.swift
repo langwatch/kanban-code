@@ -20,6 +20,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         assertSideBySide(sidebarCard: "card_rush")
         assertSidebarIsAThird(sidebarCard: "card_rush")
+        XCTAssertTrue(app.staticTexts.matching(identifier: "messageTime").firstMatch.waitForExistence(timeout: 10), "no message time")
         shot("duo-02-unfolded-card")
 
         // Another card from the sidebar replaces the detail, the board stays.
@@ -113,7 +114,8 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertComposingLayout(keyboardUp: true)
         // Scrolling the board.
         let row = app.buttons["card-card_rush"]
-        row.press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 3)))
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 3)))
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
@@ -150,6 +152,45 @@ final class DuoLayoutTests: KanbanUITestCase {
             assertSideBySide(sidebarCard: "card_rush")
         }
         shot("duo-11-back-from-background")
+    }
+
+    /// Held upright (taller than wide) the sidebar lies over the card, as
+    /// on an iPad in portrait: picking a card hides it.
+    func test6UprightSidebarHidesOnPick() throws {
+        try requireRegularWidth()
+        let start = XCUIDevice.shared.orientation
+        defer { XCUIDevice.shared.orientation = start }
+        let window = app.windows.firstMatch
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            sleep(2)
+            if window.frame.height > window.frame.width { break }
+        }
+        guard window.frame.height > window.frame.width else { throw XCTSkip("the display does not turn upright") }
+
+        let rush = app.buttons["card-card_rush"]
+        if !(rush.waitForExistence(timeout: 5) && rush.isHittable) { showSidebar() }
+        XCTAssertTrue(rush.isHittable, "the sidebar does not show")
+        shot("duo-12-upright-sidebar")
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitFor(5) { !rush.exists || !rush.isHittable }, "the sidebar stays over the card")
+        XCTAssertTrue(composer.isHittable, "the card is not on screen")
+        shot("duo-13-upright-card")
+
+        showSidebar()
+        XCTAssertTrue(rush.waitForExistence(timeout: 5) && rush.isHittable, "the sidebar button does not show it")
+        rush.tap()
+        XCTAssertTrue(waitFor(5) { !app.buttons["card-card_wait"].exists || !app.buttons["card-card_wait"].isHittable },
+                      "the sidebar stays over the second card")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+    }
+
+    private func showSidebar() {
+        let toggle = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'sidebar' OR identifier CONTAINS[c] 'sidebar'")).firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no sidebar button")
+        toggle.tap()
+        sleep(1)
     }
 
     // MARK: Helpers
