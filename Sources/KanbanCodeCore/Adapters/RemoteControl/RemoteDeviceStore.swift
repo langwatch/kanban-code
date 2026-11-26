@@ -28,6 +28,8 @@ public final class RemoteDeviceStore: Sendable {
         public var tokenHash: String
         public var createdAt: Date
         public var lastSeenAt: Date?
+        /// The APNs token the device registered, if it takes pushes.
+        public var push: RemotePushRegistration?
 
         public var device: RemoteDevice {
             RemoteDevice(id: id, name: name, scope: scope, createdAt: createdAt, lastSeenAt: lastSeenAt)
@@ -87,7 +89,8 @@ public final class RemoteDeviceStore: Sendable {
             scope: scope,
             tokenHash: Self.hash(token),
             createdAt: Date(),
-            lastSeenAt: nil
+            lastSeenAt: nil,
+            push: nil
         )
         try state.withLock { s in
             refresh(&s)
@@ -127,6 +130,53 @@ public final class RemoteDeviceStore: Sendable {
                 try? save(&s)
             }
             return s.records[i].device
+        }
+    }
+
+    /// A device that takes pushes, and the token it registered.
+    public struct PushTarget: Sendable, Equatable {
+        public var deviceId: String
+        public var deviceName: String
+        public var registration: RemotePushRegistration
+    }
+
+    /// Saves the APNs token of a device. The same token on another device
+    /// record (the app paired again) moves to this one. Returns false when no
+    /// device has that id.
+    @discardableResult
+    public func setPush(deviceId: String, _ registration: RemotePushRegistration?) throws -> Bool {
+        try state.withLock { s in
+            refresh(&s)
+            guard let i = s.records.firstIndex(where: { $0.id == deviceId }) else { return false }
+            var stamped = registration
+            stamped?.updatedAt = Date()
+            if let token = registration?.token {
+                for j in s.records.indices where j != i && s.records[j].push?.token == token { s.records[j].push = nil }
+            }
+            s.records[i].push = stamped
+            try save(&s)
+            return true
+        }
+    }
+
+    /// Forgets a device's token when it is still the one APNs refused.
+    public func clearPush(deviceId: String, token: String) throws {
+        try state.withLock { s in
+            refresh(&s)
+            guard let i = s.records.firstIndex(where: { $0.id == deviceId }), s.records[i].push?.token == token else { return }
+            s.records[i].push = nil
+            try save(&s)
+        }
+    }
+
+    /// Every device with an APNs token: the full scope phones.
+    public func pushTargets() -> [PushTarget] {
+        state.withLock { s in
+            refresh(&s)
+            return s.records.compactMap { r in
+                guard r.scope == .full, let push = r.push else { return nil }
+                return PushTarget(deviceId: r.id, deviceName: r.name, registration: push)
+            }
         }
     }
 

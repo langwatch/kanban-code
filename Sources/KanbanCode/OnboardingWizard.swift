@@ -9,11 +9,7 @@ struct OnboardingWizard: View {
     @State private var status: DependencyChecker.Status?
     @State private var enabledAssistants: Set<CodingAssistant> = Set(CodingAssistant.allCases)
     @State private var hookErrors: [CodingAssistant: String] = [:]
-    @State private var pushoverEnabled = false
-    @State private var pushoverToken = ""
-    @State private var pushoverUserKey = ""
-    @State private var testSending = false
-    @State private var testResult: String?
+    @State private var phonePush = true
     @State private var isChecking = false
     @State private var navigatingForward = true
     @State private var runningSessions: [CodingAssistant: Int] = [:]
@@ -531,58 +527,23 @@ struct OnboardingWizard: View {
 
                 statusCheckRow("macOS Notifications", done: true)
 
-                Toggle("Enable Pushover (mobile push notifications)", isOn: $pushoverEnabled)
+                Toggle("Send requests to the Kanban Code iPhone app", isOn: $phonePush)
 
-                if pushoverEnabled {
-                    TextField("App Token", text: $pushoverToken)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("User Key", text: $pushoverUserKey)
-                        .textFieldStyle(.roundedBorder)
-
-                    HStack {
-                        Button {
-                            testPushover()
-                        } label: {
-                            HStack(spacing: 4) {
-                                if testSending {
-                                    ProgressView().controlSize(.mini)
-                                } else {
-                                    Image(systemName: "play.circle")
-                                }
-                                Text("Send Test")
-                            }
-                        }
-                        .controlSize(.small)
-                        .disabled(pushoverToken.isEmpty || pushoverUserKey.isEmpty || testSending)
-
-                        if let testResult {
-                            Text(testResult)
-                                .font(.app(.caption))
-                                .foregroundStyle(testResult.contains("Sent") ? .green : .red)
-                        }
-                    }
-
-                    Text("Get your keys at pushover.net")
-                        .font(.app(.caption))
-                        .foregroundStyle(.tertiary)
-
-                } // end if pushoverEnabled
+                Text("Pair the iPhone app under Settings > Remote Control. The Mac pushes to it through Apple's push service with the APNs key set in Settings > Notifications.")
+                    .font(.app(.caption))
+                    .foregroundStyle(.tertiary)
             }
             .padding(24)
         }
         .task {
             if let settings = try? await settingsStore.read() {
-                pushoverEnabled = settings.notifications.pushoverEnabled
-                pushoverToken = settings.notifications.pushoverToken ?? ""
-                pushoverUserKey = settings.notifications.pushoverUserKey ?? ""
+                phonePush = settings.notifications.phonePush
             }
         }
         .onDisappear {
             Task {
                 var settings = (try? await settingsStore.read()) ?? Settings()
-                settings.notifications.pushoverMode = pushoverEnabled ? .enabled : .disabled
-                settings.notifications.pushoverToken = pushoverToken.isEmpty ? nil : pushoverToken
-                settings.notifications.pushoverUserKey = pushoverUserKey.isEmpty ? nil : pushoverUserKey
+                settings.notifications.phonePush = phonePush
                 try? await settingsStore.write(settings)
             }
         }
@@ -613,7 +574,7 @@ struct OnboardingWizard: View {
                             summaryRow("  \(assistant.displayName) Hooks", status: status?.assistantHooks[assistant] ?? false)
                         }
                     }
-                    summaryRow("Pushover", status: status?.pushoverConfigured ?? false)
+                    summaryRow("iPhone push", status: status?.phonePushConfigured ?? false)
                     summaryRow("tmux", status: status?.tmuxAvailable ?? false)
                     summaryRow("GitHub CLI", status: status?.ghAuthenticated ?? false)
                 }
@@ -726,26 +687,6 @@ struct OnboardingWizard: View {
             NotificationCenter.default.post(name: .kanbanCodeSettingsChanged, object: nil)
         }
         wizardServiceSaved.insert(assistant)
-    }
-
-    private func testPushover() {
-        testSending = true
-        testResult = nil
-        Task {
-            do {
-                let client = PushoverClient(token: pushoverToken, userKey: pushoverUserKey)
-                try await client.sendNotification(
-                    title: "Kanban Test",
-                    message: "Notifications are working!",
-                    imageData: nil,
-                    cardId: nil
-                )
-                testResult = "Sent!"
-            } catch {
-                testResult = "Failed"
-            }
-            testSending = false
-        }
     }
 }
 

@@ -224,10 +224,11 @@ final class AppComposition {
             guard let boardStore else { return }
             await presence.follow(store: boardStore)
         }
+        let phoneDevices = RemoteDeviceStore()
         let attentionCenter = AttentionCenter(
             settings: notifications.attentionPolicy,
             mac: DockAttentionNotifier(MacAttentionNotificationClient()),
-            phone: notifications.phoneSender,
+            phone: notifications.phoneSender(devices: phoneDevices),
             localPresence: { presence.snapshot() },
             cardName: { [weak boardStore] id in
                 await MainActor.run { id.flatMap { boardStore?.state.links[$0]?.displayTitle } }
@@ -244,7 +245,7 @@ final class AppComposition {
         Task { await engine.runAttentionPeerSync(presence: { presence.snapshot() }) }
         NotificationCenter.default.addObserver(forName: .kanbanCodeSettingsChanged, object: nil, queue: .main) { _ in
             let notifications = Self.readNotificationSettings()
-            Task { await attentionCenter.configure(settings: notifications.attentionPolicy, phone: notifications.phoneSender) }
+            Task { await attentionCenter.configure(settings: notifications.attentionPolicy, phone: notifications.phoneSender(devices: phoneDevices)) }
         }
         AppServices.resolveAttention = { [weak engine] id, resolution, unsealed, noteFollows in
             guard let engine else { return "Kanban Code is still starting." }

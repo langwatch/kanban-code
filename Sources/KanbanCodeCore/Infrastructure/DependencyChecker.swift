@@ -10,7 +10,7 @@ public enum DependencyChecker {
         public let hooksInstalled: Bool
         public let pandocAvailable: Bool
         public let wkhtmltoimageAvailable: Bool
-        public let pushoverConfigured: Bool
+        public let phonePushConfigured: Bool
         public let ghAvailable: Bool
         public let ghAuthenticated: Bool
         public let tmuxAvailable: Bool
@@ -25,7 +25,7 @@ public enum DependencyChecker {
             hooksInstalled: Bool,
             assistantHooks: [CodingAssistant: Bool] = [:],
             pandocAvailable: Bool,
-            wkhtmltoimageAvailable: Bool, pushoverConfigured: Bool,
+            wkhtmltoimageAvailable: Bool, phonePushConfigured: Bool,
             ghAvailable: Bool, ghAuthenticated: Bool = false,
             tmuxAvailable: Bool, mutagenAvailable: Bool,
             kanbanCliAvailable: Bool = false
@@ -36,7 +36,7 @@ public enum DependencyChecker {
             self.hooksInstalled = hooksInstalled
             self.pandocAvailable = pandocAvailable
             self.wkhtmltoimageAvailable = wkhtmltoimageAvailable
-            self.pushoverConfigured = pushoverConfigured
+            self.phonePushConfigured = phonePushConfigured
             self.ghAvailable = ghAvailable
             self.ghAuthenticated = ghAuthenticated
             self.tmuxAvailable = tmuxAvailable
@@ -67,14 +67,7 @@ public enum DependencyChecker {
             hooks[assistant] = HookManager.isInstalled(for: assistant)
         }
 
-        let pushover: Bool
-        if let settings = try? await settingsStore.read() {
-            let token = settings.notifications.pushoverToken ?? ""
-            let user = settings.notifications.pushoverUserKey ?? ""
-            pushover = settings.notifications.pushoverEnabled && !token.isEmpty && !user.isEmpty
-        } else {
-            pushover = false
-        }
+        let phonePush = (try? await settingsStore.read())?.notifications.phoneReady ?? false
 
         return await Status(
             claudeAvailable: claude,
@@ -84,7 +77,7 @@ public enum DependencyChecker {
             assistantHooks: hooks,
             pandocAvailable: pandoc,
             wkhtmltoimageAvailable: wkhtmltoimage,
-            pushoverConfigured: pushover,
+            phonePushConfigured: phonePush,
             ghAvailable: gh,
             ghAuthenticated: ghAuth,
             tmuxAvailable: tmux,

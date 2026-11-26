@@ -102,10 +102,9 @@ struct VaultApprovalCopyTests {
         #expect(request.title == "Kanban Chat Claude wants to use the Slack user token")
         #expect(request.body == reason)
 
-        let push = Dictionary(PushoverAttentionSender.fields(for: request, cardName: "Kanban Chat Claude", level: .timeSensitive),
-                              uniquingKeysWith: { a, _ in a })
-        #expect(push["title"] == "Kanban Chat Claude wants to use the Slack user token")
-        #expect(push["message"] == reason)
+        let push = try APNsPayloadReader(APNsPush.alert(for: request, cardName: "Kanban Chat Claude", level: .timeSensitive))
+        #expect(push.title == "Kanban Chat Claude wants to use the Slack user token")
+        #expect(push.body == reason)
         #expect(AttentionCopy.notification(for: request, cardName: "Kanban Chat Claude") == (request.title, reason))
     }
 

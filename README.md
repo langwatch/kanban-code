@@ -171,11 +171,7 @@ Configure per-project GitHub issue filters (e.g. `assignee:@me label:bug`) and K
 
 ### Push Notifications
 
-Get notified on your phone — and your Apple Watch — when Claude needs attention, via [Pushover](https://pushover.net/). Notifications include a full summary of what Claude did, rendered as Markdown so you can read the last assistant response right from the lock screen. Multi-line responses are rendered as images for readability.
-
-Smart deduplication prevents notification spam — rapid Stop events are collapsed, and duplicate notifications within 62 seconds are suppressed. Each notification includes the session number so you know which agent is calling.
-
-Falls back to macOS native notifications if Pushover isn't configured. Just add your Pushover user key and API token in settings.
+When an agent needs you to decide (a question, a plan, a permission prompt, a vault approval), the Mac notifies you, and the Kanban Code iPhone app gets the request through Apple's push service (APNs), sent straight from the master that raised it. It lands silently at once, alerts when it is still open after a delay or when you are away from the Mac, and disappears when you answer it anywhere. Tapping it opens the card. Set the APNs key under Settings > Notifications; the iPhone registers itself once paired.
 
 ### Amphetamine Integration
 
@@ -202,7 +198,6 @@ These unlock additional features. Kanban Code works without them — it's all pr
 | [`gh`](https://cli.github.com/) | GitHub PR tracking, issue backlog import |
 | [`mutagen`](https://mutagen.io/) | Remote execution with bidirectional file sync |
 | [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) | Prevent Mac sleep while agents are working |
-| [Pushover](https://pushover.net/) | Push notifications to phone and Apple Watch |
 
 ## Getting Started
 
@@ -255,10 +250,6 @@ Settings are stored in `~/.kanban-code/settings.json` — human-readable, versio
   ],
   "globalView": {
     "excludedPaths": ["/Users/you/Projects/side-project"]
-  },
-  "pushover": {
-    "userKey": "your-key",
-    "apiToken": "your-token"
   }
 }
 ```
@@ -306,7 +297,7 @@ windows/                         # Windows app (Tauri 2)
     └── src/                     # Tauri commands, coordination store, session discovery
 ```
 
-The core library uses **port/adapter** pattern — all external integrations (Claude Code, git, tmux, GitHub, Pushover) are behind protocol interfaces. The same architecture could be adapted for other AI coding tools.
+The core library uses **port/adapter** pattern — all external integrations (Claude Code, git, tmux, GitHub, APNs) are behind protocol interfaces. The same architecture could be adapted for other AI coding tools.
 
 ### Key Design Decisions
 

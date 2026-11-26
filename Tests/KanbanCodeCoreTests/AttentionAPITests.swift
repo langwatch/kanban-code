@@ -158,31 +158,26 @@ struct AttentionEngineTests {
         #expect(AttentionDetector.pendingToolCall(inLines: [use, result]) == nil)
     }
 
-    @Test("settings: legacy lid mode means the phone is on; the policy follows the fields")
+    @Test("settings: an old Pushover mode keeps the phone on, but it needs an APNs key to push")
     func settings() throws {
         let legacy = #"{"pushoverMode":"whenLidClosed","pushoverToken":"t","pushoverUserKey":"u","renderMarkdownImage":true}"#
         let decoded = try JSONDecoder().decode(NotificationSettings.self, from: Data(legacy.utf8))
-        #expect(decoded.pushoverMode == .enabled)
+        #expect(decoded.phonePush)
         #expect(decoded.macNotifications)
-        #expect(decoded.phoneSender != nil)
+        #expect(decoded.phoneSender(devices: RemoteDeviceStore(path: "/nonexistent")) == nil)
+        #expect(decoded.attentionPolicy.phoneEnabled == false)
         #expect(decoded.attentionPolicy.phoneAlertDelay == 180)
         #expect(decoded.attentionPolicy.idleThreshold == 120)
-        var off = decoded
-        off.pushoverMode = .disabled
+        var keyed = decoded
+        keyed.apns = APNsKey(keyId: "K", teamId: "T", key: "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----")
+        #expect(keyed.attentionPolicy.phoneEnabled)
+        #expect(keyed.phoneSender(devices: RemoteDeviceStore(path: "/nonexistent")) != nil)
+        let reread = try JSONDecoder().decode(NotificationSettings.self, from: JSONEncoder().encode(keyed))
+        #expect(reread == keyed)
+        var off = keyed
+        off.phonePush = false
         #expect(off.attentionPolicy.phoneEnabled == false)
-    }
-
-    @Test("Pushover: the silent copy is lowest priority, the alert high, both link to the request")
-    func pushoverFields() {
-        let r = AttentionRequest(id: "att_1", cardId: "c", kind: .question, title: "DB", body: "Which?", options: ["A", "B"])
-        let passive = Dictionary(PushoverAttentionSender.fields(for: r, cardName: "Card", level: .passive), uniquingKeysWith: { a, _ in a })
-        #expect(passive["priority"] == "-2")
-        #expect(passive["title"] == "Card is asking you a question")
-        #expect(passive["message"]?.hasPrefix("DB: Which?") == true)
-        #expect(passive["url"] == "kanbancode://attention/att_1")
-        #expect(passive["message"]?.contains("1. A\n2. B") == true)
-        let alert = Dictionary(PushoverAttentionSender.fields(for: r, cardName: nil, level: .timeSensitive), uniquingKeysWith: { a, _ in a })
-        #expect(alert["priority"] == "1")
-        #expect(alert["sound"] == nil)
+        let disabled = try JSONDecoder().decode(NotificationSettings.self, from: Data(#"{"pushoverMode":"disabled"}"#.utf8))
+        #expect(disabled.phonePush == false)
     }
 }

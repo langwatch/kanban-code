@@ -427,6 +427,9 @@ public final class RemoteControlServer: Sendable {
                 }
                 return .response(.json(try await host.runCLI(body)))
             }
+            if rest == ["me", "push"] {
+                return .response(routePush(method: method, body: request.body, device: device))
+            }
             if rest.first == "attention" {
                 return .response(try await routeAttention(method: method, rest: rest, body: request.body, device: device))
             }
@@ -689,6 +692,33 @@ public final class RemoteControlServer: Sendable {
             }
         } catch {
             return .response(Self.response(for: error))
+        }
+    }
+
+    /// The iPhone app's APNs token: only a full scope device (the human's
+    /// phone) takes attention pushes.
+    private func routePush(method: String, body: Data, device: RemoteDevice) -> RemoteHTTPResponse {
+        guard device.scope == .full else { return .error(403, "the \(device.scope.rawValue) scope cannot take pushes") }
+        switch method {
+        case "PUT":
+            guard let registration = try? JSONDecoder.remote.decode(RemotePushRegistration.self, from: body),
+                  registration.isValid else {
+                return .error(400, "body must be {\"token\": \"<hex>\", \"environment\": \"sandbox\"|\"production\", \"bundleId\"}")
+            }
+            do {
+                return try devices.setPush(deviceId: device.id, registration) ? .noContent : .error(404, "device \(device.id) is no longer paired")
+            } catch {
+                return .error(500, "could not save the push token: \(error)")
+            }
+        case "DELETE":
+            do {
+                _ = try devices.setPush(deviceId: device.id, nil)
+                return .noContent
+            } catch {
+                return .error(500, "could not remove the push token: \(error)")
+            }
+        default:
+            return .error(405, "method \(method) not allowed on /v1/me/push")
         }
     }
 

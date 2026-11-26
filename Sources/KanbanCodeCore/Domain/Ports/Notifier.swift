@@ -8,3 +8,15 @@ public protocol NotifierPort: Sendable {
     /// Check if this notifier is configured and ready.
     func isConfigured() -> Bool
 }
+
+public enum NotificationError: Error, LocalizedError {
+    case apnsFailed
+    case macOSNotificationFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .apnsFailed: "No iPhone took the push"
+        case .macOSNotificationFailed: "macOS notification failed"
+        }
+    }
+}

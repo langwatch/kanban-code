@@ -375,27 +375,14 @@ public struct GitHubSettings: Codable, Sendable {
     }
 }
 
-/// Whether attention requests go to the phone through Pushover.
-public enum PushoverMode: String, Codable, Sendable, CaseIterable {
-    case disabled
-    case enabled
-
-    public init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        // "whenLidClosed" was a mode before the presence policy; the policy
-        // now decides when the phone alerts.
-        self = raw == PushoverMode.disabled.rawValue ? .disabled : .enabled
-    }
-}
-
 /// Settings > Notifications: how decisions agents wait on reach Rogerio.
 public struct NotificationSettings: Codable, Sendable, Equatable {
     /// Notify on the Mac when a request is raised and he is not looking at it.
     public var macNotifications: Bool
-    /// Phone delivery through Pushover.
-    public var pushoverMode: PushoverMode
-    public var pushoverToken: String?
-    public var pushoverUserKey: String?
+    /// Send attention requests to the iPhone app.
+    public var phonePush: Bool
+    /// The APNs auth key this master signs pushes with.
+    public var apns: APNsKey?
     /// The phone alerts when a request is still open after this long.
     public var phoneAlertDelaySeconds: Int
     /// The Mac counts as away after this long without keyboard or mouse input.
@@ -404,62 +391,62 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     public static let defaultPhoneAlertDelaySeconds = 180
     public static let defaultAwayAfterSeconds = 120
 
-    public var pushoverEnabled: Bool { pushoverMode != .disabled }
+    /// Whether this master can push: the phone is on and a whole key is set.
+    public var phoneReady: Bool { phonePush && apns?.isComplete == true }
 
     public init(
-        macNotifications: Bool = true, pushoverMode: PushoverMode = .disabled, pushoverToken: String? = nil,
-        pushoverUserKey: String? = nil, phoneAlertDelaySeconds: Int = NotificationSettings.defaultPhoneAlertDelaySeconds,
+        macNotifications: Bool = true, phonePush: Bool = true, apns: APNsKey? = nil,
+        phoneAlertDelaySeconds: Int = NotificationSettings.defaultPhoneAlertDelaySeconds,
         awayAfterSeconds: Int = NotificationSettings.defaultAwayAfterSeconds
     ) {
         self.macNotifications = macNotifications
-        self.pushoverMode = pushoverMode
-        self.pushoverToken = pushoverToken
-        self.pushoverUserKey = pushoverUserKey
+        self.phonePush = phonePush
+        self.apns = apns
         self.phoneAlertDelaySeconds = phoneAlertDelaySeconds
         self.awayAfterSeconds = awayAfterSeconds
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        if let mode = try c.decodeIfPresent(PushoverMode.self, forKey: .pushoverMode) {
-            pushoverMode = mode
+        if let on = try c.decodeIfPresent(Bool.self, forKey: .phonePush) {
+            phonePush = on
+        } else if let legacy = try c.decodeIfPresent(String.self, forKey: .pushoverMode) {
+            // Settings from before APNs named the phone channel's mode.
+            phonePush = legacy != "disabled"
         } else {
-            let legacy = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? false
-            pushoverMode = legacy ? .enabled : .disabled
+            phonePush = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? true
         }
         macNotifications = try c.decodeIfPresent(Bool.self, forKey: .macNotifications) ?? true
-        pushoverToken = try c.decodeIfPresent(String.self, forKey: .pushoverToken)
-        pushoverUserKey = try c.decodeIfPresent(String.self, forKey: .pushoverUserKey)
+        apns = try c.decodeIfPresent(APNsKey.self, forKey: .apns)
         phoneAlertDelaySeconds = try c.decodeIfPresent(Int.self, forKey: .phoneAlertDelaySeconds) ?? Self.defaultPhoneAlertDelaySeconds
         awayAfterSeconds = try c.decodeIfPresent(Int.self, forKey: .awayAfterSeconds) ?? Self.defaultAwayAfterSeconds
     }
 
     private enum CodingKeys: String, CodingKey {
-        case macNotifications, pushoverMode, pushoverEnabled, pushoverToken, pushoverUserKey
+        case macNotifications, phonePush, apns, pushoverMode, pushoverEnabled
         case phoneAlertDelaySeconds, awayAfterSeconds
     }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(macNotifications, forKey: .macNotifications)
-        try c.encode(pushoverMode, forKey: .pushoverMode)
-        try c.encodeIfPresent(pushoverToken, forKey: .pushoverToken)
-        try c.encodeIfPresent(pushoverUserKey, forKey: .pushoverUserKey)
+        try c.encode(phonePush, forKey: .phonePush)
+        try c.encodeIfPresent(apns, forKey: .apns)
         try c.encode(phoneAlertDelaySeconds, forKey: .phoneAlertDelaySeconds)
         try c.encode(awayAfterSeconds, forKey: .awayAfterSeconds)
     }
 
-    /// The phone channel these settings configure, or nil when off.
-    public var phoneSender: (any PhonePushSender)? {
-        guard pushoverMode != .disabled, let token = pushoverToken, let user = pushoverUserKey,
-              !token.isEmpty, !user.isEmpty else { return nil }
-        return PushoverAttentionSender(token: token, userKey: user)
+    /// The phone channel these settings configure, or nil when off: APNs to
+    /// every iPhone that registered a token in `devices`.
+    public func phoneSender(devices: RemoteDeviceStore) -> (any PhonePushSender)? {
+        guard phoneReady, let apns else { return nil }
+        return APNsAttentionSender(key: apns, devices: devices)
     }
 
     /// The escalation policy these settings describe.
     public var attentionPolicy: AttentionPolicySettings {
         AttentionPolicySettings(
-            macNotifications: macNotifications, phoneEnabled: phoneSender != nil,
+            macNotifications: macNotifications, phoneEnabled: phoneReady,
             phoneAlertDelay: TimeInterval(max(0, phoneAlertDelaySeconds)),
             idleThreshold: TimeInterval(max(30, awayAfterSeconds)))
     }

@@ -74,7 +74,7 @@ struct SettingsStoreTests {
         var settings = Settings()
         settings.promptTemplate = "/orchestrate"
         settings.projects = [Project(path: "/test/project", name: "Test")]
-        settings.notifications.pushoverToken = "tok_123"
+        settings.notifications.apns = APNsKey(keyId: "KEY123", teamId: "TEAM", key: "-----BEGIN PRIVATE KEY-----")
 
         try await store.write(settings)
         let read = try await store.read()
@@ -82,7 +82,8 @@ struct SettingsStoreTests {
         #expect(read.promptTemplate == "/orchestrate")
         #expect(read.projects.count == 1)
         #expect(read.projects[0].name == "Test")
-        #expect(read.notifications.pushoverToken == "tok_123")
+        #expect(read.notifications.apns?.keyId == "KEY123")
+        #expect(read.notifications.apns?.topic == "io.kanbancode.mobile")
     }
 
     @Test("Settings file is human-readable")

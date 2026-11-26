@@ -39,12 +39,15 @@ JSON bodies, up to 48 MiB. Dates are ISO 8601 with milliseconds, UTC (`2026-09-2
 - `sideChat`: the `/v1/cards/{id}/side-chat` routes, and `human` on prompts and tasks.
 - `slashCommands`: `GET /v1/cards/{id}/slash-commands`.
 - `cardSearch`: `GET /v1/cards/search`.
+- `push`: `PUT /v1/me/push` and `DELETE /v1/me/push` (see "Push to the iPhone" below).
 - `conversations`: the `/v1/cards/{id}/conversations` routes, `conversation` on prompts and `conversations` on cards (see [`conversations.md`](conversations.md)).
 
 | Method and path | Scope | Returns |
 |---|---|---|
 | `GET /v1/health` | none | `RemoteHealth` |
 | `GET /v1/me` | any | `RemoteDevice` |
+| `PUT /v1/me/push` | full | `RemotePushRegistration` → 204 |
+| `DELETE /v1/me/push` | full | 204 |
 | `GET /v1/board?all=1` | any | `RemoteBoard` |
 | `GET /v1/cards/search?q=&limit=50&scope=&local=1` | full, agent, peer | `RemoteCardSearchResult`: `cards`, `truncated`, `unreachable` |
 | `GET /v1/cards/{id}` | any | `RemoteCard` |
@@ -103,6 +106,17 @@ Behaviour:
 - `worktree/remove` runs where the worktree is: on this master's disk, over ssh on the ssh machine that runs the card, or on the master that owns the card (the request is forwarded there). Then the card loses its worktree, or is deleted when it has no session. A card on a disposable boxd machine is left alone: the worktree goes with the machine. A failure is a 409 that names the machine: `Worktree cleanup on <machine> failed: <git's answer>`. `discover` re-scans the card for pushed branches and pull requests on the owning master.
 - `/v1/events` (also `?all=1`) sends a `board` event with the whole board on connect, then `cards` events at most once per second: `upserted` holds the cards whose value changed or that joined the set, `removed` the ids that left it (archived, moved out of the recent Done, deleted), and `projects` the project list when it changed. A client applies them by id (`RemoteEvent.apply(to:)` in RemoteKit). A text frame `{"type":"resync"}` from the client gets a whole `board` again; so does every new connection. A `ping` event arrives every 20 seconds.
 - `terminal` without `session` opens the card's primary terminal. A terminal that is not running returns 409.
+
+## Push to the iPhone
+
+The iPhone app registers for APNs and sends its device token to every paired master that lists the `push` feature: `PUT /v1/me/push` with `{"token": "<hex>", "environment": "sandbox" | "production", "bundleId": "io.kanbancode.mobile"}`. Xcode builds carry a development profile and use `sandbox`; TestFlight and App Store builds use `production`. The master keeps it as `push` on the device's record in `devices.json`; the same token on another record (the app paired again) moves to this one, and `DELETE` removes it. Only `full` scope devices take pushes.
+
+The master that raised an attention request sends it to each registered phone with the APNs key in `settings.json` under `notifications.apns` (`keyId`, `teamId`, `key` as the .p8 text, `topic` defaulting to `io.kanbancode.mobile`), signed as an ES256 provider token. The Mac app and `kanban-code-server` read the same field; Settings > Notifications on the Mac sets it.
+
+- First a passive alert (no sound), then a `time-sensitive` one when the policy escalates. Both carry `apns-collapse-id: <request id>`, so the alert replaces the passive copy.
+- The payload's `kanbancode` key holds `attention` (request id), `card` and `machine`. Tapping the notification opens the card; with no card it opens the request.
+- A resolved request sends a background push `{"aps": {"content-available": 1}, "kanbancode": {"withdraw": "<request id>"}}` and the app removes the delivered notification.
+- APNs answers 410, or 400 `BadDeviceToken`, for a dead token: the master forgets it. 429, 5xx and `ExpiredProviderToken` get one retry.
 
 ## Several masters
 

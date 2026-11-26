@@ -161,6 +161,15 @@ public struct RemoteClient: Sendable {
         try await send(makeRequest("GET", "v1/me"))
     }
 
+    /// Registers this device's APNs token, so the master pushes to it.
+    public func registerPush(_ registration: RemotePushRegistration) async throws {
+        try await sendEmpty(makeRequest("PUT", "v1/me/push", body: registration))
+    }
+
+    public func unregisterPush() async throws {
+        try await sendEmpty(makeRequest("DELETE", "v1/me/push"))
+    }
+
     /// The working set (no archived cards, recent Done only), or every card with `all`.
     public func board(all: Bool = false) async throws -> RemoteBoard {
         try await send(makeRequest("GET", "v1/board", query: all ? [URLQueryItem(name: "all", value: "1")] : []))

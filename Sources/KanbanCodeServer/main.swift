@@ -106,7 +106,7 @@ if let name = options.pairName {
     exit(0)
 }
 
-let master = ServerMaster(home: options.home, reconciles: options.reconciles)
+let master = ServerMaster(home: options.home, reconciles: options.reconciles, devices: devices)
 await master.start()
 let host = MasterRemoteControlHost(engine: master.engine)
 let peerServer = BoardPeerLinksServer(store: master.store, peerSync: master.peerSync)

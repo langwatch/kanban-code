@@ -20,6 +20,10 @@ enum RemoteOpenAPI {
     "/v1/me": {
       "get": {"summary": "The device the token belongs to", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Device"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
     },
+    "/v1/me/push": {
+      "put": {"summary": "Register this device's APNs token; the master sends attention requests to it (full scope)", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PushRegistration"}}}}, "responses": {"204": {"description": "saved"}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}}},
+      "delete": {"summary": "Stop pushes to this device", "responses": {"204": {"description": "removed"}, "403": {"$ref": "#/components/responses/Error"}}}
+    },
     "/v1/board": {
       "parameters": [{"$ref": "#/components/parameters/All"}],
       "get": {"summary": "The working set (no archived, no All Sessions, the 30 most recent Done) and projects; all=1 for every card", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Board"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
@@ -186,7 +190,8 @@ enum RemoteOpenAPI {
     "responses": {"Error": {"description": "refused", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}},
     "schemas": {
       "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
-      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}, "features": {"type": "array", "items": {"type": "string", "enum": ["images", "queue", "terminalScroll", "machines", "cardActions", "worktrees", "sideChat", "slashCommands", "cardSearch", "fork", "conversations", "files"]}, "description": "what the server supports beyond apiVersion 1; missing on older servers"}}},
+      "PushRegistration": {"type": "object", "required": ["token", "environment", "bundleId"], "properties": {"token": {"type": "string", "description": "APNs device token, hex"}, "environment": {"type": "string", "enum": ["sandbox", "production"]}, "bundleId": {"type": "string"}, "updatedAt": {"type": "string", "format": "date-time"}}},
+      "Health": {"type": "object", "properties": {"app": {"type": "string"}, "version": {"type": "string"}, "apiVersion": {"type": "integer"}, "hostName": {"type": "string"}, "features": {"type": "array", "items": {"type": "string", "enum": ["images", "queue", "terminalScroll", "machines", "cardActions", "worktrees", "sideChat", "slashCommands", "cardSearch", "fork", "conversations", "files", "push"]}, "description": "what the server supports beyond apiVersion 1; missing on older servers"}}},
       "Device": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "scope": {"type": "string", "enum": ["full", "agent"]}, "createdAt": {"type": "string", "format": "date-time"}, "lastSeenAt": {"type": ["string", "null"], "format": "date-time"}}},
       "PR": {"type": "object", "properties": {"number": {"type": "integer"}, "url": {"type": ["string", "null"]}, "title": {"type": ["string", "null"]}, "status": {"type": ["string", "null"], "description": "open, draft, merged or closed"}}},
       "Terminal": {"type": "object", "properties": {"sessionName": {"type": "string"}, "label": {"type": "string"}, "isPrimary": {"type": "boolean"}}},

@@ -22,10 +22,13 @@ final class ServerMaster {
     let reconciles: Bool
     let effectHandler: EffectHandler
     var attentionCenter: AttentionCenter?
+    /// The paired devices, for the iPhones that take attention pushes.
+    let phoneDevices: RemoteDeviceStore
 
-    init(home: String, reconciles: Bool) {
+    init(home: String, reconciles: Bool, devices: RemoteDeviceStore) {
         self.home = home
         self.reconciles = reconciles
+        self.phoneDevices = devices
 
         let settingsStore = SettingsStore(basePath: home)
         let settings = Self.readSettings(home: home).settings
@@ -146,7 +149,7 @@ final class ServerMaster {
         let store = self.store
         let center = AttentionCenter(
             settings: notifications.attentionPolicy,
-            phone: notifications.phoneSender,
+            phone: notifications.phoneSender(devices: phoneDevices),
             cardName: { id in await MainActor.run { id.flatMap { store.state.links[$0]?.displayTitle } } },
             localMachineId: { [identity] in identity.id },
             stateFile: (home as NSString).appendingPathComponent("attention-deliveries.json"))
@@ -262,7 +265,7 @@ final class ServerMaster {
             let current = Self.readSettings(home: home)
             guard current.raw != last.raw, let settings = current.settings else { continue }
             if settings.peers != last.settings?.peers { await peerSync.setPeers(settings.peers) }
-            await attentionCenter?.configure(settings: settings.notifications.attentionPolicy, phone: settings.notifications.phoneSender)
+            await attentionCenter?.configure(settings: settings.notifications.attentionPolicy, phone: settings.notifications.phoneSender(devices: phoneDevices))
             last = current
             await store.loadSettingsAndCache()
         }

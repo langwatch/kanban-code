@@ -38,9 +38,12 @@ public enum RemoteAPI {
         public static let conversations = "conversations"
         /// `POST /v1/cards/{id}/files`: any file for a prompt, by path.
         public static let files = "files"
+        /// `PUT /v1/me/push` and `DELETE /v1/me/push`: the iPhone app's APNs
+        /// device token, which the master sends attention requests to.
+        public static let push = "push"
     }
 
-    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork, Feature.conversations, Feature.files]
+    public static let features = [Feature.images, Feature.queue, Feature.terminalScroll, Feature.machines, Feature.cardActions, Feature.worktrees, Feature.sideChat, Feature.slashCommands, Feature.cardSearch, Feature.fork, Feature.conversations, Feature.files, Feature.push]
 }
 
 /// What a device may do. `full` is a phone: everything, terminals included.
@@ -96,6 +99,36 @@ public struct RemoteDevice: Codable, Sendable, Equatable, Identifiable {
         self.scope = scope
         self.createdAt = createdAt
         self.lastSeenAt = lastSeenAt
+    }
+}
+
+/// The APNs device token an iPhone registers with a master
+/// (`PUT /v1/me/push`), so the master can push to it directly.
+public struct RemotePushRegistration: Codable, Sendable, Equatable {
+    public enum Environment: String, Codable, Sendable {
+        /// Builds Xcode installs (development signing).
+        case sandbox
+        /// TestFlight and App Store builds.
+        case production
+    }
+
+    /// The device token, lowercase hex.
+    public var token: String
+    public var environment: Environment
+    /// The app's bundle id, the APNs topic.
+    public var bundleId: String
+    public var updatedAt: Date?
+
+    public init(token: String, environment: Environment, bundleId: String, updatedAt: Date? = nil) {
+        self.token = token
+        self.environment = environment
+        self.bundleId = bundleId
+        self.updatedAt = updatedAt
+    }
+
+    /// A token is 32 or more bytes of hex.
+    public var isValid: Bool {
+        token.count >= 64 && token.count <= 200 && token.allSatisfy { $0.isHexDigit } && !bundleId.isEmpty
     }
 }
 

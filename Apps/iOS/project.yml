@@ -38,6 +38,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: "NO"
         INFOPLIST_FILE: KanbanCodeMobile/Info.plist
+      configs:
+        # Push needs the App ID's Push Notifications capability; Debug installs
+        # from Xcode (make ios-device) stay without it.
+        Release:
+          CODE_SIGN_ENTITLEMENTS: KanbanCodeMobile/KanbanCodeMobile.entitlements
     info:
       path: KanbanCodeMobile/Info.plist
       properties:
@@ -46,6 +51,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
+        UIBackgroundModes:
+          - remote-notification
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

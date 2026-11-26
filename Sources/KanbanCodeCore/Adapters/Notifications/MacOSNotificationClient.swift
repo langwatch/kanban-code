@@ -3,7 +3,7 @@ import Foundation
 import UserNotifications
 
 /// Sends notifications via macOS UNUserNotificationCenter.
-/// Always available as a fallback when Pushover is not configured.
+/// The Mac's own notifications.
 public final class MacOSNotificationClient: NotifierPort, @unchecked Sendable {
 
     public init() {}

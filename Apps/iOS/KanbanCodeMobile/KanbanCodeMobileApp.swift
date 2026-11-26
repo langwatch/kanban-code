@@ -3,6 +3,7 @@ import KanbanCodeRemoteKit
 
 @main
 struct KanbanCodeMobileApp: App {
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @State private var servers: ServerStore
     @State private var fleet: FleetModel
     @State private var pairing = PairingCoordinator()
@@ -20,14 +21,20 @@ struct KanbanCodeMobileApp: App {
                 .environment(fleet)
                 .environment(pairing)
                 .onOpenURL { url in
-                    // kanbancode://attention/<id> comes from a phone notification.
+                    // kanbancode://attention/<id> and kanbancode://card/<id> open a request or a card.
                     if url.scheme == "kanbancode", url.host() == "attention" {
                         NotificationCenter.default.post(name: .openAttention, object: url.pathComponents.dropFirst().first)
+                        return
+                    }
+                    if url.scheme == "kanbancode", url.host() == "card", let id = url.pathComponents.dropFirst().first {
+                        NotificationCenter.default.post(name: .openCard, object: id)
                         return
                     }
                     pairing.open(url.absoluteString, into: servers)
                 }
                 .task { await pairFromEnvironment() }
+                .task { PushRegistry.shared.attach(servers) }
+                .onChange(of: servers.tokenRevision) { PushRegistry.shared.resync() }
         }
     }
 

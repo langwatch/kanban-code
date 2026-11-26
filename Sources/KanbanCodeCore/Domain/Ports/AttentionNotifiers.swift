@@ -27,15 +27,14 @@ public enum PhonePushLevel: String, Sendable, Equatable {
     case timeSensitive
 }
 
-/// Sends attention requests to the phone. Pushover today; APNs takes the
-/// same shape once the app has a push certificate.
+/// Sends attention requests to the phone: APNs to the iPhone app.
 public protocol PhonePushSender: Sendable {
     func send(_ request: AttentionRequest, cardName: String?, level: PhonePushLevel) async throws
     /// Clears what was sent for a resolved request, where the channel can.
     func withdraw(_ request: AttentionRequest) async
     /// The channel takes a silent copy before the alert. A channel that
-    /// cannot replace or delete a message (Pushover) says false, so the phone
-    /// gets one entry per request: the alert.
+    /// cannot replace or delete a message says false, so the phone gets one
+    /// entry per request: the alert.
     var sendsSilentCopy: Bool { get }
 }
 

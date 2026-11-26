@@ -61,9 +61,9 @@ struct AttentionDeliveryTests {
         #expect(phone.events.count == 1)
     }
 
-    @Test("Pushover takes one message per request: no silent copy, only the alert")
-    func pushoverHasNoSilentCopy() {
-        #expect(PushoverAttentionSender(token: "t", userKey: "u").sendsSilentCopy == false)
+    @Test("APNs replaces the silent copy with the alert; a channel that cannot takes only the alert")
+    func noSilentCopyChannel() {
+        #expect(APNsAttentionSender(key: APNsKey(keyId: "K", teamId: "T", key: ""), devices: RemoteDeviceStore(path: "/nonexistent")).sendsSilentCopy)
         var settings = AttentionPolicySettings()
         settings.phoneSilentCopy = false
         let request = vaultRequest(card: nil)
@@ -107,8 +107,8 @@ struct AttentionDeliveryTests {
         let request = AttentionRequest(id: "perm_1", cardId: "c", kind: .permission, title: "Permission needed", body: body)
         let copy = AttentionCopy.notification(for: request, cardName: "Video card")
         #expect(copy == ("Video card needs your permission", "Claude wants to run a command: Convert the recording to mp4"))
-        let push = Dictionary(PushoverAttentionSender.fields(for: request, cardName: "Video card", level: .timeSensitive), uniquingKeysWith: { a, _ in a })
-        #expect(push["message"]?.contains("ffmpeg") == false)
+        let push = try! APNsPayloadReader(APNsPush.alert(for: request, cardName: "Video card", level: .timeSensitive))
+        #expect(push.body.contains("ffmpeg") == false)
 
         let rush = MasterEngine.permissionBody(message: "Bash cd /root/x && ffmpeg -i a.mov a.mp4", tool: nil)
         #expect(AttentionCopy.firstParagraph(rush) == "Claude wants to run a Bash command")
