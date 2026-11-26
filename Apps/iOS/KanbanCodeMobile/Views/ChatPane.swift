@@ -665,6 +665,10 @@ struct MessageView: View {
     var loadImage: ((Int) async throws -> Data)?
     @State private var expanded = false
     @State private var showsWhole = false
+    /// A tap in the chat, which puts the keyboard away. A button in a
+    /// scroll view keeps its tap from the chat's own tap gesture, so the
+    /// buttons here call it themselves.
+    @Environment(\.selectableTextTap) private var onChatTap
 
     /// Characters of a message shown before "Show the whole message": a
     /// pasted log or a dump runs to hundreds of KB, which the phone lays out
@@ -738,6 +742,7 @@ struct MessageView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
             Button {
+                onChatTap?()
                 withAnimation(.snappy) { expanded.toggle() }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -772,6 +777,7 @@ struct MessageView: View {
     private func systemNote(detail: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
+                onChatTap?()
                 withAnimation(.snappy) { expanded.toggle() }
             } label: {
                 HStack(spacing: 6) {
