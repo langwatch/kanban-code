@@ -30,6 +30,8 @@ struct BoardScreen: View {
     @AppStorage("projectFilter.fleet") private var projectFilter = ""
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var columns: NavigationSplitViewVisibility = .all
+    /// The fold of a half-open iPhone Duo, in the split view's space.
+    @State private var fold: Fold?
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
@@ -72,14 +74,17 @@ struct BoardScreen: View {
                 } message: {
                     Text(conversationError ?? "")
                 }
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
+                .navigationSplitViewColumnWidth(min: sidebarToFold ?? 320, ideal: sidebarToFold ?? 380, max: sidebarToFold ?? 460)
+                .avoidingFold()
         } detail: {
             NavigationStack(path: detailPath) {
                 detailRoot
                     .navigationDestination(for: BoardRoute.self) { destination($0) }
             }
+            .avoidingFold()
         }
         .navigationSplitViewStyle(.balanced)
+        .onFoldChange { fold = $0 }
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { fleet.reconnectDown() }
@@ -113,6 +118,13 @@ struct BoardScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCard)) { note in
             if let id = note.object as? String { path = [.card(id)] }
         }
+    }
+
+    /// On a half-open iPhone Duo the sidebar ends where the fold starts, so
+    /// the board is one half and the open card the other.
+    private var sidebarToFold: CGFloat? {
+        guard let fold, fold.isVertical, fold.frame.minX >= 280 else { return nil }
+        return fold.frame.minX
     }
 
     /// The board is out of sight under an open card: only in a single stack.

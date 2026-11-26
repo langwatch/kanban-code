@@ -7,7 +7,8 @@ import XCTest
 ///
 /// Folding is asked of the host: with TEST_RUNNER_KC_FOLD_DIR set, the test
 /// writes `fold` (or `unfold`) into that directory and waits for the host to
-/// fold the simulator and answer with `folded` (or `unfolded`). Without it
+/// fold the simulator and answer with `folded` (or `unfolded`; `half` bends
+/// it to 90 degrees and answers `halved`). Without it
 /// the fold steps are skipped.
 final class DuoLayoutTests: KanbanUITestCase {
 
@@ -66,6 +67,28 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertSideBySide(sidebarCard: "card_rush")
         shot("duo-06-unfolded-again")
         clearDraft()
+    }
+
+    /// Half open (90 degrees, held like a book) the fold is in the middle of
+    /// the inner display: the board ends at it and the card starts after it,
+    /// so no row, text or composer sits on the crease.
+    func test3HalfOpenKeepsContentOffTheFold() throws {
+        try requireRegularWidth()
+        guard let foldDir = ProcessInfo.processInfo.environment["KC_FOLD_DIR"] else {
+            throw XCTSkip("no TEST_RUNNER_KC_FOLD_DIR: this device cannot be folded from the test")
+        }
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        try ask(host: foldDir, "half", answer: "halved")
+        sleep(2)
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        assertSideBySide(sidebarCard: "card_rush")
+        let middle = app.windows.firstMatch.frame.midX
+        let row = app.buttons["card-card_rush"]
+        XCTAssertLessThanOrEqual(row.frame.maxX, middle, "a board row crosses the fold")
+        XCTAssertGreaterThanOrEqual(composer.frame.minX, middle, "the composer crosses the fold")
+        shot("duo-07-half-open-card")
+        try ask(host: foldDir, "unfold", answer: "unfolded")
     }
 
     // MARK: Helpers

@@ -87,10 +87,12 @@ jobs:
           nohup bash -c "while true; do
             if [ -f $F/fold ]; then rm $F/fold; $H close && sleep 3 && $H posture && touch $F/folded; fi
             if [ -f $F/unfold ]; then rm $F/unfold; $H open && sleep 3 && $H posture && touch $F/unfolded; fi
+            if [ -f $F/half ]; then rm $F/half; $H half && sleep 3 && $H posture && touch $F/halved; fi
             sleep 1; done" > $RUNNER_TEMP/fold.log 2>&1 &
 
       - name: Duo UI test
         run: |
+          xcrun swift --version
           mkdir -p $RUNNER_TEMP/shots
           TEST_RUNNER_KC_PAIR_LINK="$KC_LINK" TEST_RUNNER_KC_SHOT_DIR=$RUNNER_TEMP/shots \
           xcodebuild test -project Apps/iOS/KanbanCodeMobile.xcodeproj -scheme KanbanCodeMobile \
