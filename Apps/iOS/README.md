@@ -61,7 +61,9 @@ The board is a `NavigationSplitView` (`Views/BoardScreen.swift`) with one naviga
 
 `path.first` is the sidebar's selection and the rest is pushed in the detail column, so folding or unfolding keeps the open card, its draft and an open conversation. Toolbar items are native `.toolbar` items with a title and a symbol, which lets iPhone Duo place them in its vertical bar.
 
-The app needs the iOS 27.1 SDK or later to get the whole iPhone Duo display, so the Duo build and `DuoLayoutTests` run on GitHub Actions (`.github/workflows/ios.yml`, job `duo`, on the `xcode-27` image). Locally the same test runs on an iPad simulator; it skips on a compact iPhone, and skips its fold step unless `TEST_RUNNER_KC_FOLD_DIR` names a folder where the host answers `fold` and `unfold` requests.
+Half open, the Duo reports its fold through `GeometryProxy.reservedRegions(kind: .division)` (`Views/FoldAware.swift`). The sidebar then ends where the fold starts and each column insets the side the fold crosses, so no row, text or composer sits on the crease. Flat open, the fold is inactive and content may cross it. Builds with an SDK older than iOS 27.1 never see a fold.
+
+The app needs the iOS 27.1 SDK or later to get the whole iPhone Duo display, so the Duo build and `DuoLayoutTests` run on GitHub Actions (`.github/workflows/ios.yml`, job `duo`, on the `xcode-27` image). Locally the same test runs on an iPad simulator; it skips on a compact iPhone, and skips its fold step unless `TEST_RUNNER_KC_FOLD_DIR` names a folder where the host answers `fold`, `unfold` and `half` (90 degrees) requests.
 
 ## Markdown in chat messages
 
