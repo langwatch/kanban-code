@@ -22,10 +22,16 @@ on:
         description: "CURRENT_PROJECT_VERSION of the archive (empty: no archive, tests only)"
         required: false
         default: ""
+      sha:
+        description: "Commit to archive (empty: the commit the run starts from)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   duo:
-    runs-on: macos-26
+    # Xcode 27 and the iPhone Duo simulator are only on the xcode-27 image.
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -66,6 +72,26 @@ jobs:
           echo "DUO_UDID=$UDID" >> $GITHUB_ENV
           xcrun simctl boot $UDID
           xcrun simctl help 2>&1 | head -60
+          xcrun simctl help 2>&1 | grep -i -E "fold|pose|hinge|posture" || true
+          xcrun simctl io help 2>&1 | head -40 || true
+          XT=$(xcrun --sdk iphonesimulator --show-sdk-platform-path)/Developer/Library/Frameworks/XCTest.framework
+          grep -rih -E "fold|posture|hinge" $XT/Headers 2>/dev/null | head -40 || true
+          xcrun swift --version
+
+      - name: Fold on request
+        # DuoLayoutTests writes `fold` or `unfold` into KC_FOLD_DIR and waits
+        # for `folded` or `unfolded`. FOLD_CMD/UNFOLD_CMD stay empty until the
+        # simulator offers a fold command, and then the test skips folding.
+        run: |
+          FOLD_CMD=""; UNFOLD_CMD=""
+          if [ -n "$FOLD_CMD" ]; then
+            F=$RUNNER_TEMP/fold; mkdir -p $F
+            echo "TEST_RUNNER_KC_FOLD_DIR=$F" >> $GITHUB_ENV
+            nohup bash -c "while true; do
+              [ -f $F/fold ] && rm $F/fold && $FOLD_CMD && touch $F/folded
+              [ -f $F/unfold ] && rm $F/unfold && $UNFOLD_CMD && touch $F/unfolded
+              sleep 1; done" > $RUNNER_TEMP/fold.log 2>&1 &
+          fi
 
       - name: Duo UI test
         run: |
@@ -86,10 +112,12 @@ jobs:
 
   archive:
     if: github.event_name == 'workflow_dispatch' && inputs.build != ''
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.sha || github.sha }}
 
       - name: Select the newest Xcode 27
         run: |
