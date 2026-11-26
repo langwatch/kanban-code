@@ -61,7 +61,7 @@ public enum ByteSearch {
         for needle in needles where needle.count <= count {
             let found = needle.withUnsafeBufferPointer { pointer -> Bool in
                 guard let needleBase = pointer.baseAddress else { return false }
-                return memmem(haystack, count, needleBase, pointer.count) != nil
+                return findBytes(haystack, count, needleBase, pointer.count) != nil
             }
             if found { return true }
         }
@@ -88,7 +88,7 @@ public enum ByteSearch {
                     needle.withUnsafeBufferPointer { haystack in
                         candidate.withUnsafeBufferPointer { probe in
                             guard let hb = haystack.baseAddress, let pb = probe.baseAddress else { return false }
-                            return memmem(hb, haystack.count, pb, probe.count) != nil
+                            return findBytes(hb, haystack.count, pb, probe.count) != nil
                         }
                     }
                 }
@@ -158,14 +158,22 @@ extension String {
     }
 }
 
-#if !canImport(Darwin)
+#if canImport(Darwin)
+private func findBytes(
+    _ haystack: UnsafeRawPointer, _ haystackCount: Int,
+    _ needle: UnsafeRawPointer, _ needleCount: Int
+) -> UnsafeRawPointer? {
+    UnsafeRawPointer(memmem(haystack, haystackCount, needle, needleCount))
+}
+#else
 #if canImport(Glibc)
 import Glibc
 #endif
 
-/// glibc declares memmem only under _GNU_SOURCE, which Swift does not see:
-/// memchr for the first byte, memcmp for the rest.
-private func memmem(
+/// Whether glibc declares memmem depends on _GNU_SOURCE and the glibc
+/// version, so Linux does without it: memchr for the first byte, memcmp for
+/// the rest.
+private func findBytes(
     _ haystack: UnsafeRawPointer, _ haystackCount: Int,
     _ needle: UnsafeRawPointer, _ needleCount: Int
 ) -> UnsafeRawPointer? {
