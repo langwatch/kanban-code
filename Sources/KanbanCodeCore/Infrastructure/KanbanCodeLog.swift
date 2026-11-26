@@ -21,7 +21,7 @@ public enum KanbanCodeLog {
         let env = ProcessInfo.processInfo.environment
         let name = ProcessInfo.processInfo.processName
         return env["XCTestConfigurationFilePath"] != nil || env["XCTestBundlePath"] != nil
-            || name == "xctest" || name.hasSuffix("PackageTests") || name == "swiftpm-testing-helper"
+            || name == "xctest" || name.hasSuffix("PackageTests") || name.hasSuffix("PackageTests.xctest") || name == "swiftpm-testing-helper"
             || Bundle.main.bundlePath.hasSuffix(".xctest")
     }()
 
