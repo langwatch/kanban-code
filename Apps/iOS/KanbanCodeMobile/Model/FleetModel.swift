@@ -31,6 +31,46 @@ final class FleetModel {
         store = ServerStore()
         self.masters = masters
         isPreview = true
+        masters.forEach(watch)
+    }
+
+    /// Card edits sent from this phone that a board may not show yet,
+    /// laid over every board (`PendingCardEdits`).
+    private(set) var pending = PendingCardEdits()
+
+    /// Starts an edit; the boards show it at once.
+    func beginEdit(cardId: String, _ kind: PendingCardEdits.Kind) -> UUID {
+        pending.begin(cardId: cardId, kind)
+    }
+
+    func editSucceeded(_ id: UUID) {
+        pending.succeeded(id)
+        settlePending()
+    }
+
+    /// The master refused the edit: the card shows as the boards have it.
+    func editFailed(_ id: UUID) {
+        pending.failed(id)
+    }
+
+    /// Drops the edits every board caught up with.
+    private func settlePending() {
+        guard !pending.isEmpty else { return }
+        let listings = masters.map {
+            PendingCardEdits.Listing(cards: $0.board?.cards ?? [], receivedAt: $0.receivedAt)
+        }
+        var next = pending
+        next.settle(listings)
+        if next != pending { pending = next }
+    }
+
+    private func watch(_ model: BoardModel) {
+        model.onBoardChange = { [weak self] in self?.settlePending() }
+    }
+
+    /// The cards of a master's board with this phone's pending edits on them.
+    private func cards(of model: BoardModel) -> [RemoteCard] {
+        pending.apply(to: model.board?.cards ?? [])
     }
 
     /// Adds a board for each newly paired master and drops the forgotten ones.
@@ -52,6 +92,7 @@ final class FleetModel {
         }
         for server in store.servers where !kept.contains(where: { $0.server.id == server.id }) {
             let model = BoardModel(server: server, client: ServerStore.client(for: server))
+            watch(model)
             kept.append(model)
             model.start()
         }
@@ -197,7 +238,7 @@ final class FleetModel {
         var byId: [String: (entry: FleetCard, fromOwner: Bool)] = [:]
         var order: [String] = []
         for model in orderedMasters {
-            for card in model.board?.cards ?? [] {
+            for card in cards(of: model) {
                 let owner = card.machineId.flatMap(master(machineId:)) ?? model
                 let fromOwner = owner === model
                 let name = card.machineId.flatMap { master(machineId: $0)?.machineName } ?? card.machineName ?? model.machineName
@@ -238,7 +279,7 @@ final class FleetModel {
     var boardCardIds: Set<String> {
         var out = Set<String>()
         for model in masters {
-            for card in model.board?.cards ?? [] where CardSearch.isOnBoard(card) { out.insert(card.id) }
+            for card in cards(of: model) where CardSearch.isOnBoard(card) { out.insert(card.id) }
         }
         return out
     }

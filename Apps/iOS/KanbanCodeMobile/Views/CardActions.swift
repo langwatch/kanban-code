@@ -107,7 +107,7 @@ final class CardActionController {
         renaming = nil
         let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != entry.card.title else { return }
-        edit(entry, "rename the card", RemoteCardUpdate(name: name))
+        edit(entry, "rename the card", RemoteCardUpdate(name: name), shows: .rename(name))
     }
 
     private func run(_ action: CardAction, on entry: FleetCard) {
@@ -123,19 +123,19 @@ final class CardActionController {
         case .rename:
             perform(action, on: entry)
         case .setPinned(let pinned):
-            edit(entry, pinned ? "pin the card" : "unpin the card", RemoteCardUpdate(pinned: pinned))
+            edit(entry, pinned ? "pin the card" : "unpin the card", RemoteCardUpdate(pinned: pinned), shows: .pin(pinned))
         case .moveToColumn(let column):
-            edit(entry, "move the card", RemoteCardUpdate(column: column))
+            edit(entry, "move the card", RemoteCardUpdate(column: column), shows: .move(column))
         case .continueOn(let target, let name):
             call(entry, "continue the card on \(name)") { try await $0.move(cardId: id, to: target) }
         case .fork(let keepWorktree):
             call(entry, "fork the card") { try await $0.fork(cardId: id, keepWorktree: keepWorktree) }
         case .archive:
-            edit(entry, "archive the card", RemoteCardUpdate(archived: true))
+            edit(entry, "archive the card", RemoteCardUpdate(archived: true), shows: .archive)
         case .unarchive:
-            edit(entry, "bring the card back", RemoteCardUpdate(archived: false))
+            edit(entry, "bring the card back", RemoteCardUpdate(archived: false), shows: .unarchive)
         case .delete:
-            call(entry, "delete the card") { client in
+            call(entry, "delete the card", shows: .delete) { client in
                 try await client.deleteCard(cardId: id)
                 return nil
             } done: { [fleet] in
@@ -144,27 +144,34 @@ final class CardActionController {
         }
     }
 
-    private func edit(_ entry: FleetCard, _ what: String, _ update: RemoteCardUpdate) {
+    private func edit(_ entry: FleetCard, _ what: String, _ update: RemoteCardUpdate,
+                      shows kind: PendingCardEdits.Kind) {
         let id = entry.id
-        call(entry, what) { try await $0.updateCard(cardId: id, update) }
+        call(entry, what, shows: kind) { try await $0.updateCard(cardId: id, update) }
     }
 
     /// Runs `body` on the card's master; a returned card replaces the
-    /// board's copy right away, before the next event.
-    private func call(_ entry: FleetCard, _ what: String,
+    /// board's copy right away, before the next event. With `shows`, every
+    /// board shows the edit from now on, until the boards have it or the
+    /// call fails (`PendingCardEdits`).
+    private func call(_ entry: FleetCard, _ what: String, shows kind: PendingCardEdits.Kind? = nil,
                       _ body: @escaping (RemoteClient) async throws -> RemoteCard?,
                       done: (() -> Void)? = nil) {
         guard let master = master(for: entry), let client = master.client else {
             error = "Could not \(what): \(entry.machineName) is offline and no other machine is online."
             return
         }
+        let pending = kind.map { fleet.beginEdit(cardId: entry.id, $0) }
         Task {
             do {
-                if let card = try await body(client) { master.upsert(card) }
+                let card = try await body(client)
+                if let pending { fleet.editSucceeded(pending) }
+                if let card { master.upsert(card) }
                 done?()
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 onChange?(entry.id)
             } catch {
+                if let pending { fleet.editFailed(pending) }
                 self.error = "Could not \(what): \(error.localizedDescription)"
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
@@ -388,7 +395,8 @@ struct ArchivedCardsSheet: View {
     /// back on a board.
     private var rows: [FleetCard] {
         let onBoard = fleet.boardCardIds
-        return (isSearching ? found.results : entries).filter { !onBoard.contains($0.id) }
+        let deleted = fleet.pending.deletedIds
+        return (isSearching ? found.results : entries).filter { !onBoard.contains($0.id) && !deleted.contains($0.id) }
     }
 
     var body: some View {

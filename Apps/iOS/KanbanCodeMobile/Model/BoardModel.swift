@@ -52,6 +52,8 @@ final class BoardModel {
     @ObservationIgnored private var reachability = RemoteReachability()
     @ObservationIgnored private var graceTask: Task<Void, Never>?
     @ObservationIgnored private var lastRetryIn: TimeInterval = 1
+    /// Called after the board changed: fresh data, or a card set by hand.
+    @ObservationIgnored var onBoardChange: (() -> Void)?
 
     init(server: SavedServer, client: RemoteClient?) {
         self.server = server
@@ -103,6 +105,9 @@ final class BoardModel {
     /// server that names none.
     var machineId: String { machine?.id ?? "paired-\(server.id.uuidString)" }
     var machineName: String { machine?.name ?? server.name }
+
+    /// When the master last sent data, nil for a board read from the cache.
+    var receivedAt: Date? { lastReceived }
 
     func card(id: String) -> RemoteCard? {
         board?.cards.first { $0.id == id }
@@ -208,6 +213,7 @@ final class BoardModel {
             board.cards.append(card)
         }
         self.board = board
+        onBoardChange?()
     }
 
     /// Drops a deleted card right away, before the next event.
@@ -215,6 +221,7 @@ final class BoardModel {
         guard var board, board.cards.contains(where: { $0.id == cardId }) else { return }
         board.cards.removeAll { $0.id == cardId }
         self.board = board
+        onBoardChange?()
     }
 
     /// The device and features, once per connection until both are known:
@@ -235,6 +242,7 @@ final class BoardModel {
         answered()
         if let found = board?.machine { machine = found }
         scheduleSave()
+        onBoardChange?()
     }
 
     /// Writes the board at most every 5 seconds.
