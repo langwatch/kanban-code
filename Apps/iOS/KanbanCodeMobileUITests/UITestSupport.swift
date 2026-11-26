@@ -83,6 +83,44 @@ class KanbanUITestCase: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.33)).tap()
     }
 
+    /// The composer's box with its margins, down to the keyboard or the
+    /// home indicator.
+    var composerBar: XCUIElement { app.otherElements["composerBar"] }
+
+    /// Keyboard up: the card's header, tabs and title are gone and the
+    /// composer sits on the keyboard. Keyboard down: they are back and the
+    /// composer sits on the bottom safe area, no gap under it.
+    func assertComposingLayout(keyboardUp: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        let keyboard = app.keyboards.firstMatch
+        let header = app.otherElements["cardHeader"]
+        if keyboardUp {
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "no keyboard", file: file, line: line)
+            XCTAssertTrue(waitFor(5) { !header.exists }, "the card header stays over the chat", file: file, line: line)
+            sleep(1)
+            XCTAssertFalse(app.segmentedControls["cardTabs"].exists, "the tabs stay over the chat", file: file, line: line)
+            XCTAssertFalse(app.staticTexts["cardColumnTitle"].exists, "the title stays over the chat", file: file, line: line)
+            let gap = keyboard.frame.minY - composerBar.frame.maxY
+            XCTAssertTrue((-1...4).contains(gap),
+                          "the composer is \(gap) pt off the keyboard: \(composerBar.frame) vs \(keyboard.frame)",
+                          file: file, line: line)
+        } else {
+            XCTAssertTrue(waitFor(5) { !keyboard.exists }, "the keyboard is still up", file: file, line: line)
+            XCTAssertTrue(header.waitForExistence(timeout: 5), "the card header did not come back", file: file, line: line)
+            sleep(1)
+            XCTAssertTrue(app.staticTexts["cardColumnTitle"].exists, "the title did not come back", file: file, line: line)
+            // The home indicator's margin is at most 34 pt on any iPhone.
+            let gap = app.windows.firstMatch.frame.maxY - composerBar.frame.maxY
+            XCTAssertTrue((0...35).contains(gap), "the composer is \(gap) pt off the bottom: \(composerBar.frame)",
+                          file: file, line: line)
+        }
+    }
+
+    /// Drags the chat down, as when reading back.
+    func scrollChat() {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.25))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)))
+    }
+
     func waitFor(_ timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

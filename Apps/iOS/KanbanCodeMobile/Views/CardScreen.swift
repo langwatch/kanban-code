@@ -41,6 +41,9 @@ struct CardScreen: View {
     /// The conversation open over the chat.
     @State private var openConversation: ConversationRoute?
     @State private var isCreatingConversation = false
+    /// The composer has the keyboard: the header, the tabs and the title
+    /// make room for the chat until it goes away.
+    @State private var composing = false
 
     init(cardId: String, board: BoardModel, machineName: String? = nil, fallback: RemoteCard? = nil,
          transcript: TranscriptModel? = nil) {
@@ -63,14 +66,17 @@ struct CardScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             if let card {
-                header(card)
+                if !composing {
+                    header(card)
+                        .transition(.opacity)
+                }
                 if !board.isOnline {
                     offlineBanner
                 }
                 if !CardSearch.isOnBoard(card) {
                     archivedBanner(card)
                 }
-                if showsTerminal {
+                if showsTerminal && !composing {
                     Picker("View", selection: $tab) {
                         Text("Chat").tag(Tab.chat)
                         Text("Terminal").tag(Tab.terminal)
@@ -79,13 +85,15 @@ struct CardScreen: View {
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("cardTabs")
+                    .transition(.opacity)
                 }
-                Divider()
+                if !composing { Divider() }
                 switch tab {
                 case .chat:
                     ChatPane(card: card, transcript: transcript, board: board, draft: draft, onResume: resume,
                              onInterrupt: { Task { await interrupt(card) } },
-                             onContinueInConversation: supportsConversations ? { startConversation($0, focusComposer: true) } : nil)
+                             onContinueInConversation: supportsConversations ? { startConversation($0, focusComposer: true) } : nil,
+                             onComposingChange: { composing = $0 })
                 case .terminal:
                     if showFullTerminal {
                         Color(white: 0.07)
@@ -214,12 +222,17 @@ struct CardScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cardHeader")
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Text(card?.column.displayName ?? "")
                 .font(.subheadline.weight(.semibold))
+                .opacity(composing ? 0 : 1)
+                .accessibilityHidden(composing)
+                .accessibilityIdentifier("cardColumnTitle")
         }
         if supportsConversations, tab == .chat {
             ToolbarItem(placement: .topBarTrailing) {

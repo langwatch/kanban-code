@@ -92,6 +92,66 @@ final class DuoLayoutTests: KanbanUITestCase {
         try ask(host: foldDir, "unfold", answer: "unfolded")
     }
 
+    /// Unfolded and folded, typing gives the chat the whole height, and a
+    /// tap on an empty spot, the bar's empty column or a scroll of the
+    /// board or the chat puts the keyboard away.
+    func test4TypingGivesTheChatTheWholeScreen() throws {
+        try requireRegularWidth()
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        clearDraft()
+        assertComposingLayout(keyboardUp: false)
+        shot("duo-08-composer-on-the-bottom")
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        shot("duo-09-typing-unfolded")
+        // The empty strip under the buttons in the bars' column on the right.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.45)).tap()
+        assertComposingLayout(keyboardUp: false)
+
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        // Scrolling the board.
+        let row = app.buttons["card-card_rush"]
+        row.press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 3)))
+        assertComposingLayout(keyboardUp: false)
+
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        scrollChat()
+        assertComposingLayout(keyboardUp: false)
+
+        guard let foldDir = ProcessInfo.processInfo.environment["KC_FOLD_DIR"] else { return }
+        try ask(host: foldDir, "fold", answer: "folded")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        sleep(2)
+        assertComposingLayout(keyboardUp: false)
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        shot("duo-10-typing-folded")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.45)).tap()
+        assertComposingLayout(keyboardUp: false)
+        try ask(host: foldDir, "unfold", answer: "unfolded")
+    }
+
+    /// Going to the home screen or the app switcher and back keeps the
+    /// sidebar beside the open card.
+    func test5SidebarSurvivesTheBackground() throws {
+        try requireRegularWidth()
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        assertSideBySide(sidebarCard: "card_rush")
+        for round in 1...2 {
+            XCUIDevice.shared.press(.home)
+            sleep(3)
+            app.activate()
+            XCTAssertTrue(composer.waitForExistence(timeout: 10), "round \(round): the card closed")
+            sleep(1)
+            assertSideBySide(sidebarCard: "card_rush")
+        }
+        shot("duo-11-back-from-background")
+    }
+
     // MARK: Helpers
 
     /// At regular width nothing is selected at launch, so the detail column

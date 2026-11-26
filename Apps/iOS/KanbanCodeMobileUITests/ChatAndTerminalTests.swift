@@ -94,7 +94,10 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         composer.tap()
         check("after coming back")
 
-        // Through the terminal tab and back.
+        // Through the terminal tab and back; the tabs show once the
+        // keyboard is away.
+        tapConversation()
+        XCTAssertTrue(waitFor(5) { !keyboard.exists })
         app.segmentedControls["cardTabs"].buttons["Terminal"].tap()
         sleep(1)
         app.segmentedControls["cardTabs"].buttons["Chat"].tap()
@@ -107,6 +110,28 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.55)))
         if keyboard.exists { check("after a short drag") }
         tapConversation()
+    }
+
+    /// While the composer has the keyboard, the header, the tabs and the
+    /// title make room for the chat; a tap outside or a scroll puts the
+    /// keyboard away and brings them back.
+    func testTypingGivesTheChatTheWholeScreen() throws {
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        clearComposer()
+        tapConversation()
+        assertComposingLayout(keyboardUp: false)
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        shot("43-typing-whole-screen")
+
+        tapConversation()
+        assertComposingLayout(keyboardUp: false)
+
+        composer.tap()
+        assertComposingLayout(keyboardUp: true)
+        scrollChat()
+        assertComposingLayout(keyboardUp: false)
     }
 
     // MARK: Queued prompts
@@ -210,13 +235,12 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         shot("40-composer-empty")
         XCTAssertFalse(app.buttons["send"].isEnabled)
         composer.tap()
-        let tabsTop = app.segmentedControls["cardTabs"].frame.minY
         composer.typeText("First line of a longer prompt\nSecond line with more detail\nThird line\nFourth line")
         sleep(1)
         shot("41-composer-multiline-keyboard")
         XCTAssertLessThanOrEqual(app.buttons["send"].frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
-        // The header stays put; only the chat makes room.
-        XCTAssertEqual(app.segmentedControls["cardTabs"].frame.minY, tabsTop, accuracy: 1)
+        // The header and the tabs make room for the chat while typing.
+        XCTAssertFalse(app.segmentedControls["cardTabs"].exists)
         XCTAssertTrue(app.buttons["send"].isEnabled)
         tapConversation()
         XCTAssertTrue(waitFor(5) { !app.keyboards.firstMatch.exists })

@@ -29,7 +29,8 @@ struct BoardScreen: View {
     /// Project name the board is narrowed to, "" for every project.
     @AppStorage("projectFilter.fleet") private var projectFilter = ""
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var columns: NavigationSplitViewVisibility = .all
+    /// The sidebar was hidden with its button, kept across launches.
+    @SceneStorage("sidebarHidden") private var sidebarHidden = false
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
@@ -50,12 +51,13 @@ struct BoardScreen: View {
         // the sidebar and the open card beside it. `path.first` is what the
         // sidebar selects, the rest is pushed over it in the detail column,
         // so folding or unfolding keeps the open card open.
-        NavigationSplitView(columnVisibility: $columns) {
+        NavigationSplitView(columnVisibility: columns) {
             content
                 .navigationTitle(title)
                 .navigationSubtitle(subtitle)
                 .searchable(text: $search, prompt: "Search cards and conversations")
                 .refreshable { await refreshAll() }
+                .scrollDismissesKeyboard(.immediately)
                 .toolbar { toolbar }
                 .cardActions(actions)
                 .alert("Rename conversation", isPresented: $renamingConversation) {
@@ -83,6 +85,9 @@ struct BoardScreen: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        // A tap outside the composer, on the board, the chat or the empty
+        // margins of the bars, puts the keyboard away.
+        .background { KeyboardDismissOnTap() }
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { fleet.reconnectDown() }
@@ -116,6 +121,18 @@ struct BoardScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCard)) { note in
             if let id = note.object as? String { path = [.card(id)] }
         }
+    }
+
+    /// What the split view shows: the sidebar unless the user hid it. Only
+    /// the user's own changes at regular width are kept. Going to the
+    /// background or to the app switcher resizes the scene, and the split
+    /// view collapses to compact width and back, writing `.detailOnly` on
+    /// the way; taking that would leave the sidebar hidden on return.
+    private var columns: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { sidebarHidden ? .detailOnly : .all }, set: { visibility in
+            guard horizontalSizeClass == .regular, scenePhase == .active else { return }
+            sidebarHidden = visibility == .detailOnly
+        })
     }
 
     /// The board is out of sight under an open card: only in a single stack.

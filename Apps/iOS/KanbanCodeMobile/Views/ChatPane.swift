@@ -11,6 +11,9 @@ struct ChatPane: View {
     /// Starts a conversation that continues a message; nil when the master
     /// keeps no conversations.
     var onContinueInConversation: ((RemoteConversationCreate) -> Void)? = nil
+    /// Told when the composer gains or loses the keyboard, so the card can
+    /// give the chat the room its header takes.
+    var onComposingChange: ((Bool) -> Void)? = nil
 
     @State private var sendError: String?
     @State private var notice: String?
@@ -201,8 +204,15 @@ struct ChatPane: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomBar
                 .padding(.bottom, keyboardShortfall)
-                .background(Color(.systemBackground))
+                .background(Color(.systemBackground), ignoresSafeAreaEdges: .bottom)
+                .keepsKeyboard()
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("composerBar")
         }
+        .onChange(of: composerFocused) { _, focused in
+            withAnimation(Self.keyboardAnimation) { onComposingChange?(focused) }
+        }
+        .onDisappear { onComposingChange?(false) }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY.rounded() } action: { paneBottom = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY.rounded() } action: { paneTop = $0 }
         .background {
@@ -372,9 +382,15 @@ struct ChatPane: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color(.systemBackground))
+        .padding(.top, 8)
+        // Down on the home indicator's margin like Messages; above the
+        // keyboard a small gap keeps the box off its edge.
+        .padding(.bottom, composerFocused ? 8 : 0)
+        .animation(Self.keyboardAnimation, value: composerFocused)
     }
+
+    /// Close to the keyboard's own slide in and out.
+    static let keyboardAnimation = Animation.easeOut(duration: 0.25)
 
     /// The most lines the composer text shows before it scrolls: eight,
     /// or fewer when the pane above the keyboard is too short for eight
