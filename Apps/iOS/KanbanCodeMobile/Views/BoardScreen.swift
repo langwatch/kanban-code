@@ -31,6 +31,13 @@ struct BoardScreen: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The sidebar was hidden with its button, kept across launches.
     @SceneStorage("sidebarHidden") private var sidebarHidden = false
+    /// Size of the split view, to tell a display too narrow for the
+    /// sidebar beside a card (an unfolded Duo held upright, an iPad in
+    /// portrait).
+    @State private var splitSize: CGSize = .zero
+    /// On a narrow display the sidebar lies over the card; it shows until a
+    /// card is picked, or when opened with its button.
+    @State private var overlaySidebarShown = false
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
@@ -84,7 +91,9 @@ struct BoardScreen: View {
                     .navigationDestination(for: BoardRoute.self) { destination($0) }
             }
         }
-        .navigationSplitViewStyle(.balanced)
+        .sidebarOverCard(isNarrow)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { splitSize = $0 }
+        .onChange(of: path.first) { _, _ in overlaySidebarShown = false }
         // A tap outside the composer, on the board, the chat or the empty
         // margins of the bars, puts the keyboard away.
         .background { KeyboardDismissOnTap() }
@@ -129,10 +138,23 @@ struct BoardScreen: View {
     /// view collapses to compact width and back, writing `.detailOnly` on
     /// the way; taking that would leave the sidebar hidden on return.
     private var columns: Binding<NavigationSplitViewVisibility> {
-        Binding(get: { sidebarHidden ? .detailOnly : .all }, set: { visibility in
+        Binding(get: {
+            if isNarrow { return path.isEmpty || overlaySidebarShown ? .all : .detailOnly }
+            return sidebarHidden ? .detailOnly : .all
+        }, set: { visibility in
             guard horizontalSizeClass == .regular, scenePhase == .active else { return }
-            sidebarHidden = visibility == .detailOnly
+            if isNarrow {
+                overlaySidebarShown = visibility != .detailOnly
+            } else {
+                sidebarHidden = visibility == .detailOnly
+            }
         })
+    }
+
+    /// Too narrow for the sidebar and a comfortable card side by side:
+    /// taller than wide, or under the sidebar plus 580 pt.
+    private var isNarrow: Bool {
+        splitSize.width > 0 && (splitSize.height > splitSize.width || splitSize.width < 900)
     }
 
     /// The board is out of sight under an open card: only in a single stack.
@@ -632,4 +654,17 @@ enum OlderSearchNote {
                                             BoardModel(preview: PreviewData.boxBoard, name: "rchaves-platform", online: false)]))
         .environment(ServerStore())
         .environment(PairingCoordinator())
+}
+
+private extension View {
+    /// Narrow, the sidebar lies over the card, as on an iPad in portrait;
+    /// wide, the two share the display.
+    @ViewBuilder
+    func sidebarOverCard(_ isNarrow: Bool) -> some View {
+        if isNarrow {
+            navigationSplitViewStyle(.prominentDetail)
+        } else {
+            navigationSplitViewStyle(.balanced)
+        }
+    }
 }

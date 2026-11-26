@@ -110,6 +110,8 @@ struct CardScreen: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        // Typing, the empty bar goes too: the chat starts under the status bar.
+        .toolbarVisibility(composing ? .hidden : .automatic, for: .navigationBar)
         .navigationDestination(item: $openConversation) { route in
             ConversationScreen(route: route, board: board)
         }

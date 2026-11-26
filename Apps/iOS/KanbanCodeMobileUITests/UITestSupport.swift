@@ -99,6 +99,7 @@ class KanbanUITestCase: XCTestCase {
             sleep(1)
             XCTAssertFalse(app.segmentedControls["cardTabs"].exists, "the tabs stay over the chat", file: file, line: line)
             XCTAssertFalse(app.staticTexts["cardColumnTitle"].exists, "the title stays over the chat", file: file, line: line)
+            XCTAssertFalse(app.buttons["newConversation"].exists, "the card's bar stays over the chat", file: file, line: line)
             let gap = keyboard.frame.minY - composerBar.frame.maxY
             XCTAssertTrue((-1...4).contains(gap),
                           "the composer is \(gap) pt off the keyboard: \(composerBar.frame) vs \(keyboard.frame)",
