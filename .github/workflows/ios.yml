@@ -67,7 +67,11 @@ jobs:
         run: |
           TYPE=$(xcrun simctl list devicetypes -j | python3 -c "import json,sys;t=[d['identifier'] for d in json.load(sys.stdin)['devicetypes'] if 'duo' in d['name'].lower()];print(t[-1] if t else '')")
           [ -n "$TYPE" ] || { echo "::error::no iPhone Duo simulator type"; exit 1; }
-          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "import json,sys;r=[x['identifier'] for x in json.load(sys.stdin)['runtimes'] if x['platform']=='iOS' and x['isAvailable']];print(r[-1])")
+          # The newest iOS runtime that runs the Duo: an image can carry older
+          # runtimes after it, and creating the Duo on one fails (403).
+          RUNTIME=$(xcrun simctl list runtimes -j | TYPE="$TYPE" python3 -c "import json,os,sys;r=[x for x in json.load(sys.stdin)['runtimes'] if x['platform']=='iOS' and x['isAvailable'] and any(d['identifier']==os.environ['TYPE'] for d in x.get('supportedDeviceTypes',[]))];r.sort(key=lambda x:[int(p) for p in x['version'].split('.')]);print(r[-1]['identifier'] if r else '')")
+          [ -n "$RUNTIME" ] || { echo "::error::no iOS runtime runs $TYPE"; exit 1; }
+          echo "runtime $RUNTIME"
           UDID=$(xcrun simctl create "iPhone Duo CI" "$TYPE" "$RUNTIME")
           echo "DUO_UDID=$UDID" >> $GITHUB_ENV
           xcrun simctl boot $UDID
