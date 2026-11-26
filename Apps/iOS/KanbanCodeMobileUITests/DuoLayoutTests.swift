@@ -108,6 +108,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         shot("duo-09-typing-unfolded")
         assertComposingLayout(keyboardUp: true)
         assertComposerKeepsTheKeyboard()
+        shot("duo-10-sent-one-tap")
         tapConversation()
         assertComposingLayout(keyboardUp: false)
 
@@ -131,7 +132,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertComposingLayout(keyboardUp: false)
         composer.tap()
         sleep(2)
-        shot("duo-10-typing-folded")
+        shot("duo-14-typing-folded")
         assertComposingLayout(keyboardUp: true)
         tapConversation()
         assertComposingLayout(keyboardUp: false)

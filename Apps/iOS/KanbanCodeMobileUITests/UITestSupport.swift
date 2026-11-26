@@ -107,7 +107,8 @@ class KanbanUITestCase: XCTestCase {
                           "the composer is \(gap) pt off the keyboard: \(composerBar.frame) vs \(keyboard.frame)",
                           file: file, line: line)
         } else {
-            XCTAssertTrue(waitFor(5) { !keyboard.exists }, "the keyboard is still up", file: file, line: line)
+            if !waitFor(5, { !keyboard.exists }) { dump("keyboard-still-up") }
+            XCTAssertFalse(keyboard.exists, "the keyboard is still up", file: file, line: line)
             XCTAssertTrue(header.waitForExistence(timeout: 5), "the card header did not come back", file: file, line: line)
             sleep(1)
             XCTAssertTrue(app.staticTexts["cardColumnTitle"].exists, "the title did not come back", file: file, line: line)
@@ -192,6 +193,14 @@ class KanbanUITestCase: XCTestCase {
         let done = app.buttons["Done"].firstMatch
         XCTAssertTrue(waitEnabled(done))
         done.tap()
+    }
+
+    /// A screenshot and the element tree, for a failure CI has to explain.
+    func dump(_ name: String) {
+        shot("debug-\(name)")
+        if let dir = ProcessInfo.processInfo.environment["KC_SHOT_DIR"] {
+            try? app.debugDescription.write(toFile: dir + "/debug-\(name).txt", atomically: true, encoding: .utf8)
+        }
     }
 
     func shot(_ name: String) {
