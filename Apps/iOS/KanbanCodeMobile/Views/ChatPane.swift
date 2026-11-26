@@ -175,6 +175,9 @@ struct ChatPane: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // Typing, the card's bar is hidden and the chat runs to the top
+        // edge with no blur over it.
+        .scrollEdgeEffectHidden(composerFocused, for: .top)
         .overlay { emptyState }
         // The room the folded panel takes at the top of the chat comes and
         // goes in one step. Only the panel itself animates, inside its
@@ -678,6 +681,13 @@ struct MessageView: View {
                     .font(.caption.weight(.medium))
                     .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
                     .accessibilityIdentifier("showWholeMessage")
+            }
+            if let at = message.at, message.role == .user || message.role == .assistant {
+                Text(MessageTime.label(for: at))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+                    .accessibilityIdentifier("messageTime")
             }
         }
     }

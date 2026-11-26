@@ -32,6 +32,20 @@ final class ChatAndTerminalTests: KanbanUITestCase {
         clearComposer()
     }
 
+    // MARK: Message times
+
+    func testMessagesShowTheirTime() throws {
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        let time = app.staticTexts.matching(identifier: "messageTime").firstMatch
+        XCTAssertTrue(time.waitForExistence(timeout: 10), "no message time")
+        XCTAssertFalse(time.label.isEmpty)
+        // The demo transcript is from the last hour, so the label is a time
+        // alone, without a month.
+        XCTAssertTrue(time.label.contains(":"), "time label \(time.label) has no time")
+        shot("21-message-time")
+    }
+
     // MARK: Keyboard
 
     func testComposerSitsAboveTheKeyboardAndATapPutsItAway() throws {

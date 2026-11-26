@@ -200,7 +200,7 @@ final class DemoHost: RemoteControlHost {
             .init(card: card("card_codex", "Speed up the search index", .inReview, project: 1, runtime: .tmux, live: false,
                              prs: [RemotePR(number: 412, url: "https://github.com/acme/acme-api/pull/412", title: "perf: faster search index", status: "open")],
                              minutesAgo: 90),
-                  messages: Self.conversation("Speed up the search index")),
+                  messages: Self.conversation("Speed up the search index", startedAgo: 3 * 86_400)),
             .init(card: card("card_long", "Write the release notes", .waiting, project: 1, runtime: .tmux, live: true, minutesAgo: 20),
                   messages: Self.longEnding("Write the release notes")),
             .init(card: card("card_catchup", "Move the reports to the new API", .waiting, project: 1, runtime: .tmux, live: true, minutesAgo: 25),
@@ -255,9 +255,11 @@ final class DemoHost: RemoteControlHost {
         return events.reduce(into: Data()) { $0.append($1.line()) }
     }
 
-    static func conversation(_ task: String) -> [RemoteMessage] {
+    /// `startedAgo` is how long ago the session started, in seconds: an hour
+    /// keeps every message from today, days put day and month on the times.
+    static func conversation(_ task: String, startedAgo: TimeInterval = 3600) -> [RemoteMessage] {
         var out: [RemoteMessage] = []
-        var t = Date().addingTimeInterval(-3600)
+        var t = Date().addingTimeInterval(-startedAgo)
         func add(_ role: RemoteMessage.Role, _ text: String) {
             t = t.addingTimeInterval(40)
             out.append(RemoteMessage(id: "\(out.count)", role: role, text: text, at: t))
