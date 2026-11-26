@@ -39,22 +39,37 @@ jobs:
         run: swift build --build-tests
 
       # The suite takes about a minute. A run still going after ten has hung:
-      # print every thread of the test process, then fail.
+      # list the processes and print every thread of the test process, then
+      # fail. The full output is uploaded as the test-log artifact.
       - name: Test
         run: |
-          swift test --skip-build &
+          swift test --skip-build > test.log 2>&1 &
           pid=$!
           for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 5; done
           if kill -0 $pid 2>/dev/null; then
-            ps -eo pid,ppid,etime,stat,args
-            for p in $(ps -eo pid=,args= | awk '/xctest|swiftpm-testing-helper/ && !/awk/ {print $1}'); do
-              echo "=== threads of $p"
-              gdb -p $p -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#|ptrace|denied' | head -3000
+            echo "still running after ten minutes"
+            ps -eo pid,ppid,etime,stat,args > processes.txt
+            for p in $(awk '/xctest|swiftpm-testing-helper/ && !/awk/ {print $1}' processes.txt); do
+              echo "=== threads of $p" >> threads.txt
+              gdb -p $p -batch -ex 'thread apply all bt 25' >> threads.txt 2>&1
             done
             kill $pid
-            exit 1
+            status=1
+          else
+            wait $pid && status=0 || status=$?
           fi
-          wait $pid
+          grep -E "recorded an issue|Test run with" test.log | tail -100
+          exit $status
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: test-log
+          path: |
+            test.log
+            processes.txt
+            threads.txt
+          if-no-files-found: ignore
 
       - name: Build kanban-code-server (release)
         run: swift build -c release --product kanban-code-server --static-swift-stdlib
