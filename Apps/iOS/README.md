@@ -52,6 +52,17 @@ Or skip the confirmation prompt by passing the link at launch:
 SIMCTL_CHILD_KANBANCODE_PAIR_LINK='kanbancode://pair?...' xcrun simctl launch booted io.kanbancode.mobile
 ```
 
+## Layout by width
+
+The board is a `NavigationSplitView` (`Views/BoardScreen.swift`) with one navigation state, `path`:
+
+- Compact width (an iPhone, a folded iPhone Duo): the split view collapses into a single stack, the board with the card pushed over it, as on any iPhone.
+- Regular width (an iPad, an unfolded iPhone Duo, a large iPhone in landscape): the board is the sidebar and the open card (chat, terminal, conversations) is the detail column beside it.
+
+`path.first` is the sidebar's selection and the rest is pushed in the detail column, so folding or unfolding keeps the open card, its draft and an open conversation. Toolbar items are native `.toolbar` items with a title and a symbol, which lets iPhone Duo place them in its vertical bar.
+
+The app needs the iOS 27.1 SDK or later to get the whole iPhone Duo display, so the Duo build and `DuoLayoutTests` run on GitHub Actions (`.github/workflows/ios.yml`, job `duo`, on the `xcode-27` image). Locally the same test runs on an iPad simulator; it skips on a compact iPhone, and skips its fold step unless `TEST_RUNNER_KC_FOLD_DIR` names a folder where the host answers `fold` and `unfold` requests.
+
 ## Markdown in chat messages
 
 `MarkdownText` in `Views/ChatPane.swift` draws assistant messages: fenced code, headings, lists, inline styles and tables.

@@ -1,0 +1,110 @@
+import XCTest
+
+/// The layout at regular width (an unfolded iPhone Duo, an iPad): the board
+/// in a sidebar and the open card beside it; and folding back to compact
+/// width keeps the card open. Needs only the single demo master
+/// (TEST_RUNNER_KC_PAIR_LINK).
+///
+/// Folding is asked of the host: with TEST_RUNNER_KC_FOLD_DIR set, the test
+/// writes `fold` (or `unfold`) into that directory and waits for the host to
+/// fold the simulator and answer with `folded` (or `unfolded`). Without it
+/// the fold steps are skipped.
+final class DuoLayoutTests: KanbanUITestCase {
+
+    func test1SidebarAndCardSideBySide() throws {
+        try requireRegularWidth()
+        shot("duo-01-unfolded-board")
+
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        assertSideBySide(sidebarCard: "card_rush")
+        shot("duo-02-unfolded-card")
+
+        // Another card from the sidebar replaces the detail, the board stays.
+        openCard("card_rush")
+        XCTAssertTrue(waitFor(10) { self.composer.exists })
+        assertSideBySide(sidebarCard: "card_wait")
+        XCTAssertFalse(app.descendants(matching: .any)["noCardOpen"].exists)
+        shot("duo-03-unfolded-other-card")
+    }
+
+    func test2FoldingKeepsTheCardOpen() throws {
+        try requireRegularWidth()
+        let env = ProcessInfo.processInfo.environment
+        guard let foldDir = env["KC_FOLD_DIR"] else {
+            throw XCTSkip("no TEST_RUNNER_KC_FOLD_DIR: this device cannot be folded from the test")
+        }
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap()
+        composer.typeText("Draft across the fold")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.2)).tap()
+
+        try ask(host: foldDir, "fold", answer: "folded")
+        sleep(2)
+        // Compact width: one stack, the card on top of the board, with a
+        // way back and the same draft.
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertEqual(composer.value as? String, "Draft across the fold")
+        XCTAssertFalse(app.buttons["card-card_rush"].isHittable)
+        shot("duo-04-folded-card")
+
+        goBack()
+        XCTAssertTrue(app.buttons["card-card_rush"].waitForExistence(timeout: 10))
+        shot("duo-05-folded-board")
+
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        try ask(host: foldDir, "unfold", answer: "unfolded")
+        sleep(2)
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        assertSideBySide(sidebarCard: "card_rush")
+        shot("duo-06-unfolded-again")
+        clearDraft()
+    }
+
+    // MARK: Helpers
+
+    /// At regular width nothing is selected at launch, so the detail column
+    /// shows its placeholder next to the board.
+    private func requireRegularWidth() throws {
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'card-'")).firstMatch
+            .waitForExistence(timeout: 15))
+        let placeholder = app.descendants(matching: .any)["noCardOpen"]
+        if placeholder.waitForExistence(timeout: 3) { return }
+        shot("duo-00-compact-board")
+        // A Duo that boots folded: unfold it when the host can.
+        if let foldDir = ProcessInfo.processInfo.environment["KC_FOLD_DIR"] {
+            try ask(host: foldDir, "unfold", answer: "unfolded")
+            if placeholder.waitForExistence(timeout: 10) { return }
+        }
+        throw XCTSkip("compact width: the board is a single stack here")
+    }
+
+    /// The sidebar's card and the open card's composer are both on screen,
+    /// the composer to the right of the sidebar.
+    private func assertSideBySide(sidebarCard: String, file: StaticString = #filePath, line: UInt = #line) {
+        let row = app.buttons["card-\(sidebarCard)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(row.isHittable, "the sidebar is not on screen", file: file, line: line)
+        XCTAssertTrue(composer.isHittable, "the card is not on screen", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(composer.frame.minX, row.frame.maxX - 1,
+                                    "the card is not beside the sidebar", file: file, line: line)
+    }
+
+    private func ask(host dir: String, _ request: String, answer: String) throws {
+        let base = URL(fileURLWithPath: dir)
+        let reply = base.appendingPathComponent(answer)
+        try? FileManager.default.removeItem(at: reply)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try Data().write(to: base.appendingPathComponent(request))
+        XCTAssertTrue(waitFor(90) { FileManager.default.fileExists(atPath: reply.path) },
+                      "the host did not answer \(request) with \(answer)")
+    }
+
+    private func clearDraft() {
+        guard let value = composer.value as? String, !value.isEmpty else { return }
+        composer.tap()
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+    }
+}

@@ -6,10 +6,12 @@ import KanbanCodeRemoteKit
 struct FleetConversationScreen: View {
     let route: ConversationRoute
     let fleet: FleetModel
+    /// Closes the conversation where dismiss cannot, as the root of a stack.
+    var onClose: (() -> Void)?
 
     var body: some View {
         if let entry = fleet.entry(cardId: route.cardId) {
-            ConversationScreen(route: route, board: entry.master)
+            ConversationScreen(route: route, board: entry.master, onClose: onClose)
                 .id(entry.master.server.id)
         } else {
             ContentUnavailableView("Card not found", systemImage: "questionmark.square.dashed",
@@ -34,11 +36,13 @@ struct ConversationScreen: View {
     @State private var newTitle = ""
     @FocusState private var composerFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    private let onClose: (() -> Void)?
 
     private static let bottomID = "conversation-bottom"
 
-    init(route: ConversationRoute, board: BoardModel, model: ConversationModel? = nil) {
+    init(route: ConversationRoute, board: BoardModel, model: ConversationModel? = nil, onClose: (() -> Void)? = nil) {
         self.board = board
+        self.onClose = onClose
         focusesComposer = route.focusesComposer
         _model = State(initialValue: model ?? ConversationModel(cardId: route.cardId, id: route.id, board: board))
         // Its own draft, apart from the card's main chat.
@@ -247,7 +251,7 @@ struct ConversationScreen: View {
             do {
                 try await model.archive()
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
-                dismiss()
+                if let onClose { onClose() } else { dismiss() }
             } catch {
                 actionError = "Could not archive the conversation: \(error.localizedDescription)"
             }

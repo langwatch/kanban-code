@@ -37,7 +37,10 @@ final class FlowTests: KanbanUITestCase {
         XCTAssertTrue(showAll.label.hasPrefix("Show all"))
         shot("01b-board-collapsed")
         showAll.tap()
-        XCTAssertTrue(app.buttons["showAll-live"].label == "Show fewer")
+        // The open column pushes its button below the screen.
+        let fewer = app.buttons["showAll-live"]
+        for _ in 0..<4 where !fewer.exists { app.swipeUp() }
+        XCTAssertEqual(fewer.label, "Show fewer")
     }
 
     func test1cProjectFilter() throws {

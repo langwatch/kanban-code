@@ -28,6 +28,8 @@ struct BoardScreen: View {
     @State private var conversationError: String?
     /// Project name the board is narrowed to, "" for every project.
     @AppStorage("projectFilter.fleet") private var projectFilter = ""
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var columns: NavigationSplitViewVisibility = .all
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
@@ -42,21 +44,19 @@ struct BoardScreen: View {
     private var single: BoardModel? { fleet.isMulti ? nil : fleet.masters.first }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        // One navigation state for both widths: compact width (an iPhone, a
+        // folded iPhone Duo) collapses the split view into a single stack,
+        // regular width (an iPad, an unfolded iPhone Duo) shows the board in
+        // the sidebar and the open card beside it. `path.first` is what the
+        // sidebar selects, the rest is pushed over it in the detail column,
+        // so folding or unfolding keeps the open card open.
+        NavigationSplitView(columnVisibility: $columns) {
             content
                 .navigationTitle(title)
                 .navigationSubtitle(subtitle)
                 .searchable(text: $search, prompt: "Search cards and conversations")
                 .refreshable { await refreshAll() }
                 .toolbar { toolbar }
-                .navigationDestination(for: BoardRoute.self) { route in
-                    switch route {
-                    case .card(let id):
-                        FleetCardScreen(cardId: id, fleet: fleet)
-                    case .conversation(let conversation):
-                        FleetConversationScreen(route: conversation, fleet: fleet)
-                    }
-                }
                 .cardActions(actions)
                 .alert("Rename conversation", isPresented: $renamingConversation) {
                     TextField("Title", text: $newConversationTitle)
@@ -72,14 +72,21 @@ struct BoardScreen: View {
                 } message: {
                     Text(conversationError ?? "")
                 }
+                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
+        } detail: {
+            NavigationStack(path: detailPath) {
+                detailRoot
+                    .navigationDestination(for: BoardRoute.self) { destination($0) }
+            }
         }
+        .navigationSplitViewStyle(.balanced)
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { fleet.reconnectDown() }
         }
         .onChange(of: search) { _, text in older.update(text) }
-        .onChange(of: path.isEmpty) { _, isEmpty in
-            covered = isEmpty ? nil : (sections(of: fleet.cards), downMasters, olderRows, conversationHits)
+        .onChange(of: isCovered) { _, isCovered in
+            covered = isCovered ? (sections(of: fleet.cards), downMasters, olderRows, conversationHits) : nil
         }
         .sheet(isPresented: $showNewTask) {
             NewTaskSheet(fleet: fleet) { card, master in
@@ -102,6 +109,50 @@ struct BoardScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .openAttention)) { note in
             attentionFocus = note.object as? String
             showAttention = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCard)) { note in
+            if let id = note.object as? String { path = [.card(id)] }
+        }
+    }
+
+    /// The board is out of sight under an open card: only in a single stack.
+    private var isCovered: Bool {
+        !path.isEmpty && horizontalSizeClass != .regular
+    }
+
+    /// What the sidebar selects: the first screen over the board.
+    private var selection: Binding<BoardRoute?> {
+        Binding(get: { path.first }, set: { route in path = route.map { [$0] } ?? [] })
+    }
+
+    /// The screens pushed over the selected one in the detail column.
+    private var detailPath: Binding<[BoardRoute]> {
+        Binding(get: { Array(path.dropFirst()) }, set: { rest in
+            if let first = path.first { path = [first] + rest }
+        })
+    }
+
+    @ViewBuilder private var detailRoot: some View {
+        if let route = path.first {
+            destination(route, isRoot: true)
+                .id(route)
+        } else {
+            ContentUnavailableView("No card open", systemImage: "sidebar.left",
+                                   description: Text("Pick a card on the board to see its chat and terminal."))
+                .accessibilityIdentifier("noCardOpen")
+        }
+    }
+
+    @ViewBuilder private func destination(_ route: BoardRoute, isRoot: Bool = false) -> some View {
+        switch route {
+        case .card(let id):
+            FleetCardScreen(cardId: id, fleet: fleet)
+        case .conversation(let conversation):
+            // Opened from the board, the conversation is the detail column's
+            // root, where dismiss has nothing to pop; closing it clears the
+            // selection instead.
+            FleetConversationScreen(route: conversation, fleet: fleet,
+                                    onClose: isRoot ? { path = [] } : nil)
         }
     }
 
@@ -218,7 +269,7 @@ struct BoardScreen: View {
                     ContentUnavailableView.search(text: search)
                 }
             } else {
-                List {
+                List(selection: selection) {
                     attentionSection
                     machineStatusSection
                     if isSearching && !conversations.isEmpty { conversationSection(conversations) }
