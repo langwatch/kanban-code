@@ -158,26 +158,42 @@ struct AttentionEngineTests {
         #expect(AttentionDetector.pendingToolCall(inLines: [use, result]) == nil)
     }
 
-    @Test("settings: an old Pushover mode keeps the phone on, but it needs an APNs key to push")
+    @Test("settings: old Pushover keys still decode and push; APNs adds the iPhone app next to it")
     func settings() throws {
+        let devices = RemoteDeviceStore(path: "/nonexistent")
         let legacy = #"{"pushoverMode":"whenLidClosed","pushoverToken":"t","pushoverUserKey":"u","renderMarkdownImage":true}"#
         let decoded = try JSONDecoder().decode(NotificationSettings.self, from: Data(legacy.utf8))
         #expect(decoded.phonePush)
         #expect(decoded.macNotifications)
-        #expect(decoded.phoneSender(devices: RemoteDeviceStore(path: "/nonexistent")) == nil)
-        #expect(decoded.attentionPolicy.phoneEnabled == false)
+        #expect(decoded.pushoverMode == .enabled)
+        #expect(decoded.pushoverReady)
+        #expect(decoded.phoneReady == false)
+        #expect(decoded.phoneSender(devices: devices) is PushoverAttentionSender)
+        #expect(decoded.attentionPolicy.phoneEnabled)
         #expect(decoded.attentionPolicy.phoneAlertDelay == 180)
         #expect(decoded.attentionPolicy.idleThreshold == 120)
+
         var keyed = decoded
         keyed.apns = APNsKey(keyId: "K", teamId: "T", key: "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----")
         #expect(keyed.attentionPolicy.phoneEnabled)
-        #expect(keyed.phoneSender(devices: RemoteDeviceStore(path: "/nonexistent")) != nil)
+        let both = try #require(keyed.phoneSender(devices: devices) as? PhonePushFanout)
+        #expect(both.senders.count == 2)
         let reread = try JSONDecoder().decode(NotificationSettings.self, from: JSONEncoder().encode(keyed))
         #expect(reread == keyed)
-        var off = keyed
+        #expect(reread.pushoverToken == "t")
+
+        var apnsOnly = keyed
+        apnsOnly.pushoverMode = .disabled
+        #expect(apnsOnly.phoneSender(devices: devices) is APNsAttentionSender)
+        var off = apnsOnly
         off.phonePush = false
         #expect(off.attentionPolicy.phoneEnabled == false)
-        let disabled = try JSONDecoder().decode(NotificationSettings.self, from: Data(#"{"pushoverMode":"disabled"}"#.utf8))
-        #expect(disabled.phonePush == false)
+        #expect(off.phoneSender(devices: devices) == nil)
+
+        let legacyBool = try JSONDecoder().decode(NotificationSettings.self, from: Data(#"{"pushoverEnabled":true,"pushoverToken":"t","pushoverUserKey":"u"}"#.utf8))
+        #expect(legacyBool.pushoverReady)
+        let disabled = try JSONDecoder().decode(NotificationSettings.self, from: Data(#"{"pushoverMode":"disabled","pushoverToken":"t","pushoverUserKey":"u"}"#.utf8))
+        #expect(disabled.pushoverReady == false)
+        #expect(disabled.phonePush)
     }
 }

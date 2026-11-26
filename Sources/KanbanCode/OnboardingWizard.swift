@@ -574,7 +574,7 @@ struct OnboardingWizard: View {
                             summaryRow("  \(assistant.displayName) Hooks", status: status?.assistantHooks[assistant] ?? false)
                         }
                     }
-                    summaryRow("iPhone push", status: status?.phonePushConfigured ?? false)
+                    summaryRow("Phone push", status: status?.phonePushConfigured ?? false)
                     summaryRow("tmux", status: status?.tmuxAvailable ?? false)
                     summaryRow("GitHub CLI", status: status?.ghAuthenticated ?? false)
                 }

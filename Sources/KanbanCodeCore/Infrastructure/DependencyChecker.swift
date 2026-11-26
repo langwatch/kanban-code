@@ -67,7 +67,7 @@ public enum DependencyChecker {
             hooks[assistant] = HookManager.isInstalled(for: assistant)
         }
 
-        let phonePush = (try? await settingsStore.read())?.notifications.phoneReady ?? false
+        let phonePush = (try? await settingsStore.read())?.notifications.anyPhoneReady ?? false
 
         return await Status(
             claudeAvailable: claude,

@@ -203,7 +203,7 @@ kv waits out a master that does not answer: on a refused connection, or HTTP 502
 
 ### What the human sees
 
-The notification (Mac, iPhone app) has two lines:
+The notification (Mac, iPhone app, Pushover) has two lines:
 
 - Title: who wants what, e.g. "Kanban Chat Claude wants AWS lw-dev access", "... wants to use the Slack user token", "... wants to change the AWS lw-dev rules", "... wants to use the Slack user token for 2 days" (a lease). Outside a card it reads "A process outside any card wants ...".
 - Body: the agent's `--reason` and nothing else. A missing reason, or one that reads like a command or has under four words, shows "No reason given. Asked by: <command>" (the command on one line, cut to 140 characters), or "No reason given." when there is no command.

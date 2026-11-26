@@ -1122,6 +1122,9 @@ struct NotificationSettingsView: View {
     @State private var apnsKey = ""
     @State private var apnsTopic = APNsKey.defaultTopic
     @State private var phones: [RemoteDeviceStore.PushTarget] = []
+    @State private var pushoverOn = false
+    @State private var pushoverToken = ""
+    @State private var pushoverUserKey = ""
     @State private var phoneAlertMinutes = 3
     @State private var awayMinutes = 2
     @State private var testSending = false
@@ -1137,7 +1140,9 @@ struct NotificationSettingsView: View {
                 key: apnsKey, topic: apnsTopic)
     }
 
-    private var phoneReady: Bool { phonePush && apns.isComplete && !phones.isEmpty }
+    private var apnsReady: Bool { phonePush && apns.isComplete && !phones.isEmpty }
+    private var pushoverReady: Bool { pushoverOn && !pushoverToken.isEmpty && !pushoverUserKey.isEmpty }
+    private var phoneReady: Bool { apnsReady || pushoverReady }
 
     var body: some View {
         Form {
@@ -1207,16 +1212,30 @@ struct NotificationSettingsView: View {
                     }
                 }
 
+                Toggle("Also send to Pushover", isOn: $pushoverOn)
+                    .onChange(of: pushoverOn) { scheduleSave() }
+                TextField("Pushover app token", text: $pushoverToken)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!pushoverOn)
+                    .onChange(of: pushoverToken) { scheduleSave() }
+                TextField("Pushover user key", text: $pushoverUserKey)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!pushoverOn)
+                    .onChange(of: pushoverUserKey) { scheduleSave() }
+                Text("Pushover gets one high priority message per request when the phone alerts, with a link that opens the request in Kanban Code. It cannot take a message back once the request is answered. Get the keys at pushover.net.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
                 Stepper(value: $phoneAlertMinutes, in: 0...60) {
                     Text(phoneAlertMinutes == 0 ? "Alert the phone at once" : "Alert the phone after \(phoneAlertMinutes) min unanswered")
                 }
-                .disabled(!phonePush)
+                .disabled(!phonePush && !pushoverOn)
                 .onChange(of: phoneAlertMinutes) { scheduleSave() }
 
                 Stepper(value: $awayMinutes, in: 1...30) {
                     Text("Mac counts as away after \(awayMinutes) min without input")
                 }
-                .disabled(!phonePush)
+                .disabled(!phonePush && !pushoverOn)
                 .onChange(of: awayMinutes) { scheduleSave() }
 
                 Text("A request lands on the phone silently at once, then alerts when it is still open after the delay, or right away when the Mac is idle, locked, closed, asleep or on the screensaver. Answering it anywhere takes it off the phone. Tapping the notification opens the card.")
@@ -1269,6 +1288,9 @@ struct NotificationSettingsView: View {
             apnsTeamId = n.apns?.teamId ?? ""
             apnsKey = n.apns?.key ?? ""
             apnsTopic = n.apns?.topic ?? APNsKey.defaultTopic
+            pushoverOn = n.pushoverEnabled
+            pushoverToken = n.pushoverToken ?? ""
+            pushoverUserKey = n.pushoverUserKey ?? ""
             phoneAlertMinutes = max(0, n.phoneAlertDelaySeconds / 60)
             awayMinutes = max(1, n.awayAfterSeconds / 60)
         } catch {}
@@ -1287,6 +1309,11 @@ struct NotificationSettingsView: View {
                 settings.notifications.phonePush = phonePush
                 let key = apns
                 settings.notifications.apns = key.keyId.isEmpty && key.teamId.isEmpty && key.key.isEmpty ? nil : key
+                settings.notifications.pushoverMode = pushoverOn ? .enabled : .disabled
+                let token = pushoverToken.trimmingCharacters(in: .whitespaces)
+                let user = pushoverUserKey.trimmingCharacters(in: .whitespaces)
+                settings.notifications.pushoverToken = token.isEmpty ? nil : token
+                settings.notifications.pushoverUserKey = user.isEmpty ? nil : user
                 settings.notifications.phoneAlertDelaySeconds = phoneAlertMinutes * 60
                 settings.notifications.awayAfterSeconds = awayMinutes * 60
                 try await settingsStore.write(settings)
@@ -1300,7 +1327,14 @@ struct NotificationSettingsView: View {
         testResult = nil
         Task {
             do {
-                let sender = APNsAttentionSender(key: apns, devices: RemoteDeviceStore())
+                var senders: [any PhonePushSender] = []
+                if apnsReady { senders.append(APNsAttentionSender(key: apns, devices: RemoteDeviceStore())) }
+                if pushoverReady {
+                    senders.append(PushoverAttentionSender(
+                        token: pushoverToken.trimmingCharacters(in: .whitespaces),
+                        userKey: pushoverUserKey.trimmingCharacters(in: .whitespaces)))
+                }
+                let sender = PhonePushFanout(senders)
                 let request = AttentionRequest(
                     id: "test", cardId: nil, kind: .question, title: "Test",
                     body: "Phone notifications are working.", options: [])

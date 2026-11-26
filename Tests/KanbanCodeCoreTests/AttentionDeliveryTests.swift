@@ -9,15 +9,24 @@ struct AttentionDeliveryTests {
         let lock = NSLock()
         var events: [String] = []
         let silentCopy: Bool
-        init(silentCopy: Bool = true) { self.silentCopy = silentCopy }
+        let fails: Bool
+        let name: String
+        init(silentCopy: Bool = true, fails: Bool = false, name: String = "phone") {
+            self.silentCopy = silentCopy
+            self.fails = fails
+            self.name = name
+        }
         var sendsSilentCopy: Bool { silentCopy }
         func record(_ e: String) { lock.withLock { events.append(e) } }
         func post(_ request: AttentionRequest, cardName: String?) async { record("mac+\(request.id)") }
         func remove(id: String) async { record("mac-\(id)") }
         func showInApp(_ request: AttentionRequest) async { record("app+\(request.id)") }
         func showOpenCount(_ count: Int) async { record("count=\(count)") }
-        func send(_ request: AttentionRequest, cardName: String?, level: PhonePushLevel) async throws { record("phone:\(level.rawValue):\(request.id)") }
-        func withdraw(_ request: AttentionRequest) async {}
+        func send(_ request: AttentionRequest, cardName: String?, level: PhonePushLevel) async throws {
+            record("\(name):\(level.rawValue):\(request.id)")
+            if fails { throw NotificationError.pushoverFailed }
+        }
+        func withdraw(_ request: AttentionRequest) async { record("\(name)-\(request.id)") }
     }
 
     final class Clock: @unchecked Sendable {
@@ -73,6 +82,62 @@ struct AttentionDeliveryTests {
         #expect(AttentionPolicy.steps(for: request, delivered: .init(), presence: away, now: t0, settings: settings) == [.postMac, .phoneAlert])
     }
 
+    @Test("Pushover takes one message per request: no silent copy, only the alert")
+    func pushoverHasNoSilentCopy() {
+        #expect(PushoverAttentionSender(token: "t", userKey: "u").sendsSilentCopy == false)
+        let fields = Dictionary(PushoverAttentionSender.fields(for: vaultRequest(card: "c"), cardName: "Card", level: .timeSensitive),
+                                uniquingKeysWith: { a, _ in a })
+        #expect(fields["priority"] == "1")
+        #expect(fields["url"] == "kanbancode://attention/vault_1")
+    }
+
+    @Test("with APNs and Pushover both set up, the silent copy goes to APNs only and the alert to both")
+    func fanoutSendsToBoth() async throws {
+        let apns = Recorder(silentCopy: true, name: "apns")
+        let pushover = Recorder(silentCopy: false, name: "pushover")
+        let fanout = PhonePushFanout([apns, pushover])
+        #expect(fanout.sendsSilentCopy)
+        let request = vaultRequest(card: nil)
+        try await fanout.send(request, cardName: nil, level: .passive)
+        try await fanout.send(request, cardName: nil, level: .timeSensitive)
+        await fanout.withdraw(request)
+        #expect(apns.events == ["apns:passive:vault_1", "apns:timeSensitive:vault_1", "apns-vault_1"])
+        #expect(pushover.events == ["pushover:timeSensitive:vault_1", "pushover-vault_1"])
+        #expect(PhonePushFanout([pushover]).sendsSilentCopy == false)
+    }
+
+    @Test("one phone channel failing does not fail the send; all failing does")
+    func fanoutFailsOnlyWhenAllFail() async {
+        let request = vaultRequest(card: nil)
+        let apnsDown = Recorder(fails: true, name: "apns")
+        let pushover = Recorder(silentCopy: false, name: "pushover")
+        await #expect(throws: Never.self) {
+            try await PhonePushFanout([apnsDown, pushover]).send(request, cardName: nil, level: .timeSensitive)
+        }
+        #expect(pushover.events == ["pushover:timeSensitive:vault_1"])
+        await #expect(throws: NotificationError.self) {
+            try await PhonePushFanout([apnsDown, Recorder(fails: true, name: "pushover")]).send(request, cardName: nil, level: .timeSensitive)
+        }
+    }
+
+    @Test("the center sends the silent copy to APNs at once and the alert to APNs and Pushover after the delay")
+    func centerWithBothChannels() async {
+        let clock = Clock(t0)
+        let apns = Recorder(silentCopy: true, name: "apns")
+        let pushover = Recorder(silentCopy: false, name: "pushover")
+        let center = AttentionCenter(
+            mac: Recorder(), phone: PhonePushFanout([apns, pushover]),
+            localPresence: { MacPresence(idleSeconds: 1, reportedAt: clock.now) },
+            localMachineId: { "mac-id" }, now: { clock.now })
+        await center.deliver(vaultRequest(card: nil))
+        #expect(apns.events == ["apns:passive:vault_1"])
+        #expect(pushover.events.isEmpty)
+        clock.advance(181)
+        await center.evaluateAll()
+        #expect(apns.events == ["apns:passive:vault_1", "apns:timeSensitive:vault_1"])
+        #expect(pushover.events == ["pushover:timeSensitive:vault_1"])
+    }
+
     @Test("the log says why a request was or was not delivered")
     func explains() {
         let request = vaultRequest(card: nil)
@@ -109,6 +174,8 @@ struct AttentionDeliveryTests {
         #expect(copy == ("Video card needs your permission", "Claude wants to run a command: Convert the recording to mp4"))
         let push = try! APNsPayloadReader(APNsPush.alert(for: request, cardName: "Video card", level: .timeSensitive))
         #expect(push.body.contains("ffmpeg") == false)
+        let pushover = Dictionary(PushoverAttentionSender.fields(for: request, cardName: "Video card", level: .timeSensitive), uniquingKeysWith: { a, _ in a })
+        #expect(pushover["message"]?.contains("ffmpeg") == false)
 
         let rush = MasterEngine.permissionBody(message: "Bash cd /root/x && ffmpeg -i a.mov a.mp4", tool: nil)
         #expect(AttentionCopy.firstParagraph(rush) == "Claude wants to run a Bash command")

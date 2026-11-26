@@ -173,6 +173,8 @@ Configure per-project GitHub issue filters (e.g. `assignee:@me label:bug`) and K
 
 When an agent needs you to decide (a question, a plan, a permission prompt, a vault approval), the Mac notifies you, and the Kanban Code iPhone app gets the request through Apple's push service (APNs), sent straight from the master that raised it. It lands silently at once, alerts when it is still open after a delay or when you are away from the Mac, and disappears when you answer it anywhere. Tapping it opens the card. Set the APNs key under Settings > Notifications; the iPhone registers itself once paired.
 
+[Pushover](https://pushover.net/) works next to APNs: with an app token and user key set (Settings > Notifications, or `notifications.pushoverToken` / `pushoverUserKey` with `pushoverMode: "enabled"` in `settings.json`), the master also sends one high priority Pushover message per request when the phone alerts, with a `kanbancode://attention/<id>` link that opens the request. Pushover cannot withdraw a message, so it stays after the request is answered. With both set up every alert goes through both, and one channel failing does not stop the other.
+
 ### Amphetamine Integration
 
 When Claude agents are actively working, Kanban Code spawns a lightweight companion process that keeps [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) triggered — preventing your Mac from sleeping mid-task. The companion quits automatically when all agents are idle. No more waking up to find Claude was interrupted by sleep mode.
@@ -197,6 +199,7 @@ These unlock additional features. Kanban Code works without them — it's all pr
 | [`tmux`](https://github.com/tmux/tmux) | Embedded terminal, session persistence, launch/resume |
 | [`gh`](https://cli.github.com/) | GitHub PR tracking, issue backlog import |
 | [`mutagen`](https://mutagen.io/) | Remote execution with bidirectional file sync |
+| [Pushover](https://pushover.net/) | Push notifications to phone and Apple Watch, next to the iPhone app |
 | [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) | Prevent Mac sleep while agents are working |
 
 ## Getting Started
@@ -297,7 +300,7 @@ windows/                         # Windows app (Tauri 2)
     └── src/                     # Tauri commands, coordination store, session discovery
 ```
 
-The core library uses **port/adapter** pattern — all external integrations (Claude Code, git, tmux, GitHub, APNs) are behind protocol interfaces. The same architecture could be adapted for other AI coding tools.
+The core library uses **port/adapter** pattern — all external integrations (Claude Code, git, tmux, GitHub, APNs, Pushover) are behind protocol interfaces. The same architecture could be adapted for other AI coding tools.
 
 ### Key Design Decisions
 

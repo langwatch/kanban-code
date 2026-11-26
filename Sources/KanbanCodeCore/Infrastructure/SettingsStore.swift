@@ -375,6 +375,19 @@ public struct GitHubSettings: Codable, Sendable {
     }
 }
 
+/// Whether attention requests go to the phone through Pushover.
+public enum PushoverMode: String, Codable, Sendable, CaseIterable {
+    case disabled
+    case enabled
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        // "whenLidClosed" was a mode before the presence policy; the policy
+        // now decides when the phone alerts.
+        self = raw == PushoverMode.disabled.rawValue ? .disabled : .enabled
+    }
+}
+
 /// Settings > Notifications: how decisions agents wait on reach Rogerio.
 public struct NotificationSettings: Codable, Sendable, Equatable {
     /// Notify on the Mac when a request is raised and he is not looking at it.
@@ -383,6 +396,10 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     public var phonePush: Bool
     /// The APNs auth key this master signs pushes with.
     public var apns: APNsKey?
+    /// Phone delivery through Pushover, next to APNs.
+    public var pushoverMode: PushoverMode
+    public var pushoverToken: String?
+    public var pushoverUserKey: String?
     /// The phone alerts when a request is still open after this long.
     public var phoneAlertDelaySeconds: Int
     /// The Mac counts as away after this long without keyboard or mouse input.
@@ -391,31 +408,47 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     public static let defaultPhoneAlertDelaySeconds = 180
     public static let defaultAwayAfterSeconds = 120
 
-    /// Whether this master can push: the phone is on and a whole key is set.
+    /// Whether this master can push to the iPhone app: the phone is on and a
+    /// whole APNs key is set.
     public var phoneReady: Bool { phonePush && apns?.isComplete == true }
+
+    /// Whether this master sends to Pushover: it is on and both keys are set.
+    public var pushoverReady: Bool {
+        pushoverMode != .disabled && !(pushoverToken ?? "").isEmpty && !(pushoverUserKey ?? "").isEmpty
+    }
+
+    public var pushoverEnabled: Bool { pushoverMode != .disabled }
+
+    /// Whether any phone channel is set up.
+    public var anyPhoneReady: Bool { phoneReady || pushoverReady }
 
     public init(
         macNotifications: Bool = true, phonePush: Bool = true, apns: APNsKey? = nil,
+        pushoverMode: PushoverMode = .disabled, pushoverToken: String? = nil, pushoverUserKey: String? = nil,
         phoneAlertDelaySeconds: Int = NotificationSettings.defaultPhoneAlertDelaySeconds,
         awayAfterSeconds: Int = NotificationSettings.defaultAwayAfterSeconds
     ) {
         self.macNotifications = macNotifications
         self.phonePush = phonePush
         self.apns = apns
+        self.pushoverMode = pushoverMode
+        self.pushoverToken = pushoverToken
+        self.pushoverUserKey = pushoverUserKey
         self.phoneAlertDelaySeconds = phoneAlertDelaySeconds
         self.awayAfterSeconds = awayAfterSeconds
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        if let on = try c.decodeIfPresent(Bool.self, forKey: .phonePush) {
-            phonePush = on
-        } else if let legacy = try c.decodeIfPresent(String.self, forKey: .pushoverMode) {
-            // Settings from before APNs named the phone channel's mode.
-            phonePush = legacy != "disabled"
+        if let mode = try c.decodeIfPresent(PushoverMode.self, forKey: .pushoverMode) {
+            pushoverMode = mode
         } else {
-            phonePush = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? true
+            let legacy = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? false
+            pushoverMode = legacy ? .enabled : .disabled
         }
+        pushoverToken = try c.decodeIfPresent(String.self, forKey: .pushoverToken)
+        pushoverUserKey = try c.decodeIfPresent(String.self, forKey: .pushoverUserKey)
+        phonePush = try c.decodeIfPresent(Bool.self, forKey: .phonePush) ?? true
         macNotifications = try c.decodeIfPresent(Bool.self, forKey: .macNotifications) ?? true
         apns = try c.decodeIfPresent(APNsKey.self, forKey: .apns)
         phoneAlertDelaySeconds = try c.decodeIfPresent(Int.self, forKey: .phoneAlertDelaySeconds) ?? Self.defaultPhoneAlertDelaySeconds
@@ -423,7 +456,7 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case macNotifications, phonePush, apns, pushoverMode, pushoverEnabled
+        case macNotifications, phonePush, apns, pushoverMode, pushoverEnabled, pushoverToken, pushoverUserKey
         case phoneAlertDelaySeconds, awayAfterSeconds
     }
 
@@ -432,21 +465,33 @@ public struct NotificationSettings: Codable, Sendable, Equatable {
         try c.encode(macNotifications, forKey: .macNotifications)
         try c.encode(phonePush, forKey: .phonePush)
         try c.encodeIfPresent(apns, forKey: .apns)
+        try c.encode(pushoverMode, forKey: .pushoverMode)
+        try c.encodeIfPresent(pushoverToken, forKey: .pushoverToken)
+        try c.encodeIfPresent(pushoverUserKey, forKey: .pushoverUserKey)
         try c.encode(phoneAlertDelaySeconds, forKey: .phoneAlertDelaySeconds)
         try c.encode(awayAfterSeconds, forKey: .awayAfterSeconds)
     }
 
-    /// The phone channel these settings configure, or nil when off: APNs to
-    /// every iPhone that registered a token in `devices`.
+    /// The phone channels these settings configure, or nil when none is set
+    /// up: APNs to every iPhone that registered a token in `devices`, and
+    /// Pushover. With both set up every request goes through both.
     public func phoneSender(devices: RemoteDeviceStore) -> (any PhonePushSender)? {
-        guard phoneReady, let apns else { return nil }
-        return APNsAttentionSender(key: apns, devices: devices)
+        var senders: [any PhonePushSender] = []
+        if phoneReady, let apns { senders.append(APNsAttentionSender(key: apns, devices: devices)) }
+        if pushoverReady, let token = pushoverToken, let user = pushoverUserKey {
+            senders.append(PushoverAttentionSender(token: token, userKey: user))
+        }
+        switch senders.count {
+        case 0: return nil
+        case 1: return senders[0]
+        default: return PhonePushFanout(senders)
+        }
     }
 
     /// The escalation policy these settings describe.
     public var attentionPolicy: AttentionPolicySettings {
         AttentionPolicySettings(
-            macNotifications: macNotifications, phoneEnabled: phoneReady,
+            macNotifications: macNotifications, phoneEnabled: anyPhoneReady,
             phoneAlertDelay: TimeInterval(max(0, phoneAlertDelaySeconds)),
             idleThreshold: TimeInterval(max(30, awayAfterSeconds)))
     }

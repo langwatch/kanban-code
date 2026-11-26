@@ -11,11 +11,13 @@ public protocol NotifierPort: Sendable {
 
 public enum NotificationError: Error, LocalizedError {
     case apnsFailed
+    case pushoverFailed
     case macOSNotificationFailed
 
     public var errorDescription: String? {
         switch self {
         case .apnsFailed: "No iPhone took the push"
+        case .pushoverFailed: "Pushover refused the message"
         case .macOSNotificationFailed: "macOS notification failed"
         }
     }
