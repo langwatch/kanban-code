@@ -152,9 +152,10 @@ struct BoardScreen: View {
     }
 
     /// Too narrow for the sidebar and a comfortable card side by side:
-    /// taller than wide, or under the sidebar plus 580 pt.
+    /// taller than wide, or under the sidebar plus 440 pt. The size is
+    /// inside the safe area, so a landscape Duo measures about 880 pt.
     private var isNarrow: Bool {
-        splitSize.width > 0 && (splitSize.height > splitSize.width || splitSize.width < 900)
+        splitSize.width > 0 && (splitSize.height > splitSize.width || splitSize.width < 760)
     }
 
     /// The board is out of sight under an open card: only in a single stack.
