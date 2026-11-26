@@ -79,6 +79,21 @@ A table is read by `MarkdownTable` in `Sources/KanbanCodeRemoteKit/MarkdownTable
 
 The Mac chat draws tables through MarkdownUI.
 
+## TestFlight
+
+`make ios-testflight` (or `Scripts/ios-release/release-testflight.sh [git-ref]`, default `origin/main`) ships a build to TestFlight:
+
+1. Starts the `iOS` workflow (`.github/workflows/ios.yml`) with `build=<YYYYmmddHHMM>` and the commit. Its `archive` job runs on GitHub's `xcode-27` image and archives the app unsigned. The Mac has Xcode 26; only the iOS 27.1+ SDK gives the app the whole display on iPhone Duo, so the script refuses an archive linked against an older SDK.
+2. Reads the App Store Connect API key and the Apple Distribution identity (team XC2B8QXW6P) from kv (`laze/prod/ASC_KEY_*`, `laze/prod/IOS_DIST_P12_*`), the same as the Laze iOS release.
+3. `ensure-app.mjs` registers the App ID `io.kanbancode.mobile`, turns on Push Notifications, finds or makes an App Store profile, checks the App Store Connect app exists (the API cannot create one) and makes the internal TestFlight group Team.
+4. Signs `KanbanCodeMobile.app` with that profile and `entitlements.py` (the profile's identifiers, `aps-environment` production, time sensitive notifications), uploads the IPA with `altool` and waits until App Store Connect has processed the build.
+
+`PROFILE=<file.mobileprovision> make ios-testflight` signs with a profile made in the developer portal, for when Apple refuses the provisioning API. Runs and logs are in `.claude/tmp/ios-release/run-<build>`. TestFlight builds get no What to Test notes.
+
+## Push notifications
+
+The app asks for notification permission on first launch, registers for APNs and sends its device token to every paired master with `PUT /v1/me/push` (see [docs/remote-control.md](../../docs/remote-control.md), "Push to the iPhone"). Builds installed from Xcode use the APNs sandbox, TestFlight builds production. The master that raised an attention request pushes it straight to the phone; tapping it opens the card, and answering it anywhere takes it off the phone. Only Release builds carry the `aps-environment` entitlement (`KanbanCodeMobile.entitlements`), so `make ios-device` keeps working with a free team. UI tests skip the permission prompt unless they set `KANBANCODE_PUSH=1`.
+
 ## Install on your iPhone
 
 1. `make ios-project`, then open `Apps/iOS/KanbanCodeMobile.xcodeproj` in Xcode.
