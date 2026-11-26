@@ -51,6 +51,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
         UIBackgroundModes:
           - remote-notification
         UISupportedInterfaceOrientations:

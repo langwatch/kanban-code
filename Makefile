@@ -1,4 +1,4 @@
-.PHONY: build test run app app-debug run-app run-release clean cli install-cli web ios-project ios ios-run ios-test ios-device ios-autoinstall ios-autoinstall-remove rush-plugins
+.PHONY: build test run app app-debug run-app run-release clean cli install-cli web ios-project ios ios-run ios-test ios-device ios-testflight ios-autoinstall ios-autoinstall-remove rush-plugins
 
 BUNDLE_NAME = KanbanCode.app
 BUNDLE_DIR = build/$(BUNDLE_NAME)
@@ -159,6 +159,11 @@ ios-device: ios-project
 
 # Every 10 minutes, reinstall on a connected iPhone when the app is missing,
 # its profile ends within a week, or the iOS sources changed.
+# Archive on GitHub's Xcode 27 runner, sign on this Mac, upload to TestFlight.
+# REF=<git ref> (default origin/main), PROFILE=<.mobileprovision> to sign with a given profile.
+ios-testflight:
+	Scripts/ios-release/release-testflight.sh $(or $(REF),origin/main) $(if $(PROFILE),--profile $(PROFILE))
+
 ios-autoinstall:
 	@mkdir -p $(HOME)/Library/LaunchAgents
 	@printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
