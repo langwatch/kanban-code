@@ -24,13 +24,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: swift:6.2-noble
+    container:
+      image: swift:6.2-noble
+      options: --cap-add=SYS_PTRACE
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # tmux + git let the real-tmux / real-git tests run for real.
+      # tmux + git let the real-tmux / real-git tests run for real; gdb and
+      # procps print the threads of a hung run.
       - name: Install tmux
-        run: apt-get update && apt-get install -y tmux git gdb
+        run: apt-get update && apt-get install -y tmux git gdb procps
 
       - name: Build
         run: swift build --build-tests
