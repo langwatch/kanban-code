@@ -30,13 +30,27 @@ jobs:
 
       # tmux + git let the real-tmux / real-git tests run for real.
       - name: Install tmux
-        run: apt-get update && apt-get install -y tmux git
+        run: apt-get update && apt-get install -y tmux git gdb
 
       - name: Build
         run: swift build --build-tests
 
+      # The suite takes about a minute. A run still going after ten has hung:
+      # print every thread of the test process, then fail.
       - name: Test
-        run: swift test --skip-build
+        run: |
+          swift test --skip-build &
+          pid=$!
+          for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 5; done
+          if kill -0 $pid 2>/dev/null; then
+            for p in $(pgrep -f 'PackageTests.xctest'); do
+              echo "=== threads of $p"
+              gdb -p $p -batch -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread|^#' | head -3000
+            done
+            kill $pid
+            exit 1
+          fi
+          wait $pid
 
       - name: Build kanban-code-server (release)
         run: swift build -c release --product kanban-code-server --static-swift-stdlib
