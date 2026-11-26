@@ -1,0 +1,121 @@
+name: iOS
+
+# Builds the iPhone app with the newest Xcode 27 on GitHub's macOS runner, so
+# the binary links the iOS 27.1+ SDK that iPhone Duo needs to give it the
+# whole display. Runs the Duo UI test against the demo server, and on a
+# manual run archives an unsigned build that Scripts/ios-release-testflight.sh
+# signs and uploads from the Mac.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Apps/iOS/**"
+      - "Sources/KanbanCodeRemoteKit/**"
+      - "Sources/KanbanCodeRemoteDemo/**"
+      - "LocalPackages/SwiftTerm/**"
+      - "Package.swift"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "CURRENT_PROJECT_VERSION of the archive (empty: no archive, tests only)"
+        required: false
+        default: ""
+
+jobs:
+  duo:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Select the newest Xcode 27
+        run: |
+          ls -d /Applications/Xcode*.app
+          XC=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] || { echo "::error::no Xcode 27 on this runner"; exit 1; }
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+          xcrun simctl list runtimes
+          xcrun simctl list devicetypes | grep -i -E "duo|fold" || true
+
+      - name: Tools
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodebuild -downloadComponent MetalToolchain || true
+          cd Apps/iOS && xcodegen generate --quiet
+
+      - name: Demo server
+        run: |
+          swift build --product kanban-code-remote-demo
+          D=$RUNNER_TEMP/demo; mkdir -p $D
+          .build/debug/kanban-code-remote-demo --port 7790 --devices $D/devices.json \
+            --machine "machine_mac:Demo Mac" --pair iPhone > $D/demo.log 2>&1 &
+          for i in $(seq 1 60); do grep -q '^token: ' $D/demo.log && break; sleep 1; done
+          TOKEN=$(sed -n 's/^token: //p' $D/demo.log | head -1)
+          [ -n "$TOKEN" ] || { cat $D/demo.log; exit 1; }
+          echo "KC_LINK=kanbancode://pair?url=http://127.0.0.1:7790&token=$TOKEN" >> $GITHUB_ENV
+
+      - name: iPhone Duo simulator
+        run: |
+          TYPE=$(xcrun simctl list devicetypes -j | python3 -c "import json,sys;t=[d['identifier'] for d in json.load(sys.stdin)['devicetypes'] if 'duo' in d['name'].lower()];print(t[-1] if t else '')")
+          [ -n "$TYPE" ] || { echo "::error::no iPhone Duo simulator type"; exit 1; }
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "import json,sys;r=[x['identifier'] for x in json.load(sys.stdin)['runtimes'] if x['platform']=='iOS' and x['isAvailable']];print(r[-1])")
+          UDID=$(xcrun simctl create "iPhone Duo CI" "$TYPE" "$RUNTIME")
+          echo "DUO_UDID=$UDID" >> $GITHUB_ENV
+          xcrun simctl boot $UDID
+          xcrun simctl help 2>&1 | head -60
+
+      - name: Duo UI test
+        run: |
+          mkdir -p $RUNNER_TEMP/shots
+          TEST_RUNNER_KC_PAIR_LINK="$KC_LINK" TEST_RUNNER_KC_SHOT_DIR=$RUNNER_TEMP/shots \
+          xcodebuild test -project Apps/iOS/KanbanCodeMobile.xcodeproj -scheme KanbanCodeMobile \
+            -destination "platform=iOS Simulator,id=$DUO_UDID" -derivedDataPath .build/ios \
+            -only-testing:KanbanCodeMobileUITests/DuoLayoutTests -resultBundlePath $RUNNER_TEMP/duo.xcresult
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: duo-screenshots
+          path: |
+            ${{ runner.temp }}/shots
+            ${{ runner.temp }}/demo/demo.log
+          if-no-files-found: ignore
+
+  archive:
+    if: github.event_name == 'workflow_dispatch' && inputs.build != ''
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Select the newest Xcode 27
+        run: |
+          XC=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] || { echo "::error::no Xcode 27 on this runner"; exit 1; }
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+
+      - name: Archive, unsigned
+        env:
+          BUILD: ${{ inputs.build }}
+        run: |
+          [[ "$BUILD" =~ ^[0-9]+$ ]] || { echo "::error::build must be digits"; exit 1; }
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodebuild -downloadComponent MetalToolchain || true
+          cd Apps/iOS
+          sed -i '' "s/CURRENT_PROJECT_VERSION: \"[0-9]*\"/CURRENT_PROJECT_VERSION: \"$BUILD\"/" project.yml
+          grep -q "CURRENT_PROJECT_VERSION: \"$BUILD\"" project.yml
+          xcodegen generate --quiet
+          xcodebuild archive -project KanbanCodeMobile.xcodeproj -scheme KanbanCodeMobile -configuration Release \
+            -destination generic/platform=iOS -archivePath $RUNNER_TEMP/KanbanCodeMobile.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          cd $RUNNER_TEMP && ditto -c -k --keepParent KanbanCodeMobile.xcarchive KanbanCodeMobile.xcarchive.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-archive-${{ inputs.build }}
+          path: ${{ runner.temp }}/KanbanCodeMobile.xcarchive.zip
+          retention-days: 14
