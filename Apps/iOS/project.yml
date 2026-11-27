@@ -71,6 +71,8 @@ targets:
         NSFaceIDUsageDescription: Confirm it is you before approving a request from an agent.
         NSCameraUsageDescription: Scan the pairing QR code shown by Kanban Code on your Mac, and take photos to send to a session.
         NSLocalNetworkUsageDescription: Connect to Kanban Code on your Mac.
+        NSMicrophoneUsageDescription: Dictate messages to your agents. Speech is turned into text on this device.
+        NSSpeechRecognitionUsageDescription: Dictate messages to your agents. Speech is turned into text on this device.
         CFBundleURLTypes:
           - CFBundleURLName: io.kanbancode.mobile
             CFBundleURLSchemes:

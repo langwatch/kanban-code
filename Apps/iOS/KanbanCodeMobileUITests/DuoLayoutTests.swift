@@ -211,6 +211,44 @@ final class DuoLayoutTests: KanbanUITestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
     }
 
+    /// The microphone sits left of send on the composer's row; dictation (a
+    /// scripted stand-in, the simulator cannot dictate) writes the words after
+    /// what was typed, and stop brings the keyboard back.
+    func test7DictationWritesIntoTheDraft() throws {
+        // Folded or unfolded: the composer row is the same.
+        try launch(linkKey: "KC_PAIR_LINK", extraEnv: ["KANBANCODE_DICTATION_SCRIPT": "check the failing build"])
+        openCard("card_wait")
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        clearDraft()
+        let mic = app.buttons["dictate"], send = app.buttons["send"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10), "no microphone in the composer")
+        XCTAssertTrue(send.exists, "no send beside the microphone")
+        XCTAssertEqual(mic.frame.midY, send.frame.midY, accuracy: 2, "the microphone is not on send's row")
+        XCTAssertGreaterThanOrEqual(send.frame.minX - mic.frame.maxX, 8, "the microphone is not left of send with a gap")
+        shot("duo-16-composer-microphone")
+
+        composer.tap()
+        composer.typeText("Please")
+        // The row moves up onto the keyboard; its buttons have a frame again once it settles.
+        XCTAssertTrue(waitFor(5) { mic.exists && !mic.frame.isEmpty && send.exists && !send.frame.isEmpty },
+                      "the microphone or send went away with text in the box")
+        XCTAssertTrue(mic.isHittable && send.isHittable, "the microphone or send is covered with text in the box")
+        mic.tap()
+        let stop = app.buttons["dictate-stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), "no stop button while dictating")
+        XCTAssertTrue(app.buttons["dictate-cancel"].exists, "no cancel while dictating")
+        XCTAssertTrue(waitFor(5) { !self.app.keyboards.firstMatch.exists }, "the keyboard stays up while dictating")
+        XCTAssertTrue(waitFor(10) { ((self.composer.value as? String) ?? "").hasPrefix("Please check") },
+                      "the words do not come in after the typed text: \(composer.value ?? "")")
+        shot("duo-17-dictating")
+        stop.tap()
+        XCTAssertTrue(waitFor(10) { (self.composer.value as? String) == "Please check the failing build" },
+                      "stop did not keep the dictated words: \(composer.value ?? "")")
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "the microphone did not come back")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard did not come back")
+        clearDraft()
+    }
+
     /// A tap on the chat just above the composer, placed from the composer
     /// itself: a tap placed from the app's frame lands elsewhere on the
     /// Duo, which has a window per display.

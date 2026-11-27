@@ -43,6 +43,14 @@ struct PromptComposer<Extra: View>: View {
     @State private var selection: TextSelection?
     /// Where picked images put their markers, taken when + is used.
     @State private var imageInsertion: Int?
+    @State private var dictation = ComposerDictation()
+    /// The text around the caret when dictation started; spoken words go between.
+    @State private var dictationInsertion: DictationInsertion?
+    /// The keyboard was up when dictation started; it goes down while dictating and comes back.
+    @State private var keyboardBeforeDictation = false
+    @Environment(\.scenePhase) private var scenePhase
+    /// Between the microphone and send, so a tap meant for one does not land on the other.
+    static var micGap: CGFloat { 12 }
 
     private var supportsImages: Bool { board.supports(RemoteAPI.Feature.images) }
     private var supportsFiles: Bool { board.supports(RemoteAPI.Feature.files) }
@@ -78,6 +86,27 @@ struct PromptComposer<Extra: View>: View {
             case .failure(let error): sendError = error.localizedDescription
             }
         }
+        .task { await dictation.resolve() }
+        .onChange(of: dictation.transcript) { writeDictation() }
+        .onChange(of: draft.text) { _, text in
+            // Typing while dictating keeps what is there and stops listening.
+            if dictation.isActive, dictationInsertion?.isTyping(text) ?? false {
+                dictation.cancel()
+                dictationInsertion = nil
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Not on inactive: the microphone permission alert makes the scene inactive.
+            if phase == .background, dictation.isActive { stopDictation() }
+        }
+        .onDisappear { dictation.cancel() }
+        .alert(dictation.problem?.title ?? "", isPresented: Binding(get: { dictation.problem != nil },
+                                                                    set: { if !$0 { dictation.problem = nil } }),
+               presenting: dictation.problem) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { problem in
+            Text(problem.message)
+        }
     }
 
     private var composer: some View {
@@ -96,16 +125,25 @@ struct PromptComposer<Extra: View>: View {
                     .padding(.top, 4)
                     .accessibilityIdentifier("composer")
                 HStack(spacing: 8) {
-                    if supportsImages || supportsFiles {
-                        attachButton
+                    if dictation.isActive {
+                        voiceBar
+                            .transition(.opacity)
+                    } else {
+                        if supportsImages || supportsFiles {
+                            attachButton
+                        }
+                        if !draft.stashes.isEmpty {
+                            stashButton
+                        }
+                        extra()
+                        Spacer()
                     }
-                    if !draft.stashes.isEmpty {
-                        stashButton
+                    HStack(spacing: dictation.isActive ? 6 : Self.micGap) {
+                        if dictation.isOffered { dictationButton }
+                        sendButton
                     }
-                    extra()
-                    Spacer()
-                    sendButton
                 }
+                .animation(.smooth(duration: 0.2), value: dictation.isActive)
             }
             .padding(10)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -183,7 +221,7 @@ struct PromptComposer<Extra: View>: View {
     }
 
     /// Stop while the agent works and nothing is typed; send otherwise.
-    private var showsStop: Bool { onInterrupt != nil && card.isBusy && draft.isEmpty && !isSending }
+    private var showsStop: Bool { onInterrupt != nil && card.isBusy && draft.isEmpty && !isSending && !dictation.isActive }
 
     @ViewBuilder private var sendButton: some View {
         if showsStop, let onInterrupt {
@@ -198,10 +236,12 @@ struct PromptComposer<Extra: View>: View {
             .accessibilityLabel("Stop")
             .accessibilityIdentifier("stop")
         } else {
-            let enabled = !draft.isEmpty && !isSending && draft.filesReady
+            // Send while dictating stops, waits for the last words and sends them.
+            let enabled = (!draft.isEmpty || dictation.isActive) && !isSending && draft.filesReady
             Menu {
-                Button("Send now", systemImage: "bolt.fill") { send(.now) }
+                Button("Send now", systemImage: "bolt.fill") { sendAfterDictation(.now) }
                 Button("Stash", systemImage: "tray.and.arrow.down") {
+                    if dictation.isActive { cancelDictation(restore: false) }
                     withAnimation(.snappy) { draft.stash() }
                 }
             } label: {
@@ -211,13 +251,159 @@ struct PromptComposer<Extra: View>: View {
                     .frame(width: 34, height: 34)
                     .background(enabled ? Color(.label) : Color(.tertiarySystemFill), in: Circle())
             } primaryAction: {
-                send(.queue)
+                sendAfterDictation(.queue)
             }
             .disabled(!enabled)
             .accessibilityLabel("Send")
             .accessibilityValue(draft.filesReady ? "" : "Waiting for files to upload")
             .accessibilityHint(card.isBusy ? "Sends when this turn ends. Touch and hold to send now or stash." : "Touch and hold to send now or stash.")
             .accessibilityIdentifier("send")
+        }
+    }
+
+    /// The microphone left of send: a tap dictates, a touch and hold picks the language. While
+    /// dictating a neutral stop button takes its place, with a spinner while a stop waits for
+    /// the voice model.
+    @ViewBuilder private var dictationButton: some View {
+        if dictation.isActive {
+            Button { stopDictation() } label: {
+                Group {
+                    if dictation.waiting != nil {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                            .fill(Color(.label))
+                            .frame(width: 11, height: 11)
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(Color(.label).opacity(0.08)))
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(dictation.phase == .finishing)
+            .accessibilityLabel("Stop dictating")
+            .accessibilityIdentifier("dictate-stop")
+        } else {
+            DictationMenu(languages: dictation.languages, current: dictation.language) {
+                startDictation()
+            } pick: { language in
+                dictation.choose(language)
+                startDictation()
+            }
+            .equatable()
+        }
+    }
+
+    /// The row's left side while dictating: cancel, the language, then the live level line, or
+    /// the line saying what a stop waits for.
+    private var voiceBar: some View {
+        HStack(spacing: 6) {
+            Button { cancelDictation() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 34, height: 34)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel dictating")
+            .accessibilityIdentifier("dictate-cancel")
+            DictationLanguageButton(languages: dictation.languages, current: dictation.language) { language in
+                switchDictationLanguage(language)
+            }
+            .equatable()
+            .layoutPriority(1)
+            if let waiting = dictation.waiting {
+                Text(waiting)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 6)
+                    .accessibilityIdentifier("dictation-waiting")
+            } else {
+                DictationLevelLine(meter: dictation.meter, color: Color(.secondaryLabel))
+                    .frame(maxWidth: .infinity)
+                    .padding(.leading, 6)
+            }
+        }
+    }
+
+    /// The caret or selection in characters, nil without a caret.
+    private var selectedRange: Range<Int>? {
+        guard let selection, case .selection(let range) = selection.indices else { return nil }
+        let text = draft.text
+        func offset(_ index: String.Index) -> Int {
+            let clamped = min(index, text.endIndex)
+            let utf16 = text.utf16.distance(from: text.utf16.startIndex, to: clamped)
+            return text.distance(from: text.startIndex, to: String.Index(utf16Offset: utf16, in: text))
+        }
+        return offset(range.lowerBound)..<max(offset(range.lowerBound), offset(range.upperBound))
+    }
+
+    /// Spoken words go where the caret is, replacing a selection; without a caret, at the end.
+    /// The keyboard goes down so the voice bar and the words stay in view.
+    private func startDictation(restart: Bool = false) {
+        if !restart { keyboardBeforeDictation = focused.wrappedValue }
+        let range = selectedRange
+        focused.wrappedValue = false
+        dictationInsertion = DictationInsertion(text: draft.text, selection: range)
+        Task { await dictation.start() }
+    }
+
+    /// Stops dictating, keeps the words and brings the keyboard back if it was up.
+    private func stopDictation() {
+        Task {
+            guard await dictation.stop() else { return }
+            dictationInsertion = nil
+            if keyboardBeforeDictation { focused.wrappedValue = true }
+        }
+    }
+
+    /// Stops at once; `restore` puts the draft back as it was before dictating.
+    private func cancelDictation(restore: Bool = true) {
+        dictation.cancel()
+        if restore, let insertion = dictationInsertion {
+            dictationInsertion = nil
+            draft.text = insertion.original
+            selection = TextSelection(insertionPoint: Self.index(insertion.prefix.count, in: draft.text))
+        }
+        dictationInsertion = nil
+        if restore, keyboardBeforeDictation { focused.wrappedValue = true }
+    }
+
+    /// Goes on in another language, keeping the words heard so far.
+    private func switchDictationLanguage(_ language: String) {
+        dictation.choose(language)
+        Task {
+            guard await dictation.stop() else { return }
+            startDictation(restart: true)
+        }
+    }
+
+    /// Puts the words heard so far between the text before and after the caret; never sends.
+    private func writeDictation() {
+        guard var insertion = dictationInsertion else { return }
+        let written = insertion.write(settled: dictation.settled, guessing: dictation.guessing)
+        dictationInsertion = insertion
+        guard written.text != draft.text else { return }
+        draft.text = written.text
+        selection = TextSelection(insertionPoint: Self.index(written.caret, in: draft.text))
+    }
+
+    /// Sends; while dictating it first stops and waits for the last words.
+    private func sendAfterDictation(_ mode: RemotePromptRequest.Mode) {
+        guard dictation.isActive else {
+            send(mode)
+            return
+        }
+        Task {
+            guard await dictation.stop() else { return }
+            dictationInsertion = nil
+            send(mode)
         }
     }
 
@@ -632,5 +818,71 @@ private struct PickedMovie: Transferable {
             try FileManager.default.copyItem(at: received.file, to: copy)
             return PickedMovie(url: copy)
         }
+    }
+}
+
+/// The microphone left of send: a tap dictates, a touch and hold opens every language. It redraws
+/// only when its look changes, so typing does not rebuild an open menu.
+struct DictationMenu: View, Equatable {
+    let languages: ComposerDictation.Languages
+    let current: String?
+    let dictate: () -> Void
+    let pick: (String) -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.languages == rhs.languages && lhs.current == rhs.current
+    }
+
+    var body: some View {
+        Menu {
+            DictationLanguageRows(languages: languages, current: current, pick: pick)
+        } label: {
+            Image(systemName: "mic")
+                .font(.system(size: 19, weight: .regular))
+                .foregroundStyle(Color(.secondaryLabel))
+                .frame(width: 34, height: 34)
+                .contentShape(Circle())
+        } primaryAction: {
+            dictate()
+        }
+        .menuOrder(.fixed)
+        .tint(Color(.label))
+        .accessibilityLabel("Dictate")
+        .accessibilityValue(current.map(ComposerDictation.name) ?? "")
+        .accessibilityHint("Touch and hold to pick the language.")
+        .accessibilityIdentifier("dictate")
+    }
+}
+
+/// The voice bar's language: its name with a chevron, opening every language.
+struct DictationLanguageButton: View, Equatable {
+    let languages: ComposerDictation.Languages
+    let current: String?
+    let pick: (String) -> Void
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.languages == rhs.languages && lhs.current == rhs.current
+    }
+
+    var body: some View {
+        Menu {
+            DictationLanguageRows(languages: languages, current: current, pick: pick)
+        } label: {
+            HStack(spacing: 3) {
+                Text(current.map(ComposerDictation.name) ?? "")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+            }
+            .font(.footnote)
+            .foregroundStyle(Color(.secondaryLabel))
+            .frame(minHeight: 34)
+            .contentShape(Rectangle())
+        }
+        .menuOrder(.fixed)
+        .tint(Color(.label))
+        .accessibilityLabel("Dictation language")
+        .accessibilityValue(current.map(ComposerDictation.name) ?? "")
+        .accessibilityIdentifier("dictation-language")
     }
 }

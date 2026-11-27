@@ -44,6 +44,10 @@
 	<string>Confirm it is you before approving a request from an agent.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to Kanban Code on your Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate messages to your agents. Speech is turned into text on this device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Dictate messages to your agents. Speech is turned into text on this device.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>
