@@ -14,6 +14,19 @@ final class ConversationTests: KanbanUITestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
+    /// An item of the text edit menu that is up. On a phone, Copy and Copy
+    /// message fill the bar; its Forward arrow opens the full menu, where
+    /// the items are buttons.
+    private func editMenuItem(_ title: String) -> XCUIElement {
+        let inBar = app.menuItems[title]
+        if inBar.waitForExistence(timeout: 3) { return inBar }
+        let forward = app.buttons["Forward"]
+        if forward.exists { forward.tap() }
+        let inList = app.buttons[title].firstMatch
+        _ = inList.waitForExistence(timeout: 3)
+        return inList
+    }
+
     /// Opens a new conversation of `card_wait` from the compose button.
     private func startConversation() {
         openCard("card_wait")
@@ -211,8 +224,8 @@ final class ConversationTests: KanbanUITestCase {
         tapConversation()
         XCTAssertTrue(waitFor(5) { !self.app.keyboards.firstMatch.exists })
         mine.press(forDuration: 1.0)
-        let item = app.menuItems["Continue in new conversation"]
-        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        let item = editMenuItem("Continue in new conversation")
+        XCTAssertTrue(item.exists)
         shot("92-continue-your-message-menu")
         item.tap()
         XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
@@ -229,12 +242,18 @@ final class ConversationTests: KanbanUITestCase {
     func testHoldAnAgentMessageToContinueInANewConversation() throws {
         openCard("card_wait")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        // The demo's last agent message.
-        let target = message(containing: "the tests pass")
-        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        // The agent's reply to a message sent here is the newest one, so it is
+        // on screen whatever other tests wrote in this chat before.
+        composer.tap()
+        composer.typeText("Keep the old icons")
+        app.buttons["send"].tap()
+        let target = message(containing: "Got it: Keep the old icons")
+        XCTAssertTrue(target.waitForExistence(timeout: 20))
+        tapConversation()
+        XCTAssertTrue(waitFor(5) { !self.app.keyboards.firstMatch.exists })
         target.press(forDuration: 1.0)
-        let item = app.menuItems["Continue in new conversation"]
-        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        let item = editMenuItem("Continue in new conversation")
+        XCTAssertTrue(item.exists)
         shot("86-continue-menu")
         item.tap()
         XCTAssertTrue(app.navigationBars["New conversation"].waitForExistence(timeout: 10))
