@@ -863,6 +863,10 @@ struct ChatInputBar: View {
     @State private var editorHeight: CGFloat = 36
     /// Bumped every time the composer should take the keyboard back.
     @State private var focusToken = 0
+    @State private var dictation = ComposerDictation()
+    /// The text around the caret when dictation started; spoken words go between.
+    @State private var dictationInsertion: DictationInsertion?
+    @State private var editorHandle = PromptEditorHandle()
 
     private var fileDrafts: PromptFileDrafts { PromptFileDrafts.shared }
 
@@ -880,6 +884,8 @@ struct ChatInputBar: View {
 
     private var canSend: Bool {
         guard !isUploadingFiles else { return false }
+        // Send while dictating stops, waits for the last words and sends them.
+        if dictation.isActive { return true }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || attachedFiles.contains { $0.readyPath != nil }
     }
@@ -938,11 +944,24 @@ struct ChatInputBar: View {
         return "Message"
     }
 
-    @ViewBuilder
     var body: some View {
-        switch style {
-        case .card: cardBody
-        case .irc:  ircBody
+        Group {
+            switch style {
+            case .card: cardBody
+            case .irc:  ircBody
+            }
+        }
+        .task { await dictation.resolve() }
+        .onChange(of: dictation.transcript) { writeDictation() }
+        .onChange(of: text) { _, newValue in noticeTyping(newValue) }
+        .onChange(of: cardId) { if dictation.isActive { cancelDictation() } }
+        .onDisappear { dictation.cancel() }
+        .alert(dictation.problem?.title ?? "", isPresented: Binding(get: { dictation.problem != nil },
+                                                                    set: { if !$0 { dictation.problem = nil } }),
+               presenting: dictation.problem) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { problem in
+            Text(problem.message)
         }
     }
 
@@ -1017,11 +1036,13 @@ struct ChatInputBar: View {
                     onHeightChange: { height in
                         editorHeight = clampedEditorHeight(height, minHeight: 24, maxHeight: 160)
                     },
-                    focusToken: focusToken
+                    focusToken: focusToken,
+                    handle: editorHandle
                 )
                 .focused($isFocused)
                 .frame(height: clampedEditorHeight(editorHeight, minHeight: 24, maxHeight: 160), alignment: .top)
             }
+            dictationControls(iconSize: 15)
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))
@@ -1124,7 +1145,8 @@ struct ChatInputBar: View {
                     onHeightChange: { height in
                         editorHeight = clampedEditorHeight(height, minHeight: 36, maxHeight: 160)
                     },
-                    focusToken: focusToken
+                    focusToken: focusToken,
+                    handle: editorHandle
                 )
                 .focused($isFocused)
                 .frame(height: clampedEditorHeight(editorHeight, minHeight: 36, maxHeight: 160), alignment: .top)
@@ -1133,33 +1155,37 @@ struct ChatInputBar: View {
                 } // end VStack (images + editor)
 
                 HStack(alignment: .center, spacing: 12) {
-                    if let contextUsage {
-                        ContextDonutView(usage: contextUsage)
-                    }
-
-                    attachFileButton
-
-                    if let onCatchUp {
-                        Button(action: onCatchUp) {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.system(size: 17))
-                                .foregroundStyle(Color.primary.opacity(0.5))
+                    if !dictation.isActive {
+                        if let contextUsage {
+                            ContextDonutView(usage: contextUsage)
                         }
-                        .buttonStyle(.plain)
-                        .help("Catch me up: what happened since my last message (/catchup)")
-                        .accessibilityIdentifier("catchUpButton")
+
+                        attachFileButton
+
+                        if let onCatchUp {
+                            Button(action: onCatchUp) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(Color.primary.opacity(0.5))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Catch me up: what happened since my last message (/catchup)")
+                            .accessibilityIdentifier("catchUpButton")
+                        }
+
+                        if onQueuePrompt != nil {
+                            Button { showQueueDialog = true } label: {
+                                Image(systemName: "text.badge.plus")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(canSend ? Color.primary.opacity(0.5) : Color.primary.opacity(0.15))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canSend)
+                            .help("Queue prompt")
+                        }
                     }
 
-                    if onQueuePrompt != nil {
-                        Button { showQueueDialog = true } label: {
-                            Image(systemName: "text.badge.plus")
-                                .font(.system(size: 18))
-                                .foregroundStyle(canSend ? Color.primary.opacity(0.5) : Color.primary.opacity(0.15))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend)
-                        .help("Queue prompt")
-                    }
+                    dictationControls(iconSize: 17)
 
                     Button(action: send) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -1438,6 +1464,14 @@ struct ChatInputBar: View {
     private func send() {
         if secretOffer.isActive { secretOffer.accept(); return }
         guard !isUploadingFiles else { return }
+        if dictation.isActive {
+            Task {
+                guard await dictation.stop() else { return }
+                dictationInsertion = nil
+                send()
+            }
+            return
+        }
         let normalized = PromptImagePlaceholders.normalize(text: text, images: pastedImages)
         let filePaths = attachedFiles.compactMap(\.readyPath)
         let trimmed = PromptFiles.appending(paths: filePaths, to: normalized.text)
@@ -1466,8 +1500,146 @@ struct ChatInputBar: View {
     }
 
     /// Escape answers No while a secret offer is open, or goes back from its replace question.
+    /// While dictating it cancels the dictation.
     private func escapeOrDecline(_ fallback: (() -> Void)?) {
+        if dictation.isActive { cancelDictation(); return }
         if secretOffer.isActive { secretOffer.escape() } else { fallback?() }
+    }
+
+    // MARK: Dictation
+
+    /// The microphone left of send; while dictating cancel, the language and the live level
+    /// line come before it, and a neutral stop button takes its place.
+    @ViewBuilder
+    private func dictationControls(iconSize: CGFloat) -> some View {
+        if dictation.isOffered {
+            HStack(spacing: 8) {
+                if dictation.isActive {
+                    Button { cancelDictation() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: iconSize - 2))
+                            .foregroundStyle(Color.primary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel dictating")
+                    .accessibilityIdentifier("dictate-cancel")
+                    Menu {
+                        DictationLanguageRows(languages: dictation.languages, current: dictation.language) { language in
+                            switchDictationLanguage(language)
+                        }
+                    } label: {
+                        Text(dictation.language.map(ComposerDictation.name) ?? "")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .help("Dictation language")
+                    if let waiting = dictation.waiting {
+                        Text(waiting)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .frame(maxWidth: 220, alignment: .leading)
+                    } else {
+                        DictationLevelLine(meter: dictation.meter)
+                            .frame(width: 120)
+                    }
+                    Button { stopDictation() } label: {
+                        Group {
+                            if dictation.waiting != nil {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                    .fill(Color.primary)
+                                    .frame(width: 9, height: 9)
+                            }
+                        }
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.primary.opacity(0.08)))
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(dictation.phase == .finishing)
+                    .help("Stop dictating")
+                    .accessibilityIdentifier("dictate-stop")
+                } else {
+                    Menu {
+                        DictationLanguageRows(languages: dictation.languages, current: dictation.language) { language in
+                            dictation.choose(language)
+                            startDictation()
+                        }
+                    } label: {
+                        Image(systemName: "mic")
+                            .font(.system(size: iconSize))
+                            .foregroundStyle(Color.primary.opacity(0.5))
+                    } primaryAction: {
+                        startDictation()
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Dictate (hold for the language)")
+                    .accessibilityLabel("Dictate")
+                    .accessibilityIdentifier("dictate")
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: dictation.isActive)
+        }
+    }
+
+    /// Spoken words go where the caret is, replacing a selection; without one, at the end.
+    private func startDictation() {
+        dictationInsertion = DictationInsertion(text: text, selection: editorHandle.selection)
+        Task { await dictation.start() }
+    }
+
+    /// Stops dictating, keeps the words and gives the editor the keyboard back.
+    private func stopDictation() {
+        Task {
+            guard await dictation.stop() else { return }
+            dictationInsertion = nil
+            editorHandle.textView.map { $0.window?.makeFirstResponder($0) }
+        }
+    }
+
+    /// Stops at once and puts the draft back as it was before dictating.
+    private func cancelDictation() {
+        dictation.cancel()
+        if let insertion = dictationInsertion {
+            dictationInsertion = nil
+            text = insertion.original
+            editorHandle.show(insertion.original, caret: insertion.prefix.count)
+        }
+    }
+
+    /// Goes on in another language, keeping the words heard so far.
+    private func switchDictationLanguage(_ language: String) {
+        dictation.choose(language)
+        Task {
+            guard await dictation.stop() else { return }
+            startDictation()
+        }
+    }
+
+    /// Puts the words heard so far between the text before and after the caret; never sends.
+    private func writeDictation() {
+        guard var insertion = dictationInsertion else { return }
+        let written = insertion.write(settled: dictation.settled, guessing: dictation.guessing)
+        dictationInsertion = insertion
+        guard written.text != text else { return }
+        text = written.text
+        editorHandle.show(written.text, caret: written.caret)
+    }
+
+    /// Typing while dictating keeps what is there and stops listening.
+    private func noticeTyping(_ newValue: String) {
+        guard dictation.isActive, dictationInsertion?.isTyping(newValue) ?? false else { return }
+        dictation.cancel()
+        dictationInsertion = nil
     }
 
     @ViewBuilder

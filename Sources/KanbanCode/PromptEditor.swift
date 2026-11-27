@@ -37,6 +37,8 @@ struct PromptEditor: NSViewRepresentable {
     /// and that end of the draft in view. Focus alone leaves a long draft
     /// showing its first line with the caret somewhere below the fold.
     var focusToken: Int = 0
+    /// Reads the caret and writes text with it straight into the editor, for dictation.
+    var handle: PromptEditorHandle? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -88,6 +90,7 @@ struct PromptEditor: NSViewRepresentable {
         textView.smartInsertDeleteEnabled = false
 
         scrollView.documentView = textView
+        handle?.textView = textView
 
         return scrollView
     }
@@ -104,6 +107,7 @@ struct PromptEditor: NSViewRepresentable {
         // CRITICAL: Update the coordinator's parent reference so textDidChange
         // writes to the CURRENT card's binding, not a stale one from makeCoordinator.
         context.coordinator.parent = self
+        handle?.textView = textView
         // Force update when the identity changes (e.g. switched to a different card).
         let identityChanged = context.coordinator.lastIdentity != identity
         if identityChanged {
@@ -559,5 +563,36 @@ final class SubmitTextView: NSTextView {
         }
         refreshEditorHeightAfterProgrammaticChange()
         needsDisplay = true
+    }
+}
+
+/// The editor's text view, for a writer that must not wait for typing to stop: dictation writes
+/// its words while the editor keeps the keyboard, which the binding's update guard would hold back.
+@MainActor
+final class PromptEditorHandle {
+    weak var textView: NSTextView?
+
+    /// The selection in characters, nil when the editor is not on screen.
+    var selection: Range<Int>? {
+        guard let textView else { return nil }
+        let text = textView.string
+        let range = textView.selectedRange()
+        func offset(_ utf16: Int) -> Int {
+            let index = String.Index(utf16Offset: min(max(utf16, 0), text.utf16.count), in: text)
+            return text.distance(from: text.startIndex, to: index)
+        }
+        let lower = offset(range.location)
+        return lower..<max(lower, offset(range.location + range.length))
+    }
+
+    /// Shows `text` with the caret `caret` characters in.
+    func show(_ text: String, caret: Int) {
+        guard let textView else { return }
+        if textView.string != text { textView.string = text }
+        let index = text.index(text.startIndex, offsetBy: min(max(caret, 0), text.count))
+        let location = text.utf16.distance(from: text.utf16.startIndex, to: index)
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+        textView.needsDisplay = true
     }
 }

@@ -60,6 +60,9 @@ app: build cli install-cli web
 	@# Peer masters answer plain http on the tailnet (WireGuard encrypts it).
 	@echo '<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>' >> $(BUNDLE_DIR)/Contents/Info.plist
 	@echo '<key>LSUIElement</key><false/>' >> $(BUNDLE_DIR)/Contents/Info.plist
+	@# Dictation in the composer, on Apple's on-device SpeechTranscriber.
+	@echo '<key>NSMicrophoneUsageDescription</key><string>Dictate messages to your agents. Speech is turned into text on this Mac.</string>' >> $(BUNDLE_DIR)/Contents/Info.plist
+	@echo '<key>NSSpeechRecognitionUsageDescription</key><string>Dictate messages to your agents. Speech is turned into text on this Mac.</string>' >> $(BUNDLE_DIR)/Contents/Info.plist
 	@echo '<key>CFBundleIconFile</key><string>AppIcon</string>' >> $(BUNDLE_DIR)/Contents/Info.plist
 	@echo '<key>CFBundleIconName</key><string>AppIcon</string>' >> $(BUNDLE_DIR)/Contents/Info.plist
 	@echo '<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.kanban-code</string><key>CFBundleURLSchemes</key><array><string>kanbancode</string></array></dict></array>' >> $(BUNDLE_DIR)/Contents/Info.plist
