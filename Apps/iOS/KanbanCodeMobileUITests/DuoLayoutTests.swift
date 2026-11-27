@@ -109,7 +109,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertComposingLayout(keyboardUp: true)
         assertComposerKeepsTheKeyboard()
         shot("duo-10-sent-one-tap")
-        tapConversation()
+        tapChatAboveComposer()
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
@@ -134,7 +134,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         sleep(2)
         shot("duo-14-typing-folded")
         assertComposingLayout(keyboardUp: true)
-        tapConversation()
+        tapChatAboveComposer()
         assertComposingLayout(keyboardUp: false)
         try ask(host: foldDir, "unfold", answer: "unfolded")
     }
@@ -187,6 +187,13 @@ final class DuoLayoutTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(5) { !app.buttons["card-card_wait"].exists || !app.buttons["card-card_wait"].isHittable },
                       "the sidebar stays over the second card")
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
+    }
+
+    /// A tap on the chat just above the composer, placed from the composer
+    /// itself: a tap placed from the app's frame lands elsewhere on the
+    /// Duo, which has a window per display.
+    private func tapChatAboveComposer() {
+        composerBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: -40)).tap()
     }
 
     private func showSidebar() {
