@@ -97,6 +97,7 @@ struct BoardScreen: View {
                 detailRoot
                     .navigationDestination(for: BoardRoute.self) { destination($0) }
                     .toolbar { historyButtons }
+                    .background { hiddenBackShortcut }
             }
         }
         .sidebarOverCard(isNarrow)
@@ -195,26 +196,43 @@ struct BoardScreen: View {
     }
 
     /// Back and Forward through the opened cards. Beside the sidebar they
-    /// always show, greyed when there is nowhere to go; in a single stack
-    /// (an iPhone, a folded Duo), whose bar has its own back to the board,
-    /// only when there is somewhere to go.
+    /// show as a pair, greyed when there is nowhere to go. In a single
+    /// stack (an iPhone, a folded Duo) the bar's own back already leads to
+    /// the board, so a second back chevron would read as the same button:
+    /// only Forward shows there, and only when there is somewhere to go.
+    /// Cmd+[ walks back in both.
     @ToolbarContentBuilder private var historyButtons: some ToolbarContent {
-        let showsAlways = horizontalSizeClass == .regular
-        if showsAlways || canGoBack {
-            ToolbarItem(placement: .topBarTrailing) {
+        if horizontalSizeClass == .regular {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Back", systemImage: "chevron.backward", action: goBack)
                     .disabled(!canGoBack)
                     .keyboardShortcut("[", modifiers: .command)
                     .accessibilityIdentifier("historyBack")
-            }
-        }
-        if showsAlways || canGoForward {
-            ToolbarItem(placement: .topBarTrailing) {
                 Button("Forward", systemImage: "chevron.forward", action: goForward)
                     .disabled(!canGoForward)
                     .keyboardShortcut("]", modifiers: .command)
                     .accessibilityIdentifier("historyForward")
             }
+        } else {
+            if canGoForward {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Forward", systemImage: "chevron.forward", action: goForward)
+                        .keyboardShortcut("]", modifiers: .command)
+                        .accessibilityIdentifier("historyForward")
+                }
+            }
+        }
+    }
+
+    /// Cmd+[ in a single stack, where no Back button shows.
+    @ViewBuilder private var hiddenBackShortcut: some View {
+        if horizontalSizeClass != .regular {
+            Button("Back", action: goBack)
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!canGoBack)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
     }
 

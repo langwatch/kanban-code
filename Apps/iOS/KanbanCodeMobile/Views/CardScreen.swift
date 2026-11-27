@@ -110,8 +110,11 @@ struct CardScreen: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
-        // Typing, the empty bar goes too: the chat starts under the status bar.
-        .toolbarVisibility(composing ? .hidden : .automatic, for: .navigationBar)
+        // Typing, the empty bar goes too: the chat starts under the status
+        // bar. Where the bar's buttons sit in a column of their own beside
+        // the chat (an iPhone Duo), hiding them gives the chat no room, so
+        // they stay; only the title fades.
+        .toolbarVisibility(composing && !Self.hasSideRail ? .hidden : .automatic, for: .navigationBar)
         .navigationDestination(item: $openConversation) { route in
             ConversationScreen(route: route, board: board)
         }
@@ -231,6 +234,15 @@ struct CardScreen: View {
         .padding(.vertical, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("cardHeader")
+    }
+
+    /// The bar's buttons sit in a column of their own at the trailing
+    /// edge (an iPhone Duo's right strip), which the window reports as a
+    /// trailing safe area much wider than the leading one.
+    static var hasSideRail: Bool {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return false }
+        return window.safeAreaInsets.right - window.safeAreaInsets.left > 30
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {

@@ -90,7 +90,9 @@ class KanbanUITestCase: XCTestCase {
     /// Keyboard up: the card's header, tabs and title are gone and the
     /// composer sits on the keyboard. Keyboard down: they are back and the
     /// composer sits on the bottom safe area, no gap under it.
-    func assertComposingLayout(keyboardUp: Bool, file: StaticString = #filePath, line: UInt = #line) {
+    /// `railStays`: the bar's buttons sit in a column of their own beside
+    /// the chat (an iPhone Duo) and stay hittable while typing.
+    func assertComposingLayout(keyboardUp: Bool, railStays: Bool = false, file: StaticString = #filePath, line: UInt = #line) {
         let keyboard = app.keyboards.firstMatch
         let header = app.otherElements["cardHeader"]
         if keyboardUp {
@@ -99,7 +101,13 @@ class KanbanUITestCase: XCTestCase {
             sleep(1)
             XCTAssertFalse(app.segmentedControls["cardTabs"].exists, "the tabs stay over the chat", file: file, line: line)
             XCTAssertFalse(app.staticTexts["cardColumnTitle"].exists, "the title stays over the chat", file: file, line: line)
-            XCTAssertFalse(app.buttons["newConversation"].exists, "the card's bar stays over the chat", file: file, line: line)
+            if railStays {
+                let compose = app.buttons["newConversation"]
+                if !compose.exists { dump("rail-gone-while-typing") }
+                XCTAssertTrue(compose.exists && compose.isHittable, "the rail's buttons went away while typing", file: file, line: line)
+            } else {
+                XCTAssertFalse(app.buttons["newConversation"].exists, "the card's bar stays over the chat", file: file, line: line)
+            }
             // The keyboard element leaves out the suggestion bar (44 pt)
             // over it, which the composer sits on.
             let gap = keyboard.frame.minY - composerBar.frame.maxY

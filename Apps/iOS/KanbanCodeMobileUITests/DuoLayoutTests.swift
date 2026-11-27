@@ -70,6 +70,12 @@ final class DuoLayoutTests: KanbanUITestCase {
         }
         // The keyboard comes back with the composer's focus; put it away.
         if app.keyboards.firstMatch.exists { app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35)).tap() }
+        // One back control: the bar's own back to the board, no history
+        // Back beside it, and no Forward with nowhere to go.
+        XCTAssertFalse(app.buttons["historyBack"].exists, "a history Back shows next to the bar's back")
+        XCTAssertFalse(app.buttons["historyForward"].exists, "Forward shows with nowhere to go")
+        let backs = app.buttons.matching(NSPredicate(format: "identifier == 'BackButton' OR label == 'Back'"))
+        XCTAssertEqual(backs.count, 1, "back controls folded: \(backs.allElementsBoundByIndex.map { $0.identifier })")
         shot("duo-04-folded-card")
 
         goBack()
@@ -121,7 +127,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         composer.tap()
         sleep(2)
         shot("duo-09-typing-unfolded")
-        assertComposingLayout(keyboardUp: true)
+        assertComposingLayout(keyboardUp: true, railStays: true)
         assertComposerKeepsTheKeyboard()
         shot("duo-10-sent-one-tap")
         tapChatAboveComposer()
@@ -149,7 +155,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         composer.tap()
         sleep(2)
         shot("duo-14-typing-folded")
-        assertComposingLayout(keyboardUp: true)
+        assertComposingLayout(keyboardUp: true, railStays: true)
         tapChatAboveComposer()
         assertComposingLayout(keyboardUp: false)
         try ask(host: foldDir, "unfold", answer: "unfolded")
