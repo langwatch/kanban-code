@@ -123,7 +123,7 @@ final class DuoLayoutTests: KanbanUITestCase {
 
         composer.tap()
         assertComposingLayout(keyboardUp: true)
-        scrollChat()
+        scrollChatAboveComposer()
         assertComposingLayout(keyboardUp: false)
 
         guard let foldDir = ProcessInfo.processInfo.environment["KC_FOLD_DIR"] else { return }
@@ -195,6 +195,13 @@ final class DuoLayoutTests: KanbanUITestCase {
     /// Duo, which has a window per display.
     private func tapChatAboveComposer() {
         composerBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: -40)).tap()
+    }
+
+    /// Drags the chat down from above the composer, placed from it too.
+    private func scrollChatAboveComposer() {
+        let top = composerBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+        top.withOffset(CGVector(dx: 0, dy: -200))
+            .press(forDuration: 0.05, thenDragTo: top.withOffset(CGVector(dx: 0, dy: -40)))
     }
 
     private func showSidebar() {
