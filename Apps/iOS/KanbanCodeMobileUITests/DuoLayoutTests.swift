@@ -29,6 +29,21 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertSideBySide(sidebarCard: "card_wait")
         XCTAssertFalse(app.descendants(matching: .any)["noCardOpen"].exists)
         shot("duo-03-unfolded-other-card")
+
+        // Back and Forward in the bar walk the cards opened, as Cmd+[ and
+        // Cmd+] on the Mac.
+        let header = app.otherElements["cardHeader"]
+        let back = app.buttons["historyBack"], forward = app.buttons["historyForward"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no Back in the bar")
+        XCTAssertTrue(back.isEnabled)
+        XCTAssertFalse(forward.isEnabled, "Forward is on with nowhere to go")
+        back.tap()
+        XCTAssertTrue(header.staticTexts["Add dark mode to settings"].waitForExistence(timeout: 10), "Back did not open the card before")
+        XCTAssertTrue(waitFor(5) { forward.isEnabled }, "Forward stays off after Back")
+        shot("duo-15-history-back")
+        forward.tap()
+        XCTAssertTrue(header.staticTexts["Refactor the billing webhooks"].waitForExistence(timeout: 10), "Forward did not reopen the card")
+        XCTAssertTrue(waitFor(5) { !forward.isEnabled }, "Forward stays on at the end")
     }
 
     func test2FoldingKeepsTheCardOpen() throws {

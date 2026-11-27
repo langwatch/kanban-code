@@ -40,6 +40,11 @@ struct BoardScreen: View {
     /// On a narrow display the sidebar lies over the card; it shows until a
     /// card is picked, or when opened with its button.
     @State private var overlaySidebarShown = false
+    /// The cards and conversations opened one after another, for Back and
+    /// Forward (Cmd+[ and Cmd+]), as on the Mac.
+    @State private var history = NavigationHistory<BoardRoute>()
+    /// The next change of the open card comes from Back or Forward.
+    @State private var isWalkingHistory = false
 
     /// Cards shown per column before a "Show all" row.
     private static let columnPreviewCount = ProcessInfo.processInfo.environment["KANBANCODE_COLUMN_PREVIEW"].flatMap(Int.init) ?? 15
@@ -91,11 +96,19 @@ struct BoardScreen: View {
             NavigationStack(path: detailPath) {
                 detailRoot
                     .navigationDestination(for: BoardRoute.self) { destination($0) }
+                    .toolbar { historyButtons }
             }
         }
         .sidebarOverCard(isNarrow)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { splitSize = $0 }
-        .onChange(of: path.first) { _, _ in overlaySidebarShown = false }
+        .onChange(of: path.first) { old, new in
+            overlaySidebarShown = false
+            if isWalkingHistory {
+                isWalkingHistory = false
+            } else {
+                history.record(from: old, to: new)
+            }
+        }
         .task { fleet.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { fleet.reconnectDown() }
@@ -155,6 +168,54 @@ struct BoardScreen: View {
     /// inside the safe area, so a landscape Duo measures about 880 pt.
     private var isNarrow: Bool {
         splitSize.width > 0 && (splitSize.height > splitSize.width || splitSize.width < 760)
+    }
+
+    // MARK: History
+
+    private func isAvailable(_ route: BoardRoute) -> Bool {
+        switch route {
+        case .card(let id): fleet.entry(cardId: id) != nil
+        case .conversation(let conversation): fleet.entry(cardId: conversation.cardId) != nil
+        }
+    }
+
+    private var canGoBack: Bool { history.canGoBack(from: path.first, isAvailable: isAvailable) }
+    private var canGoForward: Bool { history.canGoForward(from: path.first, isAvailable: isAvailable) }
+
+    private func goBack() {
+        guard let route = history.back(from: path.first, isAvailable: isAvailable) else { return }
+        isWalkingHistory = true
+        path = [route]
+    }
+
+    private func goForward() {
+        guard let route = history.forward(from: path.first, isAvailable: isAvailable) else { return }
+        isWalkingHistory = true
+        path = [route]
+    }
+
+    /// Back and Forward through the opened cards. Beside the sidebar they
+    /// always show, greyed when there is nowhere to go; in a single stack
+    /// (an iPhone, a folded Duo), whose bar has its own back to the board,
+    /// only when there is somewhere to go.
+    @ToolbarContentBuilder private var historyButtons: some ToolbarContent {
+        let showsAlways = horizontalSizeClass == .regular
+        if showsAlways || canGoBack {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Back", systemImage: "chevron.backward", action: goBack)
+                    .disabled(!canGoBack)
+                    .keyboardShortcut("[", modifiers: .command)
+                    .accessibilityIdentifier("historyBack")
+            }
+        }
+        if showsAlways || canGoForward {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Forward", systemImage: "chevron.forward", action: goForward)
+                    .disabled(!canGoForward)
+                    .keyboardShortcut("]", modifiers: .command)
+                    .accessibilityIdentifier("historyForward")
+            }
+        }
     }
 
     /// The board is out of sight under an open card: only in a single stack.
