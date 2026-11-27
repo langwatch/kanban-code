@@ -155,7 +155,10 @@ public actor AttentionCenter: AttentionDelivering {
         }
         var policy = settings
         var phoneNote = ""
-        if !ownsPhone {
+        if request.isDeviceEnrolment {
+            policy.phoneEnabled = false
+            phoneNote = " (a device enrolment: the phone that asked cannot approve it, the Mac does)"
+        } else if !ownsPhone {
             policy.phoneEnabled = false
             phoneNote = " (the master that raised it sends to the phone)"
         } else if phone == nil {

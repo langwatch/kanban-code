@@ -1604,9 +1604,12 @@ public actor VaultBroker {
     static let abandonedBy = "abandoned"
 
     /// No caller of the request, or of one joined to it, polled it within
-    /// `abandonAfter`.
+    /// `abandonAfter`. A change of the owner keys has no caller polling it
+    /// (a device asked to enrol and waits for the Mac, which may be offline
+    /// for hours): it stays open until answered or `approvalTimeout`.
     private func isAbandoned(_ id: String) -> Bool {
         guard let p = pending[id], p.result == nil else { return false }
+        if case .owner = p.action { return false }
         let lastSeen = pending.values.filter { $0.joinedTo == id && $0.result == nil }.map(\.lastSeen).reduce(p.lastSeen, max)
         return Date().timeIntervalSince(lastSeen) > abandonAfter
     }

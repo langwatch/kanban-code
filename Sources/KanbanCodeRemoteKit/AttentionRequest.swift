@@ -87,6 +87,13 @@ public struct AttentionRequest: Codable, Sendable, Equatable, Hashable, Identifi
     public var needsDeviceKey: Bool { unseal?.needsSealedKey ?? false }
 
     public var isOpen: Bool { resolvedAt == nil }
+
+    /// A device asked to become an owner key: the device in hand cannot
+    /// approve its own enrolment, so the request goes to the Mac (or a
+    /// device that already holds a key), never as a push to the phone.
+    public var isDeviceEnrolment: Bool {
+        vault?.action == .ownerKeys && vault?.remoteDevice != nil
+    }
 }
 
 /// Body of `POST /v1/attention/{id}/resolve`.

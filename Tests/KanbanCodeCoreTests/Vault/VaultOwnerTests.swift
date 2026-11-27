@@ -399,6 +399,19 @@ struct VaultOwnerTests {
         #expect(throws: Age.AgeError.noMatchingIdentity) { try VaultOwnerSeal.open(try #require(s.sealed), with: dead) }
     }
 
+    @Test func anEnrolNobodyPollsStaysOpenForTheMac() async throws {
+        let w = try await makeWorld()
+        await w.broker.configure(approvalTimeout: 60, abandonAfter: 0.1)
+        let phone = SoftwareOwnerKey()
+        let asked = await w.broker.enrol(phone.owner("iPhone", .phone), caller: VaultCaller(remoteDevice: "iPhone"))
+        #expect(asked.status == .pending)
+        try await Task.sleep(for: .milliseconds(400))
+        // The phone never polls; the Mac answers later.
+        #expect(w.approvals.closed.isEmpty)
+        #expect(try await w.approve(asked).status == .granted)
+        #expect(try await w.store.owner()?.devices.count == 2)
+    }
+
     @Test func theKeyToReplaceIsTheKeptOneOrTheOnlyOneUnderTheName() {
         let at = Date()
         let status = VaultOwnerStatus(active: true, keys: [

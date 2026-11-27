@@ -44,7 +44,7 @@ enum PhoneVaultDevice {
             return EnrolOutcome(problem: "Could not make the key: \(describe(error))")
         }
         guard let mine = recipient() else { return EnrolOutcome(problem: "Could not make the key.") }
-        guard let (master, client) = await enrolTarget(fleet) else {
+        guard let (master, client, isMac) = await enrolTarget(fleet) else {
             return EnrolOutcome(problem: "No machine is reachable.")
         }
         var replaces: [String] = []
@@ -63,6 +63,9 @@ enum PhoneVaultDevice {
             return EnrolOutcome(message: "Already enrolled on \(master.machineName): \(answer.message)")
         case "pending":
             let dropping = replaces.isEmpty ? "" : " It also removes this phone's old key (\(replaces.joined(separator: ", ")))."
+            if !isMac {
+                return EnrolOutcome(message: "Waiting for your Mac to come online. \(master.machineName) holds the request and it shows on the Mac when the Mac is back; approve it there with Touch ID, it shows the fingerprint above.\(dropping)")
+            }
             return EnrolOutcome(message: "Asked \(master.machineName). Approve it there with Touch ID; it shows the fingerprint above.\(dropping)")
         default:
             return EnrolOutcome(problem: "\(master.machineName) refused: \(answer.message)")
@@ -71,17 +74,19 @@ enum PhoneVaultDevice {
 
     /// The master to ask: one that is not always on (a Mac, with a screen
     /// and a Touch ID owner key), else the primary, else any online one.
+    /// `isMac` is false for an always-on master: it holds the request until
+    /// the Mac comes online and shows it there.
     @MainActor
-    private static func enrolTarget(_ fleet: FleetModel) async -> (BoardModel, RemoteClient)? {
+    private static func enrolTarget(_ fleet: FleetModel) async -> (BoardModel, RemoteClient, isMac: Bool)? {
         let online = fleet.onlineMasters.compactMap { m in m.client.map { (m, $0) } }
         for (master, client) in online {
             if let list = try? await client.machines(),
                let this = list.machines.first(where: { $0.kind == .this }), this.alwaysOn != true {
-                return (master, client)
+                return (master, client, true)
             }
         }
-        if let primary = fleet.primary, primary.isOnline, let client = primary.client { return (primary, client) }
-        return online.first
+        if let primary = fleet.primary, primary.isOnline, let client = primary.client { return (primary, client, false) }
+        return online.first.map { ($0.0, $0.1, false) }
     }
 
     /// Why an approval could not be unlocked here.

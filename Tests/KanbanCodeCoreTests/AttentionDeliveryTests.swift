@@ -70,6 +70,31 @@ struct AttentionDeliveryTests {
         #expect(phone.events.count == 1)
     }
 
+    @Test("a device enrolment raised on the box never goes to the phone that asked; it waits for the Mac")
+    func deviceEnrolmentSkipsThePhone() async {
+        let clock = Clock(t0)
+        let phone = Recorder(silentCopy: true)
+        // The box: no Mac notifier, the Mac away (offline, nothing reported).
+        let center = AttentionCenter(phone: phone, localMachineId: { "box-id" }, now: { clock.now })
+        var request = vaultRequest(card: nil)
+        request.machineId = "box-id"
+        request.vault = VaultApprovalDetails(action: .ownerKeys, origin: .outside, secrets: [], remoteDevice: "iPhone")
+        #expect(request.isDeviceEnrolment)
+        await center.deliver(request)
+        clock.advance(3600)
+        await center.evaluateAll()
+        #expect(phone.events.isEmpty)
+
+        // Mirrored on the Mac once it is back: posted there.
+        let mac = Recorder()
+        let onMac = AttentionCenter(
+            mac: mac, phone: Recorder(),
+            localPresence: { MacPresence(idleSeconds: 1, reportedAt: clock.now) },
+            localMachineId: { "mac-id" }, now: { clock.now })
+        await onMac.deliver(request)
+        #expect(mac.events.contains("mac+vault_1"))
+    }
+
     @Test("APNs replaces the silent copy with the alert; a channel that cannot takes only the alert")
     func noSilentCopyChannel() {
         #expect(APNsAttentionSender(key: APNsKey(keyId: "K", teamId: "T", key: ""), devices: RemoteDeviceStore(path: "/nonexistent")).sendsSilentCopy)
