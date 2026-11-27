@@ -50,6 +50,10 @@ struct CardActionEnvironment {
     var continueTargets: [(label: String, target: String)]
     /// Whether a machine is an ssh machine, shared and always on.
     var isSharedMachine: (String) -> Bool
+    /// How many of the card's conversations are archived.
+    var archivedConversationCount = 0
+    /// Lists the card's archived conversations.
+    var showArchivedConversations: (String) -> Void = { _ in }
 
     @MainActor
     static func live(for card: KanbanCodeCard) -> CardActionEnvironment {
@@ -71,7 +75,12 @@ struct CardActionEnvironment {
                 )
             },
             continueTargets: continueTargets(for: card, state: AppComposition.shared.store.state),
-            isSharedMachine: { AppServices.sshTargets[$0] != nil }
+            isSharedMachine: { AppServices.sshTargets[$0] != nil },
+            archivedConversationCount: AppComposition.shared.store.state.archivedConversationCount(cardId: card.id),
+            showArchivedConversations: { cardId in
+                NotificationCenter.default.post(
+                    name: .kanbanCodeShowArchivedConversations, object: nil, userInfo: ["cardId": cardId])
+            }
         )
     }
 
@@ -246,6 +255,13 @@ struct CardActionCatalog {
         if let onShowVault = actions.onShowVault {
             items.append(CardActionItem(
                 id: "vault", title: "Vault Releases", icon: "key", kind: .perform(onShowVault)
+            ))
+        }
+        if environment.archivedConversationCount > 0 {
+            let cardId = card.id
+            items.append(CardActionItem(
+                id: "archivedConversations", title: "Archived Conversations (\(environment.archivedConversationCount))",
+                icon: "archivebox", kind: .perform { environment.showArchivedConversations(cardId) }
             ))
         }
         items.append(CardActionItem(

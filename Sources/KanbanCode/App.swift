@@ -47,6 +47,10 @@ struct KanbanCodeApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
 
+                Button("Show Archived Conversations") {
+                    NotificationCenter.default.post(name: .kanbanCodeShowArchivedConversations, object: nil)
+                }
+
                 Divider()
 
                 Button("Zoom In") {

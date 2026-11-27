@@ -296,6 +296,9 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
     public var sessionStatus: RemoteSessionStatus?
     /// The card's conversations that are not archived, most recent first.
     public var conversations: [RemoteConversation]
+    /// How many of the card's conversations are archived. They are listed
+    /// by `GET /v1/cards/{id}/conversations`.
+    public var archivedConversationCount: Int
     /// Its assistant stopped on a usage limit that still holds.
     public var usageLimit: RemoteUsageLimit?
     /// Who created the card: the human, or an agent (a subagent, a task an
@@ -313,6 +316,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         pinnedSortOrder: Int? = nil, pinnedAt: Date? = nil,
         lastActivity: Date? = nil, updatedAt: Date, machineId: String? = nil, machineName: String? = nil,
         sessionStatus: RemoteSessionStatus? = nil, conversations: [RemoteConversation] = [],
+        archivedConversationCount: Int = 0,
         usageLimit: RemoteUsageLimit? = nil, origin: CardOrigin = .human, lazeAgent: RemoteLazeAgent? = nil
     ) {
         self.id = id
@@ -342,6 +346,7 @@ public struct RemoteCard: Codable, Sendable, Equatable, Identifiable {
         self.machineName = machineName
         self.sessionStatus = sessionStatus
         self.conversations = conversations
+        self.archivedConversationCount = archivedConversationCount
         self.usageLimit = usageLimit
         self.origin = origin
         self.lazeAgent = lazeAgent
@@ -443,7 +448,8 @@ extension RemoteCard {
 }
 
 /// The JSON of a card leaves out what is false, zero or empty (`isLive`,
-/// `isBusy`, `archived`, `queuedPromptCount`, `queuedPrompts`, `terminals`, `prs`) and nil
+/// `isBusy`, `archived`, `queuedPromptCount`, `queuedPrompts`, `terminals`, `prs`,
+/// `archivedConversationCount`) and nil
 /// optionals; decoding reads a missing key as that default. A board of
 /// thousands of cards stays small that way.
 extension RemoteCard {
@@ -452,7 +458,7 @@ extension RemoteCard {
         case isLive, isBusy, sessionId, terminals, prs, queuedPromptCount, queuedPrompts, parentCardId, archived, pinned
         case pinnedSortOrder, pinnedAt
         case lastActivity, updatedAt, machineId, machineName, sessionStatus, conversations, usageLimit
-        case origin, lazeAgent
+        case archivedConversationCount, origin, lazeAgent
     }
 
     public init(from decoder: Decoder) throws {
@@ -486,6 +492,7 @@ extension RemoteCard {
             // A kind this client does not know yet reads as no status.
             sessionStatus: (try? c.decodeIfPresent(RemoteSessionStatus.self, forKey: .sessionStatus)) ?? nil,
             conversations: (try? c.decodeIfPresent([RemoteConversation].self, forKey: .conversations)) ?? [],
+            archivedConversationCount: try c.decodeIfPresent(Int.self, forKey: .archivedConversationCount) ?? 0,
             usageLimit: (try? c.decodeIfPresent(RemoteUsageLimit.self, forKey: .usageLimit)) ?? nil,
             // An origin this client does not know yet reads as the human's.
             origin: (try? c.decodeIfPresent(CardOrigin.self, forKey: .origin)) ?? .human,
@@ -522,6 +529,7 @@ extension RemoteCard {
         try c.encodeIfPresent(machineName, forKey: .machineName)
         try c.encodeIfPresent(sessionStatus, forKey: .sessionStatus)
         if !conversations.isEmpty { try c.encode(conversations, forKey: .conversations) }
+        if archivedConversationCount != 0 { try c.encode(archivedConversationCount, forKey: .archivedConversationCount) }
         try c.encodeIfPresent(usageLimit, forKey: .usageLimit)
         if origin != .human { try c.encode(origin, forKey: .origin) }
         try c.encodeIfPresent(lazeAgent, forKey: .lazeAgent)

@@ -88,3 +88,4 @@ All routes forward to the master that owns the card. The feature name in `GET /v
 
 - `POST /v1/cards/{id}/prompt` takes `conversation`: the id the prompt belongs to. The owner adds the header.
 - A card on the board carries `conversations`, the summaries of the ones not archived (id, title, updatedAt, messageCount, lastRole, preview, unread, waiting).
+- It also carries `archivedConversationCount`, left out when zero. The archived ones are listed by `GET /v1/cards/{id}/conversations`; the Mac shows them from the card menu (Archived Conversations) and View > Show Archived Conversations, the phone from Archived on the board and the card's menu.

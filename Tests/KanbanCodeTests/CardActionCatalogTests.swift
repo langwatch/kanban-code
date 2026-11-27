@@ -166,4 +166,20 @@ struct CardActionCatalogTests {
         #expect(titles.contains("PR #7: Copy PR Link"))
         #expect(titles.contains("Branch feat/live: Unlink Branch"))
     }
+
+    @Test("Archived Conversations shows its count and opens the card's list, only when some are archived")
+    func archivedConversations() throws {
+        let r = Recorder()
+        #expect(!Self.catalog(Self.card("none"), r).paletteEntries.contains { $0.id == "card-action:archivedConversations" })
+
+        var shown: [String] = []
+        var environment = Self.environment(r)
+        environment.archivedConversationCount = 3
+        environment.showArchivedConversations = { shown.append($0) }
+        let catalog = CardActionCatalog(card: Self.card("laze"), actions: Self.actions(r), environment: environment)
+        let entry = try #require(catalog.paletteEntries.first { $0.id == "card-action:archivedConversations" })
+        #expect(entry.title == "Archived Conversations (3)")
+        entry.run()
+        #expect(shown == ["laze"])
+    }
 }

@@ -1017,6 +1017,7 @@ struct ContentView: View {
                 }
             }
             .modifier(AttentionDetailPresenter(store: store))
+            .modifier(ArchivedConversationsPresenter(store: store))
             .sheet(isPresented: $showProcessManager) {
                 ProcessManagerView(
                     store: store,

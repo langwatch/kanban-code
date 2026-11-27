@@ -549,9 +549,10 @@ struct ConversationChatView: View {
             }
             .buttonStyle(.borderless)
             .font(.app(.caption))
-            Button("Archive") {
-                ConversationActions.update(cardId: card.id, conversationId: conversation.id, .init(archived: true))
-                ConversationActions.open(cardId: card.id, conversationId: nil)
+            Button(conversation.archived ? "Unarchive" : "Archive") {
+                let archive = !conversation.archived
+                ConversationActions.update(cardId: card.id, conversationId: conversation.id, .init(archived: archive))
+                if archive { ConversationActions.open(cardId: card.id, conversationId: nil) }
             }
             .buttonStyle(.borderless)
             .font(.app(.caption))
