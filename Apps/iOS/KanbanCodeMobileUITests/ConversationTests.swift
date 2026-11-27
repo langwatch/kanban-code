@@ -85,6 +85,62 @@ final class ConversationTests: KanbanUITestCase {
         XCTAssertTrue(waitFor(10) { !self.row("swift-otter").exists })
     }
 
+    /// The archived conversation of card_wait: listed from the card's menu
+    /// and from Archived on the board, opened to read, and unarchived back
+    /// under the card.
+    func testArchivedConversationsListOpenAndUnarchive() throws {
+        let card = app.buttons["card-card_wait"]
+        XCTAssertTrue(card.waitForExistence(timeout: 40))
+        XCTAssertFalse(row("still-lark").exists, "an archived conversation is under the card")
+        card.press(forDuration: 1.0)
+        let fromMenu = app.collectionViews.buttons["Archived conversations (1)"].firstMatch
+        XCTAssertTrue(fromMenu.waitForExistence(timeout: 15), "the card menu has no Archived conversations")
+        shot("95-card-menu-archived-conversations")
+        fromMenu.tap()
+        let listed = element("archived-conversation-card_wait-still-lark")
+        XCTAssertTrue(listed.waitForExistence(timeout: 15))
+        shot("96-card-archived-conversations")
+        app.buttons["archivedConversationsDone"].tap()
+        XCTAssertTrue(waitFor(10) { !listed.exists })
+
+        let boardMenu = app.buttons["boardMenu"]
+        XCTAssertTrue(waitFor(10) { boardMenu.exists && boardMenu.isHittable })
+        // Let the sheet finish closing.
+        sleep(1)
+        boardMenu.tap()
+        // The menu item keeps its title, not always its identifier.
+        let showArchived = app.buttons["Archived cards"].firstMatch
+        XCTAssertTrue(showArchived.waitForExistence(timeout: 15))
+        showArchived.tap()
+        let segment = app.segmentedControls["archiveKind"].buttons["Conversations"]
+        XCTAssertTrue(segment.waitForExistence(timeout: 15), "the archive has no Conversations segment")
+        segment.tap()
+        XCTAssertTrue(listed.waitForExistence(timeout: 15))
+        XCTAssertTrue(listed.label.contains("Toolbar icons"))
+        shot("97-archive-conversations")
+
+        listed.tap()
+        XCTAssertTrue(app.navigationBars["Toolbar icons"].waitForExistence(timeout: 10))
+        XCTAssertTrue(message(containing: "SF Symbols, to match the rest of the app").waitForExistence(timeout: 10))
+        app.buttons["conversationMenu"].tap()
+        XCTAssertTrue(app.buttons["conversationUnarchive"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["conversationArchive"].exists)
+        shot("98-archived-conversation-menu")
+        app.buttons["conversationUnarchive"].tap()
+        goBack()
+        // Back on the list, it loads again: the master no longer lists it as archived.
+        XCTAssertTrue(waitFor(15) { !listed.exists }, "the unarchived conversation is still listed")
+        shot("99-archive-after-unarchive")
+        app.buttons["archivedDone"].tap()
+        XCTAssertTrue(row("still-lark").waitForExistence(timeout: 15), "the unarchived conversation is not under the card")
+
+        // Archived again, so the other tests find card_wait as seeded.
+        row("still-lark").press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["conversationArchive"].waitForExistence(timeout: 5))
+        app.buttons["conversationArchive"].tap()
+        XCTAssertTrue(waitFor(10) { !self.row("still-lark").exists })
+    }
+
     /// Holding a conversation row offers Rename; the row and the conversation
     /// take the new title, and the title in the conversation renames too.
     func testRenameAConversationFromItsRow() throws {

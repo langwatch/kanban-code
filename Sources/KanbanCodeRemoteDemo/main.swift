@@ -108,7 +108,9 @@ final class DemoHost: RemoteControlHost {
         /// The card with the summaries of its conversations not archived.
         var listed: RemoteCard {
             var card = card
-            card.conversations = ConversationLog.fold(conversationLog).map(\.summary).filter { !$0.archived }
+            let all = ConversationLog.fold(conversationLog).map(\.summary)
+            card.conversations = all.filter { !$0.archived }
+            card.archivedConversationCount = all.count { $0.archived }
             return card
         }
     }
@@ -241,11 +243,18 @@ final class DemoHost: RemoteControlHost {
         }
     }
 
-    /// Two conversations of card_wait: one waiting on the human and unread,
-    /// one waiting on the agent with no title yet.
+    /// Conversations of card_wait: one waiting on the human and unread, one
+    /// waiting on the agent with no title yet, and an archived one.
     static func seedConversations(now: Date) -> Data {
         let t = now.addingTimeInterval(-3600)
         let events: [ConversationEvent] = [
+            .created("still-lark", at: t.addingTimeInterval(-7200)),
+            .message("still-lark", id: "o1", role: .human, text: "Which icon set should the toolbar use?",
+                     at: t.addingTimeInterval(-7140)),
+            .message("still-lark", id: "o2", role: .agent, text: "SF Symbols, to match the rest of the app.",
+                     at: t.addingTimeInterval(-7080)),
+            .title("still-lark", "Toolbar icons", by: "agent", at: t.addingTimeInterval(-7080)),
+            .archived("still-lark", true, at: t.addingTimeInterval(-7000)),
             .created("calm-heron", at: t),
             .message("calm-heron", id: "q1", role: .human, text: "Can the toggle keep the system setting as a third option?",
                      at: t.addingTimeInterval(60)),

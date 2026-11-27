@@ -182,8 +182,13 @@ struct ConversationScreen: View {
                        systemImage: model.conversation?.unread == true ? "envelope.open" : "envelope.badge",
                        action: toggleRead)
                     .accessibilityIdentifier("conversationToggleRead")
-                Button("Archive", systemImage: "archivebox", role: .destructive) { archive() }
-                    .accessibilityIdentifier("conversationArchive")
+                if model.conversation?.archived == true {
+                    Button("Unarchive", systemImage: "tray.and.arrow.up") { unarchive() }
+                        .accessibilityIdentifier("conversationUnarchive")
+                } else {
+                    Button("Archive", systemImage: "archivebox", role: .destructive) { archive() }
+                        .accessibilityIdentifier("conversationArchive")
+                }
             } label: {
                 Label("Conversation", systemImage: "ellipsis.circle")
             }
@@ -273,6 +278,17 @@ struct ConversationScreen: View {
                 if let onClose { onClose() } else { dismiss() }
             } catch {
                 actionError = "Could not archive the conversation: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func unarchive() {
+        Task {
+            do {
+                try await model.setArchived(false)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                actionError = "Could not unarchive the conversation: \(error.localizedDescription)"
             }
         }
     }

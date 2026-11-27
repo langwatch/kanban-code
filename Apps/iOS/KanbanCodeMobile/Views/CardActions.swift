@@ -17,6 +17,8 @@ enum CardAction {
     case archive
     case unarchive
     case delete
+    /// Lists the card's archived conversations.
+    case showArchivedConversations
 }
 
 /// Runs card actions for the board and the archive: picks a master that
@@ -37,6 +39,8 @@ final class CardActionController {
     var confirmation: Confirmation?
     var renaming: FleetCard?
     var renameText = ""
+    /// The card whose archived conversations are listed.
+    var archivedConversationsOf: FleetCard?
     var error: String?
     /// Called after an action changed or removed a card, with its id.
     @ObservationIgnored var onChange: ((String) -> Void)?
@@ -88,6 +92,8 @@ final class CardActionController {
                 entry: entry, action: action, title: "Delete this card?",
                 message: "The card, its subagents and its conversation file are deleted on every machine. This cannot be undone.",
                 button: "Delete")
+        case .showArchivedConversations:
+            archivedConversationsOf = entry
         case .continueOn(_, let name):
             confirmation = Confirmation(
                 entry: entry, action: action, title: "Continue on \(name)?",
@@ -120,7 +126,7 @@ final class CardActionController {
                 try await client.interrupt(cardId: id)
                 return nil
             }
-        case .rename:
+        case .rename, .showArchivedConversations:
             perform(action, on: entry)
         case .setPinned(let pinned):
             edit(entry, pinned ? "pin the card" : "unpin the card", RemoteCardUpdate(pinned: pinned), shows: .pin(pinned))
@@ -267,6 +273,14 @@ struct CardActionsMenu: View {
                 prButton(2)
             }
         }
+        if card.archivedConversationCount > 0 {
+            Section {
+                Button("Archived conversations (\(card.archivedConversationCount))", systemImage: "archivebox") {
+                    act(.showArchivedConversations)
+                }
+                .accessibilityIdentifier("cardArchivedConversations")
+            }
+        }
         Section {
             Button("Copy Card ID", systemImage: "number") { UIPasteboard.general.string = card.id }
             if let session = card.sessionId {
@@ -335,6 +349,9 @@ private struct CardActionsPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .sheet(item: $controller.archivedConversationsOf) { entry in
+                ArchivedConversationsSheet(fleet: controller.fleet, entry: entry)
+            }
             .alert("Rename card", isPresented: Binding(
                 get: { controller.renaming != nil }, set: { if !$0 { controller.renaming = nil } }
             )) {
@@ -377,6 +394,12 @@ struct ArchivedCardsSheet: View {
     /// The rows while a card is open on top of the list, which must not
     /// change under it (see `BoardScreen.covered`).
     @State private var covered: [FleetCard]?
+    /// Cards, or the conversations archived on the boards' cards.
+    @State private var kind: ArchiveKind = .cards
+
+    enum ArchiveKind: Hashable {
+        case cards, conversations
+    }
 
     /// Archived cards listed, at most.
     static let limit = 200
@@ -403,7 +426,9 @@ struct ArchivedCardsSheet: View {
         NavigationStack(path: $path) {
             let rows = covered ?? self.rows
             Group {
-                if !loaded && !isSearching {
+                if kind == .conversations {
+                    ArchivedConversationsList(fleet: fleet, cardId: nil, filter: search)
+                } else if !loaded && !isSearching {
                     ProgressView("Loading archived cards")
                 } else if rows.isEmpty && !isSearching {
                     ContentUnavailableView("No archived cards", systemImage: "archivebox",
@@ -466,11 +491,20 @@ struct ArchivedCardsSheet: View {
                     .listStyle(.insetGrouped)
                 }
             }
-            .navigationTitle("Archived cards")
+            .navigationTitle(kind == .cards ? "Archived cards" : "Archived conversations")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search archived and older cards")
+                        prompt: kind == .cards ? "Search archived and older cards" : "Search archived conversations")
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("Show", selection: $kind) {
+                        Text("Cards").tag(ArchiveKind.cards)
+                        Text("Conversations").tag(ArchiveKind.conversations)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .accessibilityIdentifier("archiveKind")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("archivedDone")
@@ -483,7 +517,8 @@ struct ArchivedCardsSheet: View {
             .task { await load() }
             .cardActions(controller)
         }
-        .onChange(of: search) { _, text in found.update(text) }
+        .onChange(of: search) { _, text in if kind == .cards { found.update(text) } }
+        .onChange(of: kind) { _, kind in if kind == .cards { found.update(search) } }
         .onChange(of: path.isEmpty) { _, isEmpty in
             covered = isEmpty ? nil : rows
         }

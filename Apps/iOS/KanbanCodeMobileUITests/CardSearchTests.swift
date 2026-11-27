@@ -47,8 +47,10 @@ final class CardSearchTests: KanbanUITestCase {
         XCTAssertTrue(app.buttons["card-card_wait"].waitForExistence(timeout: 40))
         XCTAssertFalse(app.buttons["card-card_older"].exists)
         app.buttons["boardMenu"].tap()
-        XCTAssertTrue(app.buttons["showArchived"].waitForExistence(timeout: 15))
-        app.buttons["showArchived"].tap()
+        // The menu item keeps its title, not always its identifier.
+        let showArchived = app.buttons["Archived cards"].firstMatch
+        XCTAssertTrue(showArchived.waitForExistence(timeout: 15))
+        showArchived.tap()
         let listed = element("archived-card_older")
         XCTAssertTrue(listed.waitForExistence(timeout: 15))
         shot("search-05-archived-list")

@@ -157,8 +157,12 @@ final class ConversationModel {
     }
 
     func archive() async throws {
+        try await setArchived(true)
+    }
+
+    func setArchived(_ archived: Bool) async throws {
         guard let client else { return }
-        apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(archived: true)))
+        apply(try await client.updateConversation(cardId: cardId, id: id, RemoteConversationUpdate(archived: archived)))
     }
 
     /// Shows a message the master took before it lists it, faded. Returns its id.
@@ -193,14 +197,28 @@ final class ConversationModel {
 
     /// The new summary, here and on the card the board shows.
     private func apply(_ updated: RemoteConversation) {
+        let wasArchived = conversation?.archived
         conversation = updated
+        Self.applyArchive(updated, cardId: cardId, board: board, wasArchived: wasArchived)
+    }
+
+    /// The card the board shows after `updated` changed: an archived one
+    /// leaves its open conversations and adds to its archived count, an
+    /// unarchived one comes back. `wasArchived` nil means unknown, read
+    /// from what the card lists.
+    static func applyArchive(_ updated: RemoteConversation, cardId: String, board: BoardModel, wasArchived: Bool? = nil) {
         guard var card = board.card(id: cardId) else { return }
+        let listed = card.conversations.firstIndex { $0.id == updated.id }
+        let before = wasArchived ?? (listed == nil)
         if updated.archived {
             card.conversations.removeAll { $0.id == updated.id }
-        } else if let index = card.conversations.firstIndex(where: { $0.id == updated.id }) {
-            card.conversations[index] = updated
+            if !before { card.archivedConversationCount += 1 }
+        } else if let listed {
+            card.conversations[listed] = updated
         } else {
-            return
+            card.conversations.append(updated)
+            card.conversations.sort { $0.updatedAt > $1.updatedAt }
+            if before { card.archivedConversationCount = max(0, card.archivedConversationCount - 1) }
         }
         board.upsert(card)
     }

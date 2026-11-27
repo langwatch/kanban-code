@@ -120,7 +120,9 @@ final class CardActionsTests: KanbanUITestCase {
 
     private func openArchived() {
         app.buttons["boardMenu"].tap()
-        XCTAssertTrue(app.buttons["showArchived"].waitForExistence(timeout: 15))
-        app.buttons["showArchived"].tap()
+        // The menu item keeps its title, not always its identifier.
+        let showArchived = app.buttons["Archived cards"].firstMatch
+        XCTAssertTrue(showArchived.waitForExistence(timeout: 15))
+        showArchived.tap()
     }
 }
