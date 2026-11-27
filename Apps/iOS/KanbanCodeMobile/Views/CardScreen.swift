@@ -247,11 +247,12 @@ struct CardScreen: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            Text(card?.column.displayName ?? "")
-                .font(.subheadline.weight(.semibold))
-                .opacity(composing ? 0 : 1)
-                .accessibilityHidden(composing)
-                .accessibilityIdentifier("cardColumnTitle")
+            if !composing {
+                Text(card?.column.displayName ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("cardColumnTitle")
+                    .transition(.opacity)
+            }
         }
         if supportsConversations, tab == .chat {
             ToolbarItem(placement: .topBarTrailing) {

@@ -227,7 +227,7 @@ struct BoardScreen: View {
     /// Cmd+[ in a single stack, where no Back button shows.
     @ViewBuilder private var hiddenBackShortcut: some View {
         if horizontalSizeClass != .regular {
-            Button("Back", action: goBack)
+            Button("Previous card", action: goBack)
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!canGoBack)
                 .opacity(0)
