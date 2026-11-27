@@ -84,4 +84,24 @@ struct AttentionBannerTests {
         #expect(state.attentionBanner == nil)
         #expect(dock.value == 0)
     }
+
+    @Test("a request raised again after a restart shows on the banner and the Dock alike")
+    func afterRestart() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("attention-restart-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("attention-deliveries.json").path
+        // Before the restart: delivered and shown on the Mac.
+        let before = AttentionCenter(mac: DockCount(), stateFile: file)
+        await before.deliver(request("vault_a", card: nil, at: 100))
+        // After it: a new state and center; the vault raises it again.
+        let dock = DockCount()
+        let center = AttentionCenter(mac: dock, stateFile: file)
+        var state = AppState()
+        for effect in Reducer.reduce(state: &state, action: .attentionRaised(request("vault_a", card: nil, at: 100))) {
+            if case .deliverAttention(let r) = effect { await center.deliver(r) }
+        }
+        #expect(await center.deliveryState("vault_a")?.macPosted == true)
+        #expect(dock.value == 1)
+        #expect(state.attentionBanner?.target == .request("vault_a"))
+    }
 }
