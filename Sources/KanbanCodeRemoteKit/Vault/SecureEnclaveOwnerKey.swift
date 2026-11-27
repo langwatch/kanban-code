@@ -43,9 +43,10 @@ public struct SecureEnclaveOwnerKey: Sendable {
         /// No key on this device.
         case none
         case ready(Age.P256Recipient)
-        /// A handle is on disk but the enclave no longer opens it: the app
-        /// was reinstalled under another signing identity, or the device
-        /// was restored. `previous` is its public key when it was kept.
+        /// A handle is on disk but the enclave no longer opens it: the
+        /// fingers or faces enrolled changed (the key is bound to the set
+        /// it was made with), or the device was restored. `previous` is its
+        /// public key when it was kept.
         case stale(previous: Age.P256Recipient?)
     }
 

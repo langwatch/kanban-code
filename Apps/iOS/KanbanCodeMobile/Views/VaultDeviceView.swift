@@ -36,7 +36,7 @@ struct VaultDeviceView: View {
                             .foregroundStyle(.green)
                     }
                 } else if isStale {
-                    Label("This phone's vault key stopped working after the app was reinstalled. Make a new one and enrol it again.",
+                    Label("This phone's vault key stopped working, which happens when Face ID changes on the phone. Make a new one and enrol it again.",
                           systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .accessibilityIdentifier("vaultKeyStale")

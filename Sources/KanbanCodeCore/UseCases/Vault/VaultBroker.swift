@@ -1169,8 +1169,8 @@ public actor VaultBroker {
     /// answer approvals. The human compares its fingerprint and approves
     /// on a device that already holds a key.
     /// `replacing` names, by fingerprint, the same device's earlier keys
-    /// that no longer open (a phone whose enclave handle was lost on a
-    /// reinstall): they leave the owner keys in the same approval. Only
+    /// that no longer open (a phone whose Face ID changed, which
+    /// voids its enclave key): they leave the owner keys in the same approval. Only
     /// keys of the same kind can be replaced, never the recovery key.
     public func enrol(_ recipient: VaultOwnerRecipient, replacing: [String] = [], caller: VaultCaller,
                       now: Date = Date()) async -> VaultResponse {

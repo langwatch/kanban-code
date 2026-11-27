@@ -18,7 +18,7 @@ enum PhoneVaultDevice {
         VaultDeviceApprovals(path: directory + "/device-approvals.jsonl")
     }
 
-    static let staleKeyText = "This phone's vault key stopped working after the app was reinstalled. Enrol it again under Machines > Vault key."
+    static let staleKeyText = "This phone's vault key stopped working, which happens when Face ID changes on the phone. Enrol it again under Machines > Vault key."
 
     /// This phone's public key as an owner key, when it has one that opens.
     static func recipient() -> VaultOwnerRecipient? {
