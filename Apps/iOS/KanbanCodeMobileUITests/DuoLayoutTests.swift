@@ -134,7 +134,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
-        assertComposingLayout(keyboardUp: true)
+        assertComposingLayout(keyboardUp: true, railStays: true)
         // Scrolling the board, from its top row: a row under the keyboard
         // would swipe-type into the composer instead.
         let row = app.buttons["card-card_busy"]
@@ -143,7 +143,7 @@ final class DuoLayoutTests: KanbanUITestCase {
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
-        assertComposingLayout(keyboardUp: true)
+        assertComposingLayout(keyboardUp: true, railStays: true)
         scrollChatAboveComposer()
         assertComposingLayout(keyboardUp: false)
 
