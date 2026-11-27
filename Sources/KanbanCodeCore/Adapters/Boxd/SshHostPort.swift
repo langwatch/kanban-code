@@ -4,6 +4,8 @@ import Foundation
 /// It is always on and shared by every card sent to it: the app never
 /// creates, stops or removes it.
 public struct SshMachine: Codable, Sendable, Equatable, Hashable, Identifiable {
+    /// Stable identifier for SwiftUI view identity across edits.
+    public let id: UUID
     /// Name shown in the app and stored on the cards that run there.
     public var name: String
     /// What `ssh` connects to: `user@host`, or a host alias of `~/.ssh/config`.
@@ -14,9 +16,8 @@ public struct SshMachine: Codable, Sendable, Equatable, Hashable, Identifiable {
 
     public static let defaultRepoRoot = "~/Projects"
 
-    public var id: String { name }
-
-    public init(name: String, target: String, repoRoot: String = SshMachine.defaultRepoRoot) {
+    public init(id: UUID = UUID(), name: String, target: String, repoRoot: String = SshMachine.defaultRepoRoot) {
+        self.id = id
         self.name = name
         self.target = target
         self.repoRoot = repoRoot
@@ -24,6 +25,7 @@ public struct SshMachine: Codable, Sendable, Equatable, Hashable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = UUID()
         name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
         target = (try? c.decodeIfPresent(String.self, forKey: .target)) ?? ""
         repoRoot = (try? c.decodeIfPresent(String.self, forKey: .repoRoot)) ?? Self.defaultRepoRoot
@@ -31,6 +33,18 @@ public struct SshMachine: Codable, Sendable, Equatable, Hashable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case name, target, repoRoot
+    }
+
+    // `id` is runtime SwiftUI identity only; value equality, hashing, and
+    // persisted JSON depend strictly on the machine's configuration fields.
+    public static func == (lhs: SshMachine, rhs: SshMachine) -> Bool {
+        lhs.name == rhs.name && lhs.target == rhs.target && lhs.repoRoot == rhs.repoRoot
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(target)
+        hasher.combine(repoRoot)
     }
 
     /// Folder template of the checkouts, in the syntax of `BoxdSettings`.
