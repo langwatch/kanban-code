@@ -376,10 +376,19 @@ public struct RemoteClient: Sendable {
     /// Asks the master to add this device's key to the owner keys. The
     /// human approves it on a device that already holds one.
     /// `replaces` names this device's earlier keys that no longer open.
-    public func vaultEnrol(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String, replaces: [String] = []) async throws {
-        try await sendEmpty(makeRequest("POST", "v1/vault/owner/enrol",
-                                        body: VaultEnrolRequest(name: name, kind: kind, publicKey: publicKey,
-                                                                replaces: replaces.isEmpty ? nil : replaces)))
+    /// The answer says what happened: `granted` when the key is already
+    /// an owner key, `pending` while the human is asked, `denied` otherwise.
+    @discardableResult
+    public func vaultEnrol(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String,
+                           replaces: [String] = []) async throws -> RemoteVaultResponse {
+        try await vaultAnswer(makeRequest("POST", "v1/vault/owner/enrol",
+                                          body: VaultEnrolRequest(name: name, kind: kind, publicKey: publicKey,
+                                                                  replaces: replaces.isEmpty ? nil : replaces)))
+    }
+
+    /// GET /v1/machines: this master and the ones it knows.
+    public func machines() async throws -> RemoteMachineList {
+        try await send(makeRequest("GET", "v1/machines"))
     }
 
     /// Reports where the Mac user is, so a master without a screen knows

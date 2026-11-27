@@ -7,6 +7,7 @@ struct VaultDeviceView: View {
     let fleet: FleetModel
     @State private var recipient: VaultOwnerRecipient?
     @State private var isStale = false
+    @State private var confirmReplace = false
     @State private var owners: [UUID: VaultOwnerStatus] = [:]
     @State private var entries: [VaultDeviceApprovals.Entry] = []
     @State private var chainIntact = true
@@ -50,6 +51,19 @@ struct VaultDeviceView: View {
                     }
                     .disabled(busy || fleet.onlineMasters.isEmpty || !SecureEnclaveOwnerKey.isAvailable)
                     .accessibilityIdentifier("vaultEnrol")
+                }
+                if recipient != nil {
+                    Button("Replace this phone's key", role: .destructive) { confirmReplace = true }
+                        .disabled(busy || fleet.onlineMasters.isEmpty || !SecureEnclaveOwnerKey.isAvailable)
+                        .accessibilityIdentifier("vaultReplaceKey")
+                        .confirmationDialog("Replace this phone's key?", isPresented: $confirmReplace, titleVisibility: .visible) {
+                            Button("Make a new key and enrol it", role: .destructive) {
+                                PhoneVaultDevice.key.markStale()
+                                Task { await enrol() }
+                            }
+                        } message: {
+                            Text("For a key that fails every approval. The Mac asks you to approve the new key, and the old one is removed in the same approval.")
+                        }
                 }
                 if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 if let problem { Label(problem, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red) }

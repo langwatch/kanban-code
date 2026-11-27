@@ -32,7 +32,9 @@ enum PhoneVaultDevice {
 
     /// Makes a key when the phone has none or its old one stopped opening,
     /// then asks a master to enrol it, dropping the dead key in the same
-    /// approval when it can tell which one that is.
+    /// approval when it can tell which one that is. The ask goes to a
+    /// master with a screen (the Mac), where the owner approves with a key
+    /// that works; an always-on box only when no other master answers.
     @MainActor
     static func enrol(fleet: FleetModel) async -> EnrolOutcome {
         let before = key.state
@@ -42,7 +44,7 @@ enum PhoneVaultDevice {
             return EnrolOutcome(problem: "Could not make the key: \(describe(error))")
         }
         guard let mine = recipient() else { return EnrolOutcome(problem: "Could not make the key.") }
-        guard let master = fleet.primary.flatMap({ $0.isOnline ? $0 : nil }) ?? fleet.onlineMasters.first, let client = master.client else {
+        guard let (master, client) = await enrolTarget(fleet) else {
             return EnrolOutcome(problem: "No machine is reachable.")
         }
         var replaces: [String] = []
@@ -50,13 +52,36 @@ enum PhoneVaultDevice {
             replaces = status.keysToReplace(previous: previous.map { VaultOwnerRecipient.fingerprint(of: $0.text) },
                                             name: mine.name, kind: .phone, new: mine.fingerprint)
         }
+        let answer: RemoteVaultResponse
         do {
-            try await client.vaultEnrol(name: mine.name, kind: .phone, publicKey: mine.publicKey, replaces: replaces)
+            answer = try await client.vaultEnrol(name: mine.name, kind: .phone, publicKey: mine.publicKey, replaces: replaces)
         } catch {
-            return EnrolOutcome(problem: error.localizedDescription)
+            return EnrolOutcome(problem: "\(master.machineName) did not take it: \(error.localizedDescription)")
         }
-        let dropping = replaces.isEmpty ? "" : " It also removes this phone's old key (\(replaces.joined(separator: ", ")))."
-        return EnrolOutcome(message: "Asked \(master.machineName). Approve it on the Mac with Touch ID; it shows the fingerprint above.\(dropping)")
+        switch answer.status {
+        case "granted":
+            return EnrolOutcome(message: "Already enrolled on \(master.machineName): \(answer.message)")
+        case "pending":
+            let dropping = replaces.isEmpty ? "" : " It also removes this phone's old key (\(replaces.joined(separator: ", ")))."
+            return EnrolOutcome(message: "Asked \(master.machineName). Approve it there with Touch ID; it shows the fingerprint above.\(dropping)")
+        default:
+            return EnrolOutcome(problem: "\(master.machineName) refused: \(answer.message)")
+        }
+    }
+
+    /// The master to ask: one that is not always on (a Mac, with a screen
+    /// and a Touch ID owner key), else the primary, else any online one.
+    @MainActor
+    private static func enrolTarget(_ fleet: FleetModel) async -> (BoardModel, RemoteClient)? {
+        let online = fleet.onlineMasters.compactMap { m in m.client.map { (m, $0) } }
+        for (master, client) in online {
+            if let list = try? await client.machines(),
+               let this = list.machines.first(where: { $0.kind == .this }), this.alwaysOn != true {
+                return (master, client)
+            }
+        }
+        if let primary = fleet.primary, primary.isOnline, let client = primary.client { return (primary, client) }
+        return online.first
     }
 
     /// Why an approval could not be unlocked here.

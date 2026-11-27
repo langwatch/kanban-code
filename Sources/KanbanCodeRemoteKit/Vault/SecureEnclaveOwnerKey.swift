@@ -39,6 +39,10 @@ public struct SecureEnclaveOwnerKey: Sendable {
     /// handle stops opening can still be named on the masters.
     public var publicKeyPath: String { path + ".pub" }
 
+    /// Set when the enclave refused the key at use: its handle still opens
+    /// and gives the public half, but every unlock fails.
+    public var staleMarkerPath: String { path + ".stale" }
+
     public enum State: Equatable, Sendable {
         /// No key on this device.
         case none
@@ -57,7 +61,18 @@ public struct SecureEnclaveOwnerKey: Sendable {
               let recipient = try? Age.P256Recipient(compressed: key.publicKey.compressedRepresentation) else {
             return .stale(previous: previousRecipient())
         }
+        if FileManager.default.fileExists(atPath: staleMarkerPath) { return .stale(previous: recipient) }
         return .ready(recipient)
+    }
+
+    /// Records that the enclave refused this key at use (`isStaleHandle`):
+    /// from now on it counts as stale, and `create()` replaces it. The
+    /// public half is kept so the masters can drop the dead key.
+    public func markStale() {
+        if case .ready(let recipient) = state, previousRecipient() == nil {
+            FileManager.default.createFile(atPath: publicKeyPath, contents: Data(recipient.text.utf8), attributes: [.posixPermissions: 0o600])
+        }
+        FileManager.default.createFile(atPath: staleMarkerPath, contents: Data(), attributes: [.posixPermissions: 0o600])
     }
 
     /// A key that opens: false for no key and for a stale one.
@@ -94,7 +109,9 @@ public struct SecureEnclaveOwnerKey: Sendable {
     public func create() throws -> Age.P256Recipient {
         switch state {
         case .ready(let existing): return existing
-        case .stale: try? FileManager.default.removeItem(atPath: path)
+        case .stale:
+            try? FileManager.default.removeItem(atPath: path)
+            try? FileManager.default.removeItem(atPath: staleMarkerPath)
         case .none: break
         }
         guard SecureEnclave.isAvailable else { throw KeyError.unavailable }

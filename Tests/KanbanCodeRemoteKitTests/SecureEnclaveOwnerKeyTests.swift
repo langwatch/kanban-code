@@ -38,6 +38,28 @@ struct SecureEnclaveOwnerKeyTests {
         #expect(key.state == .stale(previous: previous))
     }
 
+    /// The enclave refused the key at use while its handle still opens:
+    /// once marked, it is stale, names its own public half for the masters
+    /// to drop, and `create()` replaces it.
+    @Test(.enabled(if: SecureEnclave.isAvailable))
+    func aKeyRefusedAtUseIsStaleOnceMarkedAndReplacedByCreate() throws {
+        let key = try tempKey()
+        let enclave = try SecureEnclave.P256.KeyAgreement.PrivateKey()
+        FileManager.default.createFile(atPath: key.path, contents: enclave.dataRepresentation)
+        let old = try Age.P256Recipient(compressed: enclave.publicKey.compressedRepresentation)
+        #expect(key.state == .ready(old))
+
+        key.markStale()
+        #expect(key.state == .stale(previous: old))
+        #expect(!key.exists)
+        #expect(key.recipient() == nil)
+
+        let fresh = try key.create()
+        #expect(fresh != old)
+        #expect(key.state == .ready(fresh))
+        #expect(!FileManager.default.fileExists(atPath: key.staleMarkerPath))
+    }
+
     @Test func enclaveErrorsThatNeverHealAreStaleAndFaceIDErrorsAreNot() {
         #expect(SecureEnclaveOwnerKey.isStaleHandle(NSError(domain: TKErrorDomain, code: TKError.Code.corruptedData.rawValue)))
         #expect(SecureEnclaveOwnerKey.isStaleHandle(NSError(domain: TKErrorDomain, code: TKError.Code.objectNotFound.rawValue)))

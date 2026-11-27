@@ -192,6 +192,7 @@ final class FleetModel {
             if PhoneVaultDevice.isCancel(error) {
                 answers.cancelled(id)
             } else if SecureEnclaveOwnerKey.isStaleHandle(error) {
+                PhoneVaultDevice.key.markStale()
                 answers.failed(id, error: PhoneVaultDevice.Problem(text: PhoneVaultDevice.staleKeyText))
             } else {
                 answers.failed(id, error: PhoneVaultDevice.Problem(text: "Not unlocked: \(text)"))
