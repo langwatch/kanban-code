@@ -1350,6 +1350,7 @@ public actor VaultBroker {
                                                    detail: [change, unsealed.map { "encrypted again by key \($0.device)" }]
                                                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "; "),
                                                    requestId: requestId))
+                await reissueChallenges(except: requestId, now: now)
                 return VaultResponse(status: .granted, message: "owner keys: \(recipients.map(\.name).joined(separator: ", ")); \(counts.sealed) secrets sealed", id: requestId)
             case .release, .lease:
                 return .denied("not an admin action")
@@ -1357,6 +1358,26 @@ public actor VaultBroker {
         } catch {
             return .denied("\(error)")
         }
+    }
+
+    /// The owner keys changed and the sealed values with them: every open
+    /// request gets its challenge again, sealed to the new keys, so a device
+    /// added since it was raised can answer it.
+    private func reissueChallenges(except settled: String?, now: Date) async {
+        guard let approvals else { return }
+        let open = pending.filter { $0.key != settled && $0.value.result == nil && $0.value.joinedTo == nil }
+        for (id, p) in open {
+            var secrets: [VaultSecret] = []
+            for name in p.request.vault?.secrets.map(\.name) ?? [] {
+                if let s = (try? await store.secret(name)) ?? nil { secrets.append(s) }
+            }
+            let fresh = await challenge(for: p.action, secrets: secrets, caller: p.caller, now: now)
+            let unseal = fresh.isEmpty ? nil : fresh
+            guard unseal != p.request.unseal else { continue }
+            pending[id]?.request.unseal = unseal
+            if let request = pending[id]?.request { await approvals.raise(request) }
+        }
+        await persist()
     }
 
     // MARK: - Asking the human
@@ -1654,8 +1675,12 @@ public actor VaultBroker {
         let joined = pending.filter { $0.value.joinedTo == id && $0.value.result == nil }.map(\.key).sorted()
         for member in [id] + joined {
             guard let m = pending[member], m.result == nil else { continue }
-            pending[member]?.result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed,
-                                                    leaseSeconds: leaseSeconds, note: note)
+            // Into a local first: the outcome may read `pending` (an owner
+            // change seals the open requests again), so no access to it
+            // may be held across the await.
+            let result = await outcome(of: m, id: member, approval: approval, by: by, now: now, unsealed: unsealed,
+                                       leaseSeconds: leaseSeconds, note: note)
+            pending[member]?.result = result
             expireResult(member, after: unclaimedResultLifetime)
         }
         await persist()

@@ -191,6 +191,8 @@ final class FleetModel {
             PhoneVaultDevice.approvals.record(item.request, resolution: resolution, error: text)
             if PhoneVaultDevice.isCancel(error) {
                 answers.cancelled(id)
+            } else if (error as? Age.AgeError) == .noMatchingIdentity {
+                answers.failed(id, error: PhoneVaultDevice.Problem(text: PhoneVaultDevice.madeBeforeKeyText))
             } else if SecureEnclaveOwnerKey.isStaleHandle(error) {
                 PhoneVaultDevice.key.markStale()
                 answers.failed(id, error: PhoneVaultDevice.Problem(text: PhoneVaultDevice.staleKeyText))

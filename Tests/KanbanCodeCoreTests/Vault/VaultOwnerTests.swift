@@ -399,6 +399,27 @@ struct VaultOwnerTests {
         #expect(throws: Age.AgeError.noMatchingIdentity) { try VaultOwnerSeal.open(try #require(s.sealed), with: dead) }
     }
 
+    @Test func anOpenRequestCanBeAnsweredByAPhoneEnrolledAfterItWasRaised() async throws {
+        let w = try await makeWorld()
+        let asked = await w.broker.release(VaultReleaseRequest(mode: "run", names: ["ASK"]), caller: card)
+        let id = try #require(asked.id)
+        let phone = SoftwareOwnerKey()
+        let before = try #require(w.approvals.raised.last { $0.id == id }?.unseal)
+        await #expect(throws: Age.AgeError.noMatchingIdentity) { _ = try await VaultUnsealer.answer(before, key: phone) }
+
+        let enrol = await w.broker.enrol(phone.owner("iPhone", .phone), caller: VaultCaller(remoteDevice: "iPhone"))
+        #expect(try await w.approve(enrol).status == .granted)
+
+        // Raised again with the challenge sealed to the new keys.
+        let after = try #require(w.approvals.raised.last { $0.id == id }?.unseal)
+        let unsealed = try await VaultUnsealer.answer(after, key: phone)
+        await w.broker.deliver(id: id, unsealed: unsealed)
+        w.approvals.answer(id, "Approve once")
+        let done = await w.wait(id)
+        #expect(done.status == .granted)
+        #expect(done.values?["ASK"] == "ask-value")
+    }
+
     @Test func anEnrolNobodyPollsStaysOpenForTheMac() async throws {
         let w = try await makeWorld()
         await w.broker.configure(approvalTimeout: 60, abandonAfter: 0.1)

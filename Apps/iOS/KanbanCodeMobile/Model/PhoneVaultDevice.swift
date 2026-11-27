@@ -18,6 +18,8 @@ enum PhoneVaultDevice {
         VaultDeviceApprovals(path: directory + "/device-approvals.jsonl")
     }
 
+    static let madeBeforeKeyText = "This request was made before this phone's key was added. Approve it on your Mac."
+
     static let staleKeyText = "This phone's vault key stopped working, which happens when Face ID changes on the phone. Enrol it again under Machines > Vault key."
 
     /// This phone's public key as an owner key, when it has one that opens.

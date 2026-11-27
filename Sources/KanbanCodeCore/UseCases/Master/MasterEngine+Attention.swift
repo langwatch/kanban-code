@@ -467,7 +467,10 @@ extension MasterEngine {
         }
         for var request in remote where request.isOpen {
             request.machineId = request.machineId ?? machineId
-            if store.state.attentionRequests[request.id] == nil {
+            let mirrored = store.state.attentionRequests[request.id]
+            // New here, or changed there (a challenge sealed again to new
+            // owner keys): the copy here follows.
+            if mirrored == nil || (mirrored?.isOpen == true && mirrored != request) {
                 store.dispatch(.attentionRaised(request))
             }
         }
