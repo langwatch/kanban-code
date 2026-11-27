@@ -4,7 +4,7 @@ import Foundation
 /// browser: opening a new one records the one left and clears forward;
 /// back and forward skip the ones no longer there. The Mac's card history
 /// (Cmd+[ and Cmd+]) works the same way.
-public struct NavigationHistory<Target: Equatable & Sendable>: Sendable {
+public struct NavigationHistory<Target: Equatable> {
     public private(set) var backStack: [Target] = []
     public private(set) var forwardStack: [Target] = []
     public let limit: Int
@@ -51,3 +51,5 @@ public struct NavigationHistory<Target: Equatable & Sendable>: Sendable {
         return nil
     }
 }
+
+extension NavigationHistory: Sendable where Target: Sendable {}
