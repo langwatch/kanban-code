@@ -479,10 +479,29 @@ public struct VaultEnrolRequest: Codable, Sendable {
     public var name: String
     public var kind: VaultOwnerRecipient.Kind
     public var publicKey: String
+    /// Fingerprints of this device's earlier keys that no longer open, to
+    /// drop in the same approval.
+    public var replaces: [String]?
 
-    public init(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String) {
+    public init(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String, replaces: [String]? = nil) {
         self.name = name
         self.kind = kind
         self.publicKey = publicKey
+        self.replaces = replaces
+    }
+}
+
+extension VaultOwnerStatus {
+    /// The owner keys a device's new key takes the place of, when its old
+    /// handle no longer opens: the old key itself when the device kept its
+    /// public half, else the one key of that kind under the device's name.
+    /// With two or more such keys none is picked: the owner removes the
+    /// dead one on the Mac.
+    public func keysToReplace(previous: String?, name: String, kind: VaultOwnerRecipient.Kind, new: String) -> [String] {
+        if let previous {
+            return keys.contains { $0.fingerprint == previous } && previous != new ? [previous] : []
+        }
+        let same = keys.filter { $0.kind == kind.rawValue && $0.name == name && $0.fingerprint != new }
+        return same.count == 1 ? [same[0].fingerprint] : []
     }
 }

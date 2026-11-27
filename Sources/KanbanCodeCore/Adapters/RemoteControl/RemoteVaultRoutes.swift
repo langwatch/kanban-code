@@ -221,7 +221,8 @@ enum RemoteVaultRoutes {
                 return .error(400, "body must be {\"name\", \"kind\": \"mac\"|\"phone\", \"publicKey\": \"age1se1...\"}")
             }
             let who = await caller(claimedCard: query["card"], sessionId: nil)
-            let r = await vault.broker.enrol(VaultOwnerRecipient(name: req.name, kind: req.kind, publicKey: req.publicKey), caller: who)
+            let r = await vault.broker.enrol(VaultOwnerRecipient(name: req.name, kind: req.kind, publicKey: req.publicKey),
+                                            replacing: req.replaces ?? [], caller: who)
             await vault.replica?.poke()
             return respond(r)
 

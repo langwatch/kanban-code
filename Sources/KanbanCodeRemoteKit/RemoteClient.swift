@@ -375,9 +375,11 @@ public struct RemoteClient: Sendable {
 
     /// Asks the master to add this device's key to the owner keys. The
     /// human approves it on a device that already holds one.
-    public func vaultEnrol(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String) async throws {
+    /// `replaces` names this device's earlier keys that no longer open.
+    public func vaultEnrol(name: String, kind: VaultOwnerRecipient.Kind, publicKey: String, replaces: [String] = []) async throws {
         try await sendEmpty(makeRequest("POST", "v1/vault/owner/enrol",
-                                        body: VaultEnrolRequest(name: name, kind: kind, publicKey: publicKey)))
+                                        body: VaultEnrolRequest(name: name, kind: kind, publicKey: publicKey,
+                                                                replaces: replaces.isEmpty ? nil : replaces)))
     }
 
     /// Reports where the Mac user is, so a master without a screen knows

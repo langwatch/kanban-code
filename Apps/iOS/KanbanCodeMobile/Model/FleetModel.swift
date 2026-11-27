@@ -170,7 +170,11 @@ final class FleetModel {
         let unsealed: VaultUnsealed?
         do {
             let passed = try await AttentionAnswerGate.pass(item.request, option: resolution, unlock: { challenge in
-                guard PhoneVaultDevice.key.exists else { throw NoVaultKey() }
+                switch PhoneVaultDevice.key.state {
+                case .none: throw NoVaultKey()
+                case .stale: throw SecureEnclaveOwnerKey.KeyError.stale
+                case .ready: break
+                }
                 return try await PhoneVaultDevice.key.answer(challenge, reason: "\(resolution): \(item.request.title)")
             }, confirm: confirm)
             guard case .send(let opened) = passed else {
@@ -187,6 +191,8 @@ final class FleetModel {
             PhoneVaultDevice.approvals.record(item.request, resolution: resolution, error: text)
             if PhoneVaultDevice.isCancel(error) {
                 answers.cancelled(id)
+            } else if SecureEnclaveOwnerKey.isStaleHandle(error) {
+                answers.failed(id, error: PhoneVaultDevice.Problem(text: PhoneVaultDevice.staleKeyText))
             } else {
                 answers.failed(id, error: PhoneVaultDevice.Problem(text: "Not unlocked: \(text)"))
             }

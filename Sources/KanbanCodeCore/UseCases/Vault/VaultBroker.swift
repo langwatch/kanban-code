@@ -1168,13 +1168,22 @@ public actor VaultBroker {
     /// One more key for the owner-only secrets: a device that wants to
     /// answer approvals. The human compares its fingerprint and approves
     /// on a device that already holds a key.
-    public func enrol(_ recipient: VaultOwnerRecipient, caller: VaultCaller, now: Date = Date()) async -> VaultResponse {
+    /// `replacing` names, by fingerprint, the same device's earlier keys
+    /// that no longer open (a phone whose enclave handle was lost on a
+    /// reinstall): they leave the owner keys in the same approval. Only
+    /// keys of the same kind can be replaced, never the recovery key.
+    public func enrol(_ recipient: VaultOwnerRecipient, replacing: [String] = [], caller: VaultCaller,
+                      now: Date = Date()) async -> VaultResponse {
         let current = ((try? await store.owner()) ?? nil)?.recipients ?? []
-        if current.contains(where: { $0.publicKey == recipient.publicKey }) {
+        let dropped = current.filter { $0.kind == recipient.kind && $0.publicKey != recipient.publicKey && replacing.contains($0.fingerprint) }
+        if current.contains(where: { $0.publicKey == recipient.publicKey }) && dropped.isEmpty {
             return VaultResponse(status: .granted, message: "\(recipient.name) already holds an owner key (\(recipient.fingerprint))")
         }
-        return await setOwnerKeys(current + [recipient], caller: caller, trusted: false,
-                                  reason: "Let \(recipient.name) unlock the owner-only secrets", now: now)
+        let kept = current.filter { r in !dropped.contains(r) && r.publicKey != recipient.publicKey }
+        let reason = dropped.isEmpty
+            ? "Let \(recipient.name) unlock the owner-only secrets"
+            : "Let \(recipient.name) unlock the owner-only secrets with a new key, in place of its old one (\(dropped.map(\.fingerprint).joined(separator: ", ")))"
+        return await setOwnerKeys(kept + [recipient], caller: caller, trusted: false, reason: reason, now: now)
     }
 
     /// The same change to several secrets, in one approval: the names given

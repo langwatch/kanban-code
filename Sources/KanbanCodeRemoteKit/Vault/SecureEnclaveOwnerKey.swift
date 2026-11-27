@@ -1,5 +1,6 @@
 #if canImport(CryptoKit) && canImport(LocalAuthentication)
 import CryptoKit
+import CryptoTokenKit
 import Foundation
 import LocalAuthentication
 
@@ -18,12 +19,15 @@ public struct SecureEnclaveOwnerKey: Sendable {
     public enum KeyError: Error, CustomStringConvertible {
         case unavailable
         case notEnrolled
+        /// The handle on disk no longer opens in the enclave.
+        case stale
         case accessControl(String)
 
         public var description: String {
             switch self {
             case .unavailable: "this device has no Secure Enclave"
             case .notEnrolled: "this device has no vault key yet"
+            case .stale: "this device's vault key no longer opens"
             case .accessControl(let why): "could not set the key's access control: \(why)"
             }
         }
@@ -31,19 +35,67 @@ public struct SecureEnclaveOwnerKey: Sendable {
 
     public static var isAvailable: Bool { SecureEnclave.isAvailable }
 
-    public var exists: Bool { FileManager.default.fileExists(atPath: path) }
+    /// Where the public half is kept next to the handle, so a key whose
+    /// handle stops opening can still be named on the masters.
+    public var publicKeyPath: String { path + ".pub" }
 
-    /// The public half, when this device has a key. Needs no biometry.
-    public func recipient() -> Age.P256Recipient? {
-        guard let handle = FileManager.default.contents(atPath: path),
-              let key = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: handle) else { return nil }
-        return try? Age.P256Recipient(compressed: key.publicKey.compressedRepresentation)
+    public enum State: Equatable, Sendable {
+        /// No key on this device.
+        case none
+        case ready(Age.P256Recipient)
+        /// A handle is on disk but the enclave no longer opens it: the app
+        /// was reinstalled under another signing identity, or the device
+        /// was restored. `previous` is its public key when it was kept.
+        case stale(previous: Age.P256Recipient?)
     }
 
-    /// Makes the key when the device has none. Needs no biometry.
+    /// Needs no biometry.
+    public var state: State {
+        guard let handle = FileManager.default.contents(atPath: path) else { return .none }
+        guard let key = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: handle),
+              let recipient = try? Age.P256Recipient(compressed: key.publicKey.compressedRepresentation) else {
+            return .stale(previous: previousRecipient())
+        }
+        return .ready(recipient)
+    }
+
+    /// A key that opens: false for no key and for a stale one.
+    public var exists: Bool {
+        if case .ready = state { return true }
+        return false
+    }
+
+    /// The public half, when this device has a key that opens. Needs no biometry.
+    public func recipient() -> Age.P256Recipient? {
+        if case .ready(let recipient) = state { return recipient }
+        return nil
+    }
+
+    func previousRecipient() -> Age.P256Recipient? {
+        guard let data = FileManager.default.contents(atPath: publicKeyPath),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return try? Age.P256Recipient(text: text)
+    }
+
+    /// Errors from opening the handle that mean it will never open again,
+    /// as opposed to a cancelled or failed Face ID.
+    public static func isStaleHandle(_ error: Error) -> Bool {
+        if let key = error as? KeyError, case .stale = key { return true }
+        let ns = error as NSError
+        guard ns.domain == TKErrorDomain else { return false }
+        return [TKError.Code.corruptedData.rawValue, TKError.Code.objectNotFound.rawValue,
+                TKError.Code.tokenNotFound.rawValue].contains(ns.code)
+    }
+
+    /// Makes the key when the device has none, and a new one in place of
+    /// a stale one. Needs no biometry.
     @discardableResult
     public func create() throws -> Age.P256Recipient {
-        if let existing = recipient() { return existing }
+        switch state {
+        case .ready(let existing): return existing
+        case .stale: try? FileManager.default.removeItem(atPath: path)
+        case .none: break
+        }
         guard SecureEnclave.isAvailable else { throw KeyError.unavailable }
         var error: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
@@ -57,7 +109,9 @@ public struct SecureEnclaveOwnerKey: Sendable {
         guard FileManager.default.createFile(atPath: path, contents: key.dataRepresentation, attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }
-        return try Age.P256Recipient(compressed: key.publicKey.compressedRepresentation)
+        let recipient = try Age.P256Recipient(compressed: key.publicKey.compressedRepresentation)
+        FileManager.default.createFile(atPath: publicKeyPath, contents: Data(recipient.text.utf8), attributes: [.posixPermissions: 0o600])
+        return recipient
     }
 
     /// The key for one approval: the first use shows the biometry prompt
@@ -66,7 +120,12 @@ public struct SecureEnclaveOwnerKey: Sendable {
         guard let handle = FileManager.default.contents(atPath: path) else { throw KeyError.notEnrolled }
         let context = LAContext()
         context.localizedReason = reason
-        let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: handle, authenticationContext: context)
+        let key: SecureEnclave.P256.KeyAgreement.PrivateKey
+        do {
+            key = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: handle, authenticationContext: context)
+        } catch where Self.isStaleHandle(error) {
+            throw KeyError.stale
+        }
         return Unlocked(key: key, recipient: try Age.P256Recipient(compressed: key.publicKey.compressedRepresentation))
     }
 

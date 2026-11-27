@@ -371,6 +371,49 @@ struct VaultOwnerTests {
         #expect(throws: Age.AgeError.noMatchingIdentity) { try VaultOwnerSeal.open(try #require(after.sealed), with: phone) }
     }
 
+    @Test func aReEnrolledPhoneDropsItsDeadKeyInTheSameApproval() async throws {
+        let w = try await makeWorld()
+        let dead = SoftwareOwnerKey()
+        let first = await w.broker.enrol(dead.owner("iPhone", .phone), caller: VaultCaller(remoteDevice: "iPhone"))
+        #expect(try await w.approve(first).status == .granted)
+        #expect(try await w.store.owner()?.devices.count == 2)
+
+        // The handle stopped opening: a new key takes the old one's place.
+        let fresh = SoftwareOwnerKey()
+        let deadPrint = dead.owner("iPhone", .phone).fingerprint
+        let macPrint = try #require(try await w.store.owner()?.devices.first { $0.kind == .mac }).fingerprint
+        let asked = await w.broker.enrol(fresh.owner("iPhone", .phone), replacing: [deadPrint, macPrint],
+                                         caller: VaultCaller(remoteDevice: "iPhone"))
+        #expect(asked.status == .pending)
+        let request = try #require(w.approvals.last)
+        #expect(request.unseal?.resealTo.map(\.name) == ["Mac", "Recovery key", "iPhone"])
+        #expect(try await w.approve(asked).status == .granted)
+
+        let owner = try #require(try await w.store.owner())
+        // The Mac key is of another kind and stays; only the dead phone key goes.
+        #expect(owner.recipients.map(\.fingerprint).contains(macPrint))
+        #expect(!owner.recipients.map(\.fingerprint).contains(deadPrint))
+        #expect(owner.devices.count == 2)
+        let s = try #require(try await w.store.secret("ASK"))
+        #expect(try VaultOwnerSeal.open(try #require(s.sealed), with: fresh).value == "ask-value")
+        #expect(throws: Age.AgeError.noMatchingIdentity) { try VaultOwnerSeal.open(try #require(s.sealed), with: dead) }
+    }
+
+    @Test func theKeyToReplaceIsTheKeptOneOrTheOnlyOneUnderTheName() {
+        let at = Date()
+        let status = VaultOwnerStatus(active: true, keys: [
+            .init(name: "Mac", kind: "mac", fingerprint: "m", addedAt: at),
+            .init(name: "iPhone", kind: "phone", fingerprint: "old", addedAt: at),
+        ], sealed: 0, plain: 0)
+        #expect(status.keysToReplace(previous: "old", name: "x", kind: .phone, new: "new") == ["old"])
+        #expect(status.keysToReplace(previous: "gone", name: "iPhone", kind: .phone, new: "new") == [])
+        #expect(status.keysToReplace(previous: nil, name: "iPhone", kind: .phone, new: "new") == ["old"])
+        #expect(status.keysToReplace(previous: nil, name: "Mac", kind: .phone, new: "new") == [])
+        var two = status
+        two.keys.append(.init(name: "iPhone", kind: "phone", fingerprint: "other", addedAt: at))
+        #expect(two.keysToReplace(previous: nil, name: "iPhone", kind: .phone, new: "new") == [])
+    }
+
     @Test func changingTheOwnerKeysWithoutEncryptingAgainIsRefused() async throws {
         let w = try await makeWorld()
         let intruder = SoftwareOwnerKey()

@@ -56,7 +56,7 @@ struct AttentionListView: View {
                                         answer: { answer(item, $0) }, openCard: { cardId in
                         dismiss()
                         openCard(cardId)
-                    })
+                    }, fleet: fleet)
                 } else {
                     ContentUnavailableView("Already answered", systemImage: "checkmark.circle")
                 }
@@ -102,6 +102,7 @@ struct AttentionListView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("attention-\(request.id)-error")
+                    if error == PhoneVaultDevice.staleKeyText { VaultReenrolButton(fleet: fleet) }
                 }
             }
             .padding(.vertical, 4)
@@ -225,6 +226,8 @@ struct AttentionDetailView: View {
     let error: String?
     let answer: (String) -> Void
     let openCard: (String) -> Void
+    /// Offers the re-enrol action when the phone's vault key went stale.
+    var fleet: FleetModel? = nil
 
     var body: some View {
         let request = item.request
@@ -252,6 +255,7 @@ struct AttentionDetailView: View {
                     Label("Not sent: \(error)", systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.red)
+                    if error == PhoneVaultDevice.staleKeyText, let fleet { VaultReenrolButton(fleet: fleet) }
                 }
                 ForEach(Array(request.options.enumerated()), id: \.offset) { index, option in
                     Button {

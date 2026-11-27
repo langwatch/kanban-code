@@ -6,6 +6,7 @@ import KanbanCodeRemoteKit
 struct VaultDeviceView: View {
     let fleet: FleetModel
     @State private var recipient: VaultOwnerRecipient?
+    @State private var isStale = false
     @State private var owners: [UUID: VaultOwnerStatus] = [:]
     @State private var entries: [VaultDeviceApprovals.Entry] = []
     @State private var chainIntact = true
@@ -34,11 +35,17 @@ struct VaultDeviceView: View {
                         Label("Enrolled on \(enrolledOn.joined(separator: ", "))", systemImage: "checkmark.seal")
                             .foregroundStyle(.green)
                     }
+                } else if isStale {
+                    Label("This phone's vault key stopped working after the app was reinstalled. Make a new one and enrol it again.",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("vaultKeyStale")
                 } else {
                     Text("This phone has no vault key.").foregroundStyle(.secondary)
                 }
                 if enrolledOn.isEmpty {
-                    Button(recipient == nil ? "Create key and enrol this phone" : "Enrol this phone") {
+                    Button(isStale ? "Make a new key and enrol this phone"
+                           : recipient == nil ? "Create key and enrol this phone" : "Enrol this phone") {
                         Task { await enrol() }
                     }
                     .disabled(busy || fleet.onlineMasters.isEmpty || !SecureEnclaveOwnerKey.isAvailable)
@@ -81,6 +88,7 @@ struct VaultDeviceView: View {
 
     private func reload() async {
         recipient = PhoneVaultDevice.recipient()
+        if case .stale = PhoneVaultDevice.key.state { isStale = true } else { isStale = false }
         entries = PhoneVaultDevice.approvals.entries(limit: 200)
         chainIntact = PhoneVaultDevice.approvals.report().isIntact
         for master in fleet.onlineMasters {
@@ -92,24 +100,37 @@ struct VaultDeviceView: View {
         busy = true
         defer { busy = false }
         problem = nil
-        do {
-            try PhoneVaultDevice.key.create()
-        } catch {
-            problem = "Could not make the key: \(PhoneVaultDevice.describe(error))"
-            return
-        }
-        guard let mine = PhoneVaultDevice.recipient() else { return }
-        recipient = mine
-        guard let master = fleet.primary.flatMap({ $0.isOnline ? $0 : nil }) ?? fleet.onlineMasters.first, let client = master.client else {
-            problem = "No machine is reachable."
-            return
-        }
-        do {
-            try await client.vaultEnrol(name: mine.name, kind: .phone, publicKey: mine.publicKey)
-            message = "Asked \(master.machineName). Approve it on the Mac with Touch ID; it shows the fingerprint above."
-        } catch {
-            problem = error.localizedDescription
-        }
+        message = nil
+        let outcome = await PhoneVaultDevice.enrol(fleet: fleet)
+        message = outcome.message
+        problem = outcome.problem
         await reload()
+    }
+}
+
+/// The re-enrol action on an approval that failed because this phone's
+/// vault key stopped opening.
+struct VaultReenrolButton: View {
+    let fleet: FleetModel
+    @State private var busy = false
+    @State private var outcome: PhoneVaultDevice.EnrolOutcome?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                Task {
+                    busy = true
+                    outcome = await PhoneVaultDevice.enrol(fleet: fleet)
+                    busy = false
+                }
+            } label: {
+                Label("Make a new key and enrol this phone", systemImage: "key")
+            }
+            .buttonStyle(.borderless)
+            .disabled(busy || fleet.onlineMasters.isEmpty)
+            .accessibilityIdentifier("vaultReenrol")
+            if let message = outcome?.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            if let problem = outcome?.problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+        }
     }
 }
