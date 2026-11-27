@@ -197,11 +197,12 @@ final class DuoLayoutTests: KanbanUITestCase {
         composerBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: -40)).tap()
     }
 
-    /// Drags the chat down from above the composer, placed from it too.
+    /// Drags the chat down into the keyboard, as in Messages, placed from
+    /// the composer too.
     private func scrollChatAboveComposer() {
         let top = composerBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
-        top.withOffset(CGVector(dx: 0, dy: -200))
-            .press(forDuration: 0.05, thenDragTo: top.withOffset(CGVector(dx: 0, dy: -40)))
+        top.withOffset(CGVector(dx: 0, dy: -150))
+            .press(forDuration: 0.05, thenDragTo: app.keyboards.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)))
     }
 
     private func showSidebar() {
