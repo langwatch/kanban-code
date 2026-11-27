@@ -114,10 +114,11 @@ final class DuoLayoutTests: KanbanUITestCase {
 
         composer.tap()
         assertComposingLayout(keyboardUp: true)
-        // Scrolling the board.
-        let row = app.buttons["card-card_rush"]
+        // Scrolling the board, from its top row: a row under the keyboard
+        // would swipe-type into the composer instead.
+        let row = app.buttons["card-card_busy"]
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 3)))
+            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 2.2)))
         assertComposingLayout(keyboardUp: false)
 
         composer.tap()
