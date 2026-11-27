@@ -100,6 +100,12 @@ struct ListBoardView: View {
             // engine while it reconciles the row across section boundaries.
             // There are only a handful of sections; row bodies remain lazy.
             VStack(alignment: .leading, spacing: 0) {
+                if let attention = store.state.attentionBanner {
+                    AttentionSidebarBanner(summary: attention)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 8)
+                        .padding(.bottom, 10)
+                }
                 channelsSection
                 pinnedCardsSection
                 ForEach(sections, id: \.kind) { section in

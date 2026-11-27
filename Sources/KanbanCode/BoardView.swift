@@ -63,13 +63,14 @@ struct BoardView: View {
         let channels = store.state.channels
         let pinnedCards = store.state.pinnedCards
         let descendantCounts = store.state.descendantCounts
-        if !channels.isEmpty || !pinnedCards.isEmpty {
+        let attention = store.state.attentionBanner
+        if attention != nil || !channels.isEmpty || !pinnedCards.isEmpty {
             // The rail scrolls on its own. Bare, its height grows with the
             // pinned count, and a rail taller than the window vertically
             // centers the whole horizontal board: every column header and
             // the first cards of every column end up above the screen.
             ScrollView {
-                railContent(channels: channels, pinnedCards: pinnedCards, descendantCounts: descendantCounts)
+                railContent(attention: attention, channels: channels, pinnedCards: pinnedCards, descendantCounts: descendantCounts)
                     .padding(.horizontal, 6)
             }
             .frame(width: 240, alignment: .top)
@@ -77,11 +78,17 @@ struct BoardView: View {
     }
 
     private func railContent(
+        attention: AttentionBannerSummary?,
         channels: [Channel],
         pinnedCards: [KanbanCodeCard],
         descendantCounts: [String: Int]
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+                if let attention {
+                    AttentionSidebarBanner(summary: attention)
+                        .padding(.top, 2)
+                }
+
                 if !channels.isEmpty {
                     // Subtle header so the column reads as "Channels" without competing with real columns.
                     HStack(spacing: 6) {
@@ -99,7 +106,7 @@ struct BoardView: View {
                         .help("New chat channel")
                     }
                     .padding(.horizontal, 10)
-                    .padding(.top, 2)
+                    .padding(.top, attention == nil ? 2 : 6)
 
                     ForEach(channels) { ch in
                         let msgs = store.state.channelMessages[ch.name]
@@ -142,7 +149,7 @@ struct BoardView: View {
                     .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
                     .padding(.horizontal, 10)
-                    .padding(.top, channels.isEmpty ? 2 : 6)
+                    .padding(.top, channels.isEmpty && attention == nil ? 2 : 6)
 
                     ForEach(pinnedCards) { card in
                         SidebarReorderableRow(

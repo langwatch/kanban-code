@@ -18,6 +18,8 @@ struct AttentionDetailPresenter: ViewModifier {
     @State private var waiting: [String] = []
     /// The refused request whose sheet stays up for the note to the agent.
     @State private var notingId: String?
+    /// The list of every open request is up, from the sidebar banner.
+    @State private var listShown = false
 
     private func isOpen(_ id: String) -> Bool {
         store.state.attentionRequests[id]?.isOpen == true
@@ -31,13 +33,23 @@ struct AttentionDetailPresenter: ViewModifier {
         content
             .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeShowAttention).receive(on: RunLoop.main)) { note in
                 guard let id = note.userInfo?["id"] as? String, isOpen(id) else { return }
+                // The list shows every open request already.
+                if listShown { return }
                 if shownId == nil {
                     shownId = id
                 } else {
                     waiting = AttentionSheetQueue.adding(id, to: waiting, shown: shownId)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .kanbanCodeShowAttentionList).receive(on: RunLoop.main)) { _ in
+                guard shownId == nil, !openIds.isEmpty else { return }
+                listShown = true
+            }
             .onChange(of: openIds) {
+                if listShown, openIds.isEmpty, notingId == nil {
+                    KanbanCodeLog.info("attention", "Closed the list of requests: none left open")
+                    listShown = false
+                }
                 guard let shown = shownId, !isOpen(shown), shown != notingId else {
                     waiting = waiting.filter(isOpen)
                     return
@@ -47,7 +59,7 @@ struct AttentionDetailPresenter: ViewModifier {
             }
             .onChange(of: shownId) {
                 if shownId != notingId { notingId = nil }
-                guard shownId == nil, !waiting.isEmpty else { return }
+                guard shownId == nil, !listShown, !waiting.isEmpty else { return }
                 Task { @MainActor in
                     // Lets the closing sheet finish before the next one opens.
                     try? await Task.sleep(for: .milliseconds(350))
@@ -56,20 +68,40 @@ struct AttentionDetailPresenter: ViewModifier {
                 }
             }
             .sheet(item: Binding(
-                get: { shownId.map(AttentionSheetTarget.init) },
-                set: { shownId = $0?.id }
+                get: { listShown ? .list : shownId.map(AttentionSheetTarget.request) },
+                set: { target in
+                    switch target {
+                    case .list: listShown = true
+                    case .request(let id): shownId = id
+                    case nil:
+                        listShown = false
+                        shownId = nil
+                    }
+                }
             )) { target in
-                if let request = store.state.attentionRequests[target.id], request.isOpen || notingId == request.id {
-                    AttentionDetailSheet(
-                        request: request,
-                        cardName: request.cardId.flatMap { id in store.state.cards.first { $0.id == id }?.displayTitle },
-                        waitingAfter: AttentionSheetQueue.waitingCount(waiting, isOpen: isOpen),
-                        onNoting: { notingId = $0 ? request.id : nil },
-                        onClose: { shownId = nil }
+                switch target {
+                case .list:
+                    AttentionListSheet(
+                        store: store,
+                        onNoting: { notingId = $0 },
+                        onClose: {
+                            notingId = nil
+                            listShown = false
+                        }
                     )
-                } else {
-                    // Only for the moment before the state change closes it.
-                    SettledAttentionSheet(onClose: { shownId = nil })
+                case .request(let id):
+                    if let request = store.state.attentionRequests[id], request.isOpen || notingId == request.id {
+                        AttentionDetailSheet(
+                            request: request,
+                            cardName: AttentionListSheet.cardName(request, in: store.state),
+                            waitingAfter: AttentionSheetQueue.waitingCount(waiting, isOpen: isOpen),
+                            onNoting: { notingId = $0 ? request.id : nil },
+                            onClose: { shownId = nil }
+                        )
+                    } else {
+                        // Only for the moment before the state change closes it.
+                        SettledAttentionSheet(onClose: { shownId = nil })
+                    }
                 }
             }
     }
@@ -94,8 +126,16 @@ private struct SettledAttentionSheet: View {
     }
 }
 
-private struct AttentionSheetTarget: Identifiable {
-    let id: String
+private enum AttentionSheetTarget: Identifiable {
+    case list
+    case request(String)
+
+    var id: String {
+        switch self {
+        case .list: "list"
+        case .request(let id): "request:\(id)"
+        }
+    }
 }
 
 /// Everything about one attention request, with its answers: for a vault
